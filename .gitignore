@@ -1,0 +1,8 @@
+node_modules/
+core/packages/
+*.transport.zip
+.env
+.DS_Store
+
+# Vendor component sources for study only — never packaged or committed
+_reference/

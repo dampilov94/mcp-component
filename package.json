@@ -1,0 +1,30 @@
+{
+  "name": "modx-mcp",
+  "version": "1.6.0",
+  "description": "MCP (Model Context Protocol) server for MODX Revolution. Pairs with the modxMCP MODX component to let an AI client read and manage a MODX site (elements, resources, TVs, system settings, media sources, VersionX, miniShop2 options, VirtualPage).",
+  "type": "commonjs",
+  "bin": {
+    "modx-mcp": "client/index.js"
+  },
+  "main": "client/index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "axios": "^1.15.2"
+  },
+  "files": [
+    "client",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "mcp",
+    "modelcontextprotocol",
+    "modx",
+    "modx-revolution",
+    "ai"
+  ],
+  "license": "MIT"
+}
