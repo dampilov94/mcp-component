@@ -6,6 +6,7 @@ if (!class_exists("ModxMCPClientException")) {
 class modxMCP {
     public $modx;
     public $config =[];
+    private $actionSpecsCache = null;
     private $allowedElementTypes = ['chunk', 'snippet', 'template', 'resource', 'tv', 'category', 'plugin'];
     private $versionXTypes = [
         'resource' => ['class' => 'vxResource', 'processor' => 'resources', 'label' => 'title', 'content_class' => 'modResource'],
@@ -37,193 +38,14 @@ class modxMCP {
 
         $this->assertCapabilityEnabled($action);
 
-        switch ($action) {
-            case 'get_capabilities':
-                return $this->getCapabilities();
-            case 'help':
-                return $this->getHelp($data);
-            case 'install_package':
-                return $this->installPackage($data);
-            case 'uninstall_package':
-                return $this->uninstallPackage($data);
-            case 'list_providers':
-                return $this->listProviders($data);
-            case 'search_packages':
-                return $this->searchPackages($data);
-            case 'create_provider':
-                return $this->saveProvider($data, true);
-            case 'update_provider':
-                return $this->saveProvider($data, false);
-            case 'delete_provider':
-                return $this->deleteProvider($data);
-            case 'list_system_settings':
-                return $this->listSystemSettings($data);
-            case 'get_system_setting':
-                return $this->getSystemSetting($data);
-            case 'create_system_setting':
-                return $this->createSystemSetting($data);
-            case 'update_system_setting':
-                return $this->updateSystemSetting($data);
-            case 'delete_system_setting':
-                return $this->deleteSystemSetting($data);
-            case 'list_media_sources':
-                return $this->listMediaSources();
-            case 'get_media_source':
-                return $this->getMediaSource($data);
-            case 'list_media_source_files':
-                return $this->listMediaSourceFiles($data);
-            case 'read_media_source_file':
-                return $this->readMediaSourceFile($data);
-            case 'list_installed_components':
-                return $this->listInstalledComponents();
-            case 'get_component_files':
-                return $this->getComponentFiles($data);
-            case 'read_component_file':
-                return $this->readComponentFile($data);
-            case 'get_resource_tvs':
-                return $this->getResourceTvs($data);
-            case 'update_resource_tvs':
-                return $this->updateResourceTvs($data);
-            case 'versionx_list_versions':
-                return $this->listVersionXVersions($data);
-            case 'versionx_get_version':
-                return $this->getVersionXVersion($data);
-            case 'versionx_revert_version':
-                return $this->revertVersionXVersion($data);
-            case 'ms2_list_option_types':
-                return $this->listMs2OptionTypes($data);
-            case 'ms2_list_options':
-                return $this->listMs2Options($data);
-            case 'ms2_get_option':
-                return $this->getMs2Option($data);
-            case 'ms2_create_option':
-                return $this->createMs2Option($data);
-            case 'ms2_update_option':
-                return $this->updateMs2Option($data);
-            case 'ms2_assign_option_to_category':
-                return $this->assignMs2OptionToCategory($data);
-            case 'ms2_get_product_options':
-                return $this->getMs2ProductOptions($data);
-            case 'ms2_update_product_options':
-                return $this->updateMs2ProductOptions($data);
-            case 'virtualpage_list_events':
-                return $this->listVirtualPageEvents($data);
-            case 'virtualpage_get_event':
-                return $this->getVirtualPageEvent($data);
-            case 'virtualpage_create_event':
-                return $this->createVirtualPageEvent($data);
-            case 'virtualpage_update_event':
-                return $this->updateVirtualPageEvent($data);
-            case 'virtualpage_list_handlers':
-                return $this->listVirtualPageHandlers($data);
-            case 'virtualpage_get_handler':
-                return $this->getVirtualPageHandler($data);
-            case 'virtualpage_create_handler':
-                return $this->createVirtualPageHandler($data);
-            case 'virtualpage_update_handler':
-                return $this->updateVirtualPageHandler($data);
-            case 'virtualpage_list_routes':
-                return $this->listVirtualPageRoutes($data);
-            case 'virtualpage_get_route':
-                return $this->getVirtualPageRoute($data);
-            case 'virtualpage_create_route':
-                return $this->createVirtualPageRoute($data);
-            case 'virtualpage_update_route':
-                return $this->updateVirtualPageRoute($data);
-            case 'virtualpage_resolve_route':
-                return $this->resolveVirtualPageRoute($data);
-            case 'virtualpage_delete_event':
-                return $this->deleteVirtualPageObject('vpEvent', 'virtualpage_delete_event', $data);
-            case 'virtualpage_delete_handler':
-                return $this->deleteVirtualPageObject('vpHandler', 'virtualpage_delete_handler', $data);
-            case 'virtualpage_delete_route':
-                return $this->deleteVirtualPageObject('vpRoute', 'virtualpage_delete_route', $data);
-            case 'virtualpage_clear_cache':
-                return $this->clearVirtualPageCache();
-            case 'search_code':
-                return $this->searchCode($data);
-            case 'list_resources':
-                return $this->listResources($data);
-            case 'find_usages':
-                return $this->findUsages($data);
-            case 'make_static':
-                return $this->makeStatic($data);
-            case 'regenerate_token':
-                return $this->regenerateToken();
-            case 'list_tv_input_types':
-                return $this->listTvInputTypes();
-            case 'check_integrations':
-                return $this->getIntegrationsReport();
-            case 'flush_permissions':
-                return $this->flushPermissions();
-            case 'create_media_source':
-                return $this->saveMediaSource($data, true);
-            case 'update_media_source':
-                return $this->saveMediaSource($data, false);
-            case 'delete_media_source':
-                return $this->deleteMediaSource($data);
-            case 'ms2_list_link_types':
-            case 'ms2_get_link_type':
-            case 'ms2_create_link_type':
-            case 'ms2_update_link_type':
-            case 'ms2_delete_link_type':
-            case 'ms2_list_product_links':
-            case 'ms2_create_product_link':
-            case 'ms2_delete_product_link':
-                return $this->ms2LinkAction($action, $data);
-            case 'migx_list_configs':
-                return $this->listMigxConfigs($data);
-            case 'migx_get_config':
-                return $this->getMigxConfig($data);
-            case 'migx_create_config':
-                return $this->saveMigxConfig($data, true);
-            case 'migx_update_config':
-                return $this->saveMigxConfig($data, false);
-            case 'migx_delete_config':
-                return $this->deleteMigxConfig($data);
-            case 'ms2_list_categories':
-            case 'ms2_create_category':
-            case 'ms2_update_category':
-            case 'ms2_list_orders':
-            case 'ms2_get_order':
-            case 'ms2_update_order':
-                return $this->ms2LinkAction($action, $data);
-            case 'list_actions':
-                return $this->listSupportedActions();
-            case 'run_processor':
-                return $this->runProcessorPassthrough($data);
-            case 'clear_cache':
-                return $this->clearCacheAction($data);
-            case 'read_audit_log':
-                return $this->readAuditLog($data);
-            case 'list_property_sets':
-                return $this->listPropertySets($data);
-            case 'get_property_set':
-                return $this->getPropertySet($data);
-            case 'create_property_set':
-                return $this->savePropertySet($data, true);
-            case 'update_property_set':
-                return $this->savePropertySet($data, false);
-            case 'delete_property_set':
-                return $this->deletePropertySet($data);
-            case 'assign_property_set':
-                return $this->assignPropertySet($data);
-            case 'unassign_property_set':
-                return $this->unassignPropertySet($data);
+        // Dispatch is driven by actionRegistry() — the single source of truth that also
+        // backs listSupportedActions(), the acl/context/workspace processor maps and the
+        // capability enforcement. Element actions (and any unknown action) fall through to
+        // the element-type path below.
+        $spec = $this->resolveActionSpec($action);
+        if ($spec !== null && empty($spec['element'])) {
+            return $this->invokeActionSpec($action, $data, $spec);
         }
-
-        if (array_key_exists($action, $this->aclActionMap())) {
-            return $this->runAclAction($action, $data);
-        }
-
-        if (array_key_exists($action, $this->contextActionMap())) {
-            return $this->runContextAction($action, $data);
-        }
-
-        if (array_key_exists($action, $this->workspaceActionMap())) {
-            return $this->runWorkspaceAction($action, $data);
-        }
-
 
         if (!in_array($elementType, $this->allowedElementTypes, true)) {
             throw new ModxMCPClientException("Invalid element type: {$elementType}.");
@@ -390,6 +212,276 @@ class modxMCP {
             default:
                 throw new ModxMCPClientException("Unknown action: {$action}");
         }
+    }
+
+    /**
+     * THE single source of truth for actions: group => [ action => dispatch spec ].
+     * Everything else derives from this map — listSupportedActions(), the acl/context/
+     * workspace processor maps, capability enforcement (via actionToGroup) and the client's
+     * tool list. Keep an action in exactly one group.
+     *
+     * Dispatch spec forms:
+     *   'methodName'                                   -> $this->methodName($data)
+     *   ['m'=>'methodName','call'=>'bare']             -> $this->methodName()
+     *   ['m'=>'methodName','call'=>'create'|'update']  -> $this->methodName($data, true|false)
+     *   ['m'=>'methodName','call'=>'action']           -> $this->methodName($action, $data)
+     *   ['m'=>'deleteVirtualPageObject','call'=>'vpdelete','vpclass'=>'vpEvent']
+     *   ['proc'=>'core/processor','list'=>true,'via'=>'acl'|'context'|'workspace']
+     *   ['element'=>true]                              -> handled by the element-type path
+     */
+    private function actionRegistry() {
+        return array(
+            'elements' => array(
+                'list_elements'   => array('element' => true),
+                'get_element'     => array('element' => true),
+                'create_element'  => array('element' => true),
+                'update_element'  => array('element' => true),
+                'delete_element'  => array('element' => true),
+                'make_static'     => 'makeStatic',
+            ),
+            'resource_tvs' => array(
+                'get_resource_tvs'    => 'getResourceTvs',
+                'update_resource_tvs' => 'updateResourceTvs',
+            ),
+            'tv_inputs' => array(
+                'list_tv_input_types' => array('m' => 'listTvInputTypes', 'call' => 'bare'),
+            ),
+            'system' => array(
+                'list_system_settings'  => 'listSystemSettings',
+                'get_system_setting'    => 'getSystemSetting',
+                'create_system_setting' => 'createSystemSetting',
+                'update_system_setting' => 'updateSystemSetting',
+                'delete_system_setting' => 'deleteSystemSetting',
+            ),
+            'media' => array(
+                'list_media_sources'      => array('m' => 'listMediaSources', 'call' => 'bare'),
+                'get_media_source'        => 'getMediaSource',
+                'list_media_source_files' => 'listMediaSourceFiles',
+                'read_media_source_file'  => 'readMediaSourceFile',
+                'create_media_source'     => array('m' => 'saveMediaSource', 'call' => 'create'),
+                'update_media_source'     => array('m' => 'saveMediaSource', 'call' => 'update'),
+                'delete_media_source'     => 'deleteMediaSource',
+            ),
+            'components' => array(
+                'list_installed_components' => array('m' => 'listInstalledComponents', 'call' => 'bare'),
+                'get_component_files'       => 'getComponentFiles',
+                'read_component_file'       => 'readComponentFile',
+                'check_integrations'        => array('m' => 'getIntegrationsReport', 'call' => 'bare'),
+            ),
+            'code_search' => array(
+                'search_code'    => 'searchCode',
+                'find_usages'    => 'findUsages',
+                'list_resources' => 'listResources',
+            ),
+            'versionx' => array(
+                'versionx_list_versions'  => 'listVersionXVersions',
+                'versionx_get_version'    => 'getVersionXVersion',
+                'versionx_revert_version' => 'revertVersionXVersion',
+            ),
+            'virtualpage' => array(
+                'virtualpage_list_events'    => 'listVirtualPageEvents',
+                'virtualpage_get_event'      => 'getVirtualPageEvent',
+                'virtualpage_create_event'   => 'createVirtualPageEvent',
+                'virtualpage_update_event'   => 'updateVirtualPageEvent',
+                'virtualpage_list_handlers'  => 'listVirtualPageHandlers',
+                'virtualpage_get_handler'    => 'getVirtualPageHandler',
+                'virtualpage_create_handler' => 'createVirtualPageHandler',
+                'virtualpage_update_handler' => 'updateVirtualPageHandler',
+                'virtualpage_list_routes'    => 'listVirtualPageRoutes',
+                'virtualpage_get_route'      => 'getVirtualPageRoute',
+                'virtualpage_create_route'   => 'createVirtualPageRoute',
+                'virtualpage_update_route'   => 'updateVirtualPageRoute',
+                'virtualpage_delete_event'   => array('m' => 'deleteVirtualPageObject', 'call' => 'vpdelete', 'vpclass' => 'vpEvent'),
+                'virtualpage_delete_handler' => array('m' => 'deleteVirtualPageObject', 'call' => 'vpdelete', 'vpclass' => 'vpHandler'),
+                'virtualpage_delete_route'   => array('m' => 'deleteVirtualPageObject', 'call' => 'vpdelete', 'vpclass' => 'vpRoute'),
+                'virtualpage_resolve_route'  => 'resolveVirtualPageRoute',
+                'virtualpage_clear_cache'    => array('m' => 'clearVirtualPageCache', 'call' => 'bare'),
+            ),
+            'minishop2' => array(
+                'ms2_list_option_types'         => 'listMs2OptionTypes',
+                'ms2_list_options'              => 'listMs2Options',
+                'ms2_get_option'                => 'getMs2Option',
+                'ms2_create_option'             => 'createMs2Option',
+                'ms2_update_option'             => 'updateMs2Option',
+                'ms2_assign_option_to_category' => 'assignMs2OptionToCategory',
+                'ms2_get_product_options'       => 'getMs2ProductOptions',
+                'ms2_update_product_options'    => 'updateMs2ProductOptions',
+                'ms2_list_link_types'     => array('m' => 'ms2LinkAction', 'call' => 'action'),
+                'ms2_get_link_type'       => array('m' => 'ms2LinkAction', 'call' => 'action'),
+                'ms2_create_link_type'    => array('m' => 'ms2LinkAction', 'call' => 'action'),
+                'ms2_update_link_type'    => array('m' => 'ms2LinkAction', 'call' => 'action'),
+                'ms2_delete_link_type'    => array('m' => 'ms2LinkAction', 'call' => 'action'),
+                'ms2_list_product_links'  => array('m' => 'ms2LinkAction', 'call' => 'action'),
+                'ms2_create_product_link' => array('m' => 'ms2LinkAction', 'call' => 'action'),
+                'ms2_delete_product_link' => array('m' => 'ms2LinkAction', 'call' => 'action'),
+                'ms2_list_categories'     => array('m' => 'ms2LinkAction', 'call' => 'action'),
+                'ms2_create_category'     => array('m' => 'ms2LinkAction', 'call' => 'action'),
+                'ms2_update_category'     => array('m' => 'ms2LinkAction', 'call' => 'action'),
+                'ms2_list_orders'         => array('m' => 'ms2LinkAction', 'call' => 'action'),
+                'ms2_get_order'           => array('m' => 'ms2LinkAction', 'call' => 'action'),
+                'ms2_update_order'        => array('m' => 'ms2LinkAction', 'call' => 'action'),
+            ),
+            'migx' => array(
+                'migx_list_configs'  => 'listMigxConfigs',
+                'migx_get_config'    => 'getMigxConfig',
+                'migx_create_config' => array('m' => 'saveMigxConfig', 'call' => 'create'),
+                'migx_update_config' => array('m' => 'saveMigxConfig', 'call' => 'update'),
+                'migx_delete_config' => 'deleteMigxConfig',
+            ),
+            'access' => array(
+                'list_users'   => array('proc' => 'security/user/getlist', 'list' => true, 'via' => 'acl'),
+                'get_user'     => array('proc' => 'security/user/get', 'via' => 'acl'),
+                'create_user'  => array('proc' => 'security/user/create', 'via' => 'acl'),
+                'update_user'  => array('proc' => 'security/user/update', 'via' => 'acl'),
+                'delete_user'  => array('proc' => 'security/user/delete', 'via' => 'acl'),
+                'list_user_groups'        => array('proc' => 'security/group/getlist', 'list' => true, 'via' => 'acl'),
+                'get_user_group'          => array('proc' => 'security/group/get', 'via' => 'acl'),
+                'create_user_group'       => array('proc' => 'security/group/create', 'via' => 'acl'),
+                'update_user_group'       => array('proc' => 'security/group/update', 'via' => 'acl'),
+                'delete_user_group'       => array('proc' => 'security/group/remove', 'via' => 'acl'),
+                'list_user_group_members' => array('proc' => 'security/group/user/getlist', 'list' => true, 'via' => 'acl'),
+                'add_user_to_group'       => array('proc' => 'security/group/user/create', 'via' => 'acl'),
+                'update_group_member'     => array('proc' => 'security/group/user/update', 'via' => 'acl'),
+                'remove_user_from_group'  => array('proc' => 'security/group/user/remove', 'via' => 'acl'),
+                'list_roles'  => array('proc' => 'security/role/getlist', 'list' => true, 'via' => 'acl'),
+                'get_role'    => array('proc' => 'security/role/get', 'via' => 'acl'),
+                'create_role' => array('proc' => 'security/role/create', 'via' => 'acl'),
+                'update_role' => array('proc' => 'security/role/update', 'via' => 'acl'),
+                'delete_role' => array('proc' => 'security/role/remove', 'via' => 'acl'),
+                'list_access_policies'  => array('proc' => 'security/access/policy/getlist', 'list' => true, 'via' => 'acl'),
+                'create_access_policy'  => array('proc' => 'security/access/policy/create', 'via' => 'acl'),
+                'update_access_policy'  => array('proc' => 'security/access/policy/update', 'via' => 'acl'),
+                'delete_access_policy'  => array('proc' => 'security/access/policy/remove', 'via' => 'acl'),
+                'list_access_policy_templates'  => array('proc' => 'security/access/policy/template/getlist', 'list' => true, 'via' => 'acl'),
+                'create_access_policy_template' => array('proc' => 'security/access/policy/template/create', 'via' => 'acl'),
+                'update_access_policy_template' => array('proc' => 'security/access/policy/template/update', 'via' => 'acl'),
+                'delete_access_policy_template' => array('proc' => 'security/access/policy/template/remove', 'via' => 'acl'),
+                'list_access_permissions' => array('proc' => 'security/access/permission/getlist', 'list' => true, 'via' => 'acl'),
+                'list_resource_groups'      => array('proc' => 'security/resourcegroup/getlist', 'list' => true, 'via' => 'acl'),
+                'create_resource_group'     => array('proc' => 'security/resourcegroup/create', 'via' => 'acl'),
+                'update_resource_group'     => array('proc' => 'security/resourcegroup/update', 'via' => 'acl'),
+                'delete_resource_group'     => array('proc' => 'security/resourcegroup/remove', 'via' => 'acl'),
+                'assign_resource_to_group'  => array('proc' => 'security/resourcegroup/updateresourcesin', 'via' => 'acl'),
+                'remove_resource_from_group'=> array('proc' => 'security/resourcegroup/removeresource', 'via' => 'acl'),
+                'list_context_access'   => array('proc' => 'security/access/usergroup/context/getlist', 'list' => true, 'via' => 'acl'),
+                'grant_context_access'  => array('proc' => 'security/access/usergroup/context/create', 'via' => 'acl'),
+                'update_context_access' => array('proc' => 'security/access/usergroup/context/update', 'via' => 'acl'),
+                'revoke_context_access' => array('proc' => 'security/access/usergroup/context/remove', 'via' => 'acl'),
+                'list_resourcegroup_access'   => array('proc' => 'security/access/usergroup/resourcegroup/getlist', 'list' => true, 'via' => 'acl'),
+                'grant_resourcegroup_access'  => array('proc' => 'security/access/usergroup/resourcegroup/create', 'via' => 'acl'),
+                'update_resourcegroup_access' => array('proc' => 'security/access/usergroup/resourcegroup/update', 'via' => 'acl'),
+                'revoke_resourcegroup_access' => array('proc' => 'security/access/usergroup/resourcegroup/remove', 'via' => 'acl'),
+                'flush_permissions' => array('m' => 'flushPermissions', 'call' => 'bare'),
+            ),
+            'property_sets' => array(
+                'list_property_sets'   => 'listPropertySets',
+                'get_property_set'     => 'getPropertySet',
+                'create_property_set'  => array('m' => 'savePropertySet', 'call' => 'create'),
+                'update_property_set'  => array('m' => 'savePropertySet', 'call' => 'update'),
+                'delete_property_set'  => 'deletePropertySet',
+                'assign_property_set'  => 'assignPropertySet',
+                'unassign_property_set'=> 'unassignPropertySet',
+            ),
+            'contexts' => array(
+                'list_contexts'          => array('proc' => 'context/getlist', 'list' => true, 'via' => 'context'),
+                'get_context'            => array('proc' => 'context/get', 'via' => 'context'),
+                'create_context'         => array('proc' => 'context/create', 'via' => 'context'),
+                'update_context'         => array('proc' => 'context/update', 'via' => 'context'),
+                'delete_context'         => array('proc' => 'context/remove', 'via' => 'context'),
+                'list_context_settings'  => array('proc' => 'context/setting/getlist', 'list' => true, 'via' => 'context'),
+                'get_context_setting'    => array('proc' => 'context/setting/get', 'via' => 'context'),
+                'create_context_setting' => array('proc' => 'context/setting/create', 'via' => 'context'),
+                'update_context_setting' => array('proc' => 'context/setting/update', 'via' => 'context'),
+                'delete_context_setting' => array('proc' => 'context/setting/remove', 'via' => 'context'),
+            ),
+            'package_management' => array(
+                'install_package'   => 'installPackage',
+                'uninstall_package' => 'uninstallPackage',
+                'list_providers'    => 'listProviders',
+                'search_packages'   => 'searchPackages',
+                'create_provider'   => array('m' => 'saveProvider', 'call' => 'create'),
+                'update_provider'   => array('m' => 'saveProvider', 'call' => 'update'),
+                'delete_provider'   => 'deleteProvider',
+            ),
+            'namespaces' => array(
+                'list_namespaces'   => array('proc' => 'workspace/namespace/getlist', 'list' => true, 'via' => 'workspace'),
+                'create_namespace'  => array('proc' => 'workspace/namespace/create', 'via' => 'workspace'),
+                'update_namespace'  => array('proc' => 'workspace/namespace/update', 'via' => 'workspace'),
+                'delete_namespace'  => array('proc' => 'workspace/namespace/remove', 'via' => 'workspace'),
+            ),
+            'lexicon' => array(
+                'list_lexicon_entries' => array('proc' => 'workspace/lexicon/getlist', 'list' => true, 'via' => 'workspace'),
+                'list_lexicon_topics'  => array('proc' => 'workspace/lexicon/topic/getlist', 'list' => true, 'via' => 'workspace'),
+                'set_lexicon_entry'    => array('proc' => 'workspace/lexicon/create', 'via' => 'workspace'),
+                'revert_lexicon_entry' => array('proc' => 'workspace/lexicon/revert', 'via' => 'workspace'),
+            ),
+            'ops' => array(
+                'list_actions'     => array('m' => 'listSupportedActions', 'call' => 'bare'),
+                'get_capabilities' => array('m' => 'getCapabilities', 'call' => 'bare'),
+                'help'             => 'getHelp',
+                'run_processor'    => 'runProcessorPassthrough',
+                'clear_cache'      => 'clearCacheAction',
+                'read_audit_log'   => 'readAuditLog',
+                'regenerate_token' => array('m' => 'regenerateToken', 'call' => 'bare'),
+            ),
+        );
+    }
+
+    /** Flatten the registry to a memoized action => spec map and look one up (null if unknown). */
+    private function resolveActionSpec($action) {
+        if ($this->actionSpecsCache === null) {
+            $flat = array();
+            foreach ($this->actionRegistry() as $group => $actions) {
+                foreach ($actions as $a => $spec) {
+                    $flat[$a] = $spec;
+                }
+            }
+            $this->actionSpecsCache = $flat;
+        }
+        return isset($this->actionSpecsCache[$action]) ? $this->actionSpecsCache[$action] : null;
+    }
+
+    /** Invoke a non-element action per its registry spec. */
+    private function invokeActionSpec($action, $data, $spec) {
+        if (is_string($spec)) {
+            return $this->{$spec}($data);
+        }
+        if (isset($spec['proc'])) {
+            $via = isset($spec['via']) ? $spec['via'] : '';
+            if ($via === 'acl')       { return $this->runAclAction($action, $data); }
+            if ($via === 'context')   { return $this->runContextAction($action, $data); }
+            if ($via === 'workspace') { return $this->runWorkspaceAction($action, $data); }
+            throw new ModxMCPClientException("Unhandled processor route for action '{$action}'.");
+        }
+        if (isset($spec['m'])) {
+            $m = $spec['m'];
+            $call = isset($spec['call']) ? $spec['call'] : 'data';
+            switch ($call) {
+                case 'bare':     return $this->$m();
+                case 'create':   return $this->$m($data, true);
+                case 'update':   return $this->$m($data, false);
+                case 'action':   return $this->$m($action, $data);
+                case 'vpdelete': return $this->$m($spec['vpclass'], $action, $data);
+                case 'data':
+                default:         return $this->$m($data);
+            }
+        }
+        throw new ModxMCPClientException("Unhandled action spec for action '{$action}'.");
+    }
+
+    /** Derive an action => {processor,list} map for one dispatch route ('acl'|'context'|'workspace'). */
+    private function procMapFor($via) {
+        $out = array();
+        foreach ($this->actionRegistry() as $group => $actions) {
+            foreach ($actions as $a => $spec) {
+                if (is_array($spec) && isset($spec['proc']) && isset($spec['via']) && $spec['via'] === $via) {
+                    $cfg = array('processor' => $spec['proc']);
+                    if (!empty($spec['list'])) { $cfg['list'] = true; }
+                    $out[$a] = $cfg;
+                }
+            }
+        }
+        return $out;
     }
 
     // --- Обработчики связей ---
@@ -1057,18 +1149,7 @@ class modxMCP {
      * Contexts (modContext) + their settings (modContextSetting), via core processors.
      */
     private function contextActionMap() {
-        return array(
-            'list_contexts'          => array('processor' => 'context/getlist', 'list' => true),
-            'get_context'            => array('processor' => 'context/get'),
-            'create_context'         => array('processor' => 'context/create'),
-            'update_context'         => array('processor' => 'context/update'),
-            'delete_context'         => array('processor' => 'context/remove'),
-            'list_context_settings'  => array('processor' => 'context/setting/getlist', 'list' => true),
-            'get_context_setting'    => array('processor' => 'context/setting/get'),
-            'create_context_setting' => array('processor' => 'context/setting/create'),
-            'update_context_setting' => array('processor' => 'context/setting/update'),
-            'delete_context_setting' => array('processor' => 'context/setting/remove'),
-        );
+        return $this->procMapFor('context');
     }
 
     private function runContextAction($action, $data) {
@@ -1110,60 +1191,7 @@ class modxMCP {
      * 'list' => true means the processor returns a getlist {total,results} payload.
      */
     private function aclActionMap() {
-        return array(
-            // --- user groups (modUserGroup) ---
-            'list_user_groups'        => array('processor' => 'security/group/getlist', 'list' => true),
-            'get_user_group'          => array('processor' => 'security/group/get'),
-            'create_user_group'       => array('processor' => 'security/group/create'),
-            'update_user_group'       => array('processor' => 'security/group/update'),
-            'delete_user_group'       => array('processor' => 'security/group/remove'),
-            // --- user group membership (modUserGroupMember) ---
-            'list_user_group_members' => array('processor' => 'security/group/user/getlist', 'list' => true),
-            'add_user_to_group'       => array('processor' => 'security/group/user/create'),
-            'update_group_member'     => array('processor' => 'security/group/user/update'),
-            'remove_user_from_group'  => array('processor' => 'security/group/user/remove'),
-            // --- users (modUser) ---
-            'list_users'   => array('processor' => 'security/user/getlist', 'list' => true),
-            'get_user'     => array('processor' => 'security/user/get'),
-            'create_user'  => array('processor' => 'security/user/create'),
-            'update_user'  => array('processor' => 'security/user/update'),
-            'delete_user'  => array('processor' => 'security/user/delete'),
-            // --- roles (modUserGroupRole) ---
-            'list_roles'              => array('processor' => 'security/role/getlist', 'list' => true),
-            'get_role'                => array('processor' => 'security/role/get'),
-            'create_role'             => array('processor' => 'security/role/create'),
-            'update_role'             => array('processor' => 'security/role/update'),
-            'delete_role'             => array('processor' => 'security/role/remove'),
-            // --- access policies (modAccessPolicy) ---
-            'list_access_policies'         => array('processor' => 'security/access/policy/getlist', 'list' => true),
-            'create_access_policy'         => array('processor' => 'security/access/policy/create'),
-            'update_access_policy'         => array('processor' => 'security/access/policy/update'),
-            'delete_access_policy'         => array('processor' => 'security/access/policy/remove'),
-            // --- access policy templates (modAccessPolicyTemplate) ---
-            'list_access_policy_templates' => array('processor' => 'security/access/policy/template/getlist', 'list' => true),
-            'create_access_policy_template'=> array('processor' => 'security/access/policy/template/create'),
-            'update_access_policy_template'=> array('processor' => 'security/access/policy/template/update'),
-            'delete_access_policy_template'=> array('processor' => 'security/access/policy/template/remove'),
-            // --- permissions (read-only catalogue) ---
-            'list_access_permissions'      => array('processor' => 'security/access/permission/getlist', 'list' => true),
-            // --- resource groups (modResourceGroup) ---
-            'list_resource_groups'      => array('processor' => 'security/resourcegroup/getlist', 'list' => true),
-            'create_resource_group'     => array('processor' => 'security/resourcegroup/create'),
-            'update_resource_group'     => array('processor' => 'security/resourcegroup/update'),
-            'delete_resource_group'     => array('processor' => 'security/resourcegroup/remove'),
-            'assign_resource_to_group'  => array('processor' => 'security/resourcegroup/updateresourcesin'),
-            'remove_resource_from_group'=> array('processor' => 'security/resourcegroup/removeresource'),
-            // --- context access for a user group (modAccessContext) ---
-            'list_context_access'    => array('processor' => 'security/access/usergroup/context/getlist', 'list' => true),
-            'grant_context_access'   => array('processor' => 'security/access/usergroup/context/create'),
-            'update_context_access'  => array('processor' => 'security/access/usergroup/context/update'),
-            'revoke_context_access'  => array('processor' => 'security/access/usergroup/context/remove'),
-            // --- resource-group access for a user group (modAccessResourceGroup) ---
-            'list_resourcegroup_access'   => array('processor' => 'security/access/usergroup/resourcegroup/getlist', 'list' => true),
-            'grant_resourcegroup_access'  => array('processor' => 'security/access/usergroup/resourcegroup/create'),
-            'update_resourcegroup_access' => array('processor' => 'security/access/usergroup/resourcegroup/update'),
-            'revoke_resourcegroup_access' => array('processor' => 'security/access/usergroup/resourcegroup/remove'),
-        );
+        return $this->procMapFor('acl');
     }
 
     /**
@@ -1366,26 +1394,11 @@ class modxMCP {
      * detect client/server version skew without reading the source.
      */
     private function listSupportedActions() {
-        return array(
-            'elements'      => array('list_elements', 'get_element', 'create_element', 'update_element', 'delete_element', 'make_static'),
-            'resource_tvs'  => array('get_resource_tvs', 'update_resource_tvs'),
-            'tv_inputs'     => array('list_tv_input_types'),
-            'system'        => array('list_system_settings', 'get_system_setting', 'create_system_setting', 'update_system_setting', 'delete_system_setting'),
-            'media'         => array('list_media_sources', 'get_media_source', 'list_media_source_files', 'read_media_source_file', 'create_media_source', 'update_media_source', 'delete_media_source'),
-            'components'    => array('list_installed_components', 'get_component_files', 'read_component_file', 'check_integrations'),
-            'code_search'   => array('search_code', 'find_usages', 'list_resources'),
-            'versionx'      => array('versionx_list_versions', 'versionx_get_version', 'versionx_revert_version'),
-            'virtualpage'   => array('virtualpage_list_events', 'virtualpage_get_event', 'virtualpage_create_event', 'virtualpage_update_event', 'virtualpage_list_handlers', 'virtualpage_get_handler', 'virtualpage_create_handler', 'virtualpage_update_handler', 'virtualpage_list_routes', 'virtualpage_get_route', 'virtualpage_create_route', 'virtualpage_update_route', 'virtualpage_delete_event', 'virtualpage_delete_handler', 'virtualpage_delete_route', 'virtualpage_resolve_route', 'virtualpage_clear_cache'),
-            'minishop2'     => array('ms2_list_option_types', 'ms2_list_options', 'ms2_get_option', 'ms2_create_option', 'ms2_update_option', 'ms2_assign_option_to_category', 'ms2_get_product_options', 'ms2_update_product_options', 'ms2_list_link_types', 'ms2_get_link_type', 'ms2_create_link_type', 'ms2_update_link_type', 'ms2_delete_link_type', 'ms2_list_product_links', 'ms2_create_product_link', 'ms2_delete_product_link', 'ms2_list_categories', 'ms2_create_category', 'ms2_update_category', 'ms2_list_orders', 'ms2_get_order', 'ms2_update_order'),
-            'migx'          => array('migx_list_configs', 'migx_get_config', 'migx_create_config', 'migx_update_config', 'migx_delete_config'),
-            'access'        => array('list_users', 'get_user', 'create_user', 'update_user', 'delete_user', 'list_user_groups', 'get_user_group', 'create_user_group', 'update_user_group', 'delete_user_group', 'list_user_group_members', 'add_user_to_group', 'update_group_member', 'remove_user_from_group', 'list_roles', 'get_role', 'create_role', 'update_role', 'delete_role', 'list_access_policies', 'create_access_policy', 'update_access_policy', 'delete_access_policy', 'list_access_policy_templates', 'create_access_policy_template', 'update_access_policy_template', 'delete_access_policy_template', 'list_access_permissions', 'list_resource_groups', 'create_resource_group', 'update_resource_group', 'delete_resource_group', 'assign_resource_to_group', 'remove_resource_from_group', 'list_context_access', 'grant_context_access', 'update_context_access', 'revoke_context_access', 'list_resourcegroup_access', 'grant_resourcegroup_access', 'update_resourcegroup_access', 'revoke_resourcegroup_access', 'flush_permissions'),
-            'property_sets' => array('list_property_sets', 'get_property_set', 'create_property_set', 'update_property_set', 'delete_property_set', 'assign_property_set', 'unassign_property_set'),
-            'contexts'      => array('list_contexts', 'get_context', 'create_context', 'update_context', 'delete_context', 'list_context_settings', 'get_context_setting', 'create_context_setting', 'update_context_setting', 'delete_context_setting'),
-            'package_management' => array('install_package', 'uninstall_package', 'list_providers', 'search_packages', 'create_provider', 'update_provider', 'delete_provider'),
-            'namespaces'    => array('list_namespaces', 'create_namespace', 'update_namespace', 'delete_namespace'),
-            'lexicon'       => array('list_lexicon_entries', 'list_lexicon_topics', 'set_lexicon_entry', 'revert_lexicon_entry'),
-            'ops'           => array('list_actions', 'get_capabilities', 'help', 'run_processor', 'clear_cache', 'read_audit_log', 'regenerate_token'),
-        );
+        $out = array();
+        foreach ($this->actionRegistry() as $group => $actions) {
+            $out[$group] = array_keys($actions);
+        }
+        return $out;
     }
 
     /**
@@ -1481,16 +1494,7 @@ class modxMCP {
 
     // --- Namespaces + Lexicon (toggleable groups) ---
     private function workspaceActionMap() {
-        return array(
-            'list_namespaces'      => array('processor' => 'workspace/namespace/getlist', 'list' => true),
-            'create_namespace'     => array('processor' => 'workspace/namespace/create'),
-            'update_namespace'     => array('processor' => 'workspace/namespace/update'),
-            'delete_namespace'     => array('processor' => 'workspace/namespace/remove'),
-            'list_lexicon_entries' => array('processor' => 'workspace/lexicon/getlist', 'list' => true),
-            'list_lexicon_topics'  => array('processor' => 'workspace/lexicon/topic/getlist', 'list' => true),
-            'set_lexicon_entry'    => array('processor' => 'workspace/lexicon/create'),
-            'revert_lexicon_entry' => array('processor' => 'workspace/lexicon/revert'),
-        );
+        return $this->procMapFor('workspace');
     }
 
     private function runWorkspaceAction($action, $data) {

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Internal: action dispatch is now driven by a single registry (`actionRegistry()`) that is
+  the one source of truth for the dispatch table, the introspection list (`list_actions`),
+  the acl/context/workspace processor maps and capability enforcement. Previously the big
+  `switch`, `listSupportedActions()` and the three processor maps each listed actions
+  independently and could drift (an action dispatched but missing from the list would bypass
+  capability checks). No behavioral change — the action surface is byte-for-byte identical
+  (verified: 157 actions across 18 groups unchanged).
+
 ## 1.8.2 (2026-06-21)
 
 - Fix: the CMP "save capabilities" action no longer silently re-enables package
