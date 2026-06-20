@@ -154,7 +154,8 @@ Test environments for this project: **fordev** = clean MODX (good for install/AC
 ## 9. Security model (don't regress these)
 
 - Disabled by default (`modxmcp.enabled = No`); token compared with `hash_equals`.
-- Runs as `modxmcp.service_user_id` (admin) — treat as a high-privilege admin API; HTTPS only.
+- Runs as `modxmcp.service_user_id` (admin) — treat as a high-privilege admin API. Works over
+  plain HTTP too, but the token then travels in cleartext, so prefer HTTPS (or a trusted network).
 - Root filesystem read off by default; component-file reads limited to `modxmcp.component_code_roots`.
 - Never commit/hardcode the token. Keep `_reference/` (vendor code) out of the package and out of git.
 

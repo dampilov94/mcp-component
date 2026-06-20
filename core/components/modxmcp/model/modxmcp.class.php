@@ -112,6 +112,12 @@ class modxMCP {
                 return $this->updateVirtualPageRoute($data);
             case 'virtualpage_resolve_route':
                 return $this->resolveVirtualPageRoute($data);
+            case 'virtualpage_delete_event':
+                return $this->deleteVirtualPageObject('vpEvent', 'virtualpage_delete_event', $data);
+            case 'virtualpage_delete_handler':
+                return $this->deleteVirtualPageObject('vpHandler', 'virtualpage_delete_handler', $data);
+            case 'virtualpage_delete_route':
+                return $this->deleteVirtualPageObject('vpRoute', 'virtualpage_delete_route', $data);
             case 'virtualpage_clear_cache':
                 return $this->clearVirtualPageCache();
             case 'search_code':
@@ -1245,7 +1251,7 @@ class modxMCP {
             'components'    => array('list_installed_components', 'get_component_files', 'read_component_file', 'check_integrations', 'install_package'),
             'code_search'   => array('search_code', 'find_usages', 'list_resources'),
             'versionx'      => array('versionx_list_versions', 'versionx_get_version', 'versionx_revert_version'),
-            'virtualpage'   => array('virtualpage_list_events', 'virtualpage_get_event', 'virtualpage_create_event', 'virtualpage_update_event', 'virtualpage_list_handlers', 'virtualpage_get_handler', 'virtualpage_create_handler', 'virtualpage_update_handler', 'virtualpage_list_routes', 'virtualpage_get_route', 'virtualpage_create_route', 'virtualpage_update_route', 'virtualpage_resolve_route', 'virtualpage_clear_cache'),
+            'virtualpage'   => array('virtualpage_list_events', 'virtualpage_get_event', 'virtualpage_create_event', 'virtualpage_update_event', 'virtualpage_list_handlers', 'virtualpage_get_handler', 'virtualpage_create_handler', 'virtualpage_update_handler', 'virtualpage_list_routes', 'virtualpage_get_route', 'virtualpage_create_route', 'virtualpage_update_route', 'virtualpage_delete_event', 'virtualpage_delete_handler', 'virtualpage_delete_route', 'virtualpage_resolve_route', 'virtualpage_clear_cache'),
             'minishop2'     => array('ms2_list_option_types', 'ms2_list_options', 'ms2_get_option', 'ms2_create_option', 'ms2_update_option', 'ms2_assign_option_to_category', 'ms2_get_product_options', 'ms2_update_product_options', 'ms2_list_link_types', 'ms2_get_link_type', 'ms2_create_link_type', 'ms2_update_link_type', 'ms2_delete_link_type', 'ms2_list_product_links', 'ms2_create_product_link', 'ms2_delete_product_link', 'ms2_list_categories', 'ms2_create_category', 'ms2_update_category', 'ms2_list_orders', 'ms2_get_order', 'ms2_update_order'),
             'migx'          => array('migx_list_configs', 'migx_get_config', 'migx_create_config', 'migx_update_config', 'migx_delete_config'),
             'access'        => array('list_users', 'get_user', 'create_user', 'update_user', 'delete_user', 'list_user_groups', 'get_user_group', 'create_user_group', 'update_user_group', 'delete_user_group', 'list_user_group_members', 'add_user_to_group', 'update_group_member', 'remove_user_from_group', 'list_roles', 'get_role', 'create_role', 'update_role', 'delete_role', 'list_access_policies', 'create_access_policy', 'update_access_policy', 'delete_access_policy', 'list_access_policy_templates', 'create_access_policy_template', 'update_access_policy_template', 'delete_access_policy_template', 'list_access_permissions', 'list_resource_groups', 'create_resource_group', 'update_resource_group', 'delete_resource_group', 'assign_resource_to_group', 'remove_resource_from_group', 'list_context_access', 'grant_context_access', 'update_context_access', 'revoke_context_access', 'list_resourcegroup_access', 'grant_resourcegroup_access', 'update_resourcegroup_access', 'revoke_resourcegroup_access'),
@@ -1735,6 +1741,23 @@ class modxMCP {
         $this->modx->cacheManager->refresh();
         $this->logAudit('update_resource_tvs', 'resource_tv', ['resource_id' => $resourceId, 'tv_keys' => array_keys($data['tvs'])]);
         return $this->getResourceTvs(['resource_id' => $resourceId]);
+    }
+
+    /**
+     * Delete a VirtualPage object (vpEvent / vpHandler / vpRoute) by id or name.
+     * Mirrors the direct-xPDO style of the other VP methods; xPDO removes composite
+     * children (e.g. an event's routes) per the VP schema.
+     */
+    private function deleteVirtualPageObject($class, $action, array $data) {
+        $obj = $this->resolveVirtualPageObject($class, $data);
+        $id = (int) $obj->get('id');
+        $name = $obj->get('name');
+        if (!$obj->remove()) {
+            throw new ModxMCPClientException("Could not delete {$class} {$id}.");
+        }
+        $this->clearVirtualPageCache();
+        $this->logAudit($action, 'virtualpage', ['id' => $id, 'name' => $name]);
+        return ['deleted' => true, 'id' => $id, 'name' => $name];
     }
 
     private function listVirtualPageEvents(array $data = []) {

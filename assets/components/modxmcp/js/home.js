@@ -3,13 +3,15 @@ Ext.onReady(function () {
     if (!btn || typeof MODx === 'undefined' || !MODx.Ajax) {
         return;
     }
+    var cfg = (typeof Modxmcp !== 'undefined') ? Modxmcp : {};
     btn.addEventListener('click', function () {
-        if (!confirm('Regenerate the modxMCP API token?\nExisting MCP clients will stop working until you update MODX_MCP_TOKEN.')) {
+        var msg = cfg.confirm_regenerate || 'Regenerate the modxMCP API token?';
+        if (!confirm(msg)) {
             return;
         }
         btn.disabled = true;
         MODx.Ajax.request({
-            url: Modxmcp.connector_url,
+            url: cfg.connector_url,
             params: { action: 'mgr/regeneratetoken' },
             listeners: {
                 success: {
@@ -25,7 +27,7 @@ Ext.onReady(function () {
                 failure: {
                     fn: function () {
                         btn.disabled = false;
-                        alert('Failed to regenerate the token. Check the manager error log.');
+                        alert(cfg.regenerate_failed || 'Failed to regenerate the token.');
                     }
                 }
             }

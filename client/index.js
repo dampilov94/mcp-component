@@ -785,6 +785,21 @@ const toolDefinitions = [
     },
   },
   {
+    name: "modx_virtualpage_delete_event",
+    description: "Delete a VirtualPage event by id or name (removes its routes too, per the VP schema).",
+    inputSchema: { type: "object", properties: { id: { type: "number" }, name: { type: "string" } } },
+  },
+  {
+    name: "modx_virtualpage_delete_handler",
+    description: "Delete a VirtualPage handler by id or name.",
+    inputSchema: { type: "object", properties: { id: { type: "number" }, name: { type: "string" } } },
+  },
+  {
+    name: "modx_virtualpage_delete_route",
+    description: "Delete a VirtualPage route by id or name.",
+    inputSchema: { type: "object", properties: { id: { type: "number" }, name: { type: "string" } } },
+  },
+  {
     name: "modx_virtualpage_clear_cache",
     description: "Clear VirtualPage route/cache files and refresh MODX cache.",
     inputSchema: {

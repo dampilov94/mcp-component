@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.6.2 (2026-06-18)
+
+- CMP (Components > modxMCP) is now bilingual — all panel labels, the regenerate-token
+  button and its JS confirm/error messages are lexicon-driven (en + ru), so the UI follows
+  the manager language (Russian on a Russian manager).
+- Docs: clarified that the endpoint works over plain HTTP as well (token travels in
+  cleartext, so HTTPS / a trusted network is preferred — not a hard requirement).
+- README rewritten in Russian (single concise guide) + a .mcp.json.example to copy.
+
+## 1.6.1 (2026-06-18)
+
+- VirtualPage: added delete operations — `virtualpage_delete_event`,
+  `virtualpage_delete_handler`, `virtualpage_delete_route` (by id or name). Completes the
+  VP CRUD surface (list/get/create/update were already present).
+
 ## 1.6.0 (2026-06-18)
 
 - Users — list/get/create/update/delete (modUser via core processors). `create_user`
