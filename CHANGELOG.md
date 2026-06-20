@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.8.3 (2026-06-21)
 
 - Internal: action dispatch is now driven by a single registry (`actionRegistry()`) that is
   the one source of truth for the dispatch table, the introspection list (`list_actions`),
