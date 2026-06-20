@@ -64,8 +64,20 @@ if (!API_TOKEN) {
 
 const server = new Server(
   { name: "modx-codex-server", version: "7.1.0" },
-  { capabilities: { tools: {} } },
+  { capabilities: { tools: { listChanged: true } } },
 );
+
+// Capability fingerprint that rides on every API response. When it changes (admin toggled
+// a group in the CMP), tell the host the tool list changed — no polling, no extra requests.
+let lastCaps = null;
+function noteCaps(caps) {
+  if (typeof caps !== "string") return;
+  if (lastCaps === null) { lastCaps = caps; return; }
+  if (caps !== lastCaps) {
+    lastCaps = caps;
+    Promise.resolve(server.sendToolListChanged()).catch(() => {});
+  }
+}
 
 async function modxApiRequest(payload) {
   try {
@@ -75,9 +87,11 @@ async function modxApiRequest(payload) {
         "Content-Type": "application/json; charset=utf-8",
       },
     });
+    if (response.data && typeof response.data === "object") noteCaps(response.data.caps);
     return response.data;
   } catch (error) {
     if (error.response) {
+      if (error.response.data && typeof error.response.data === "object") noteCaps(error.response.data.caps);
       throw new Error(`MODX Error: ${JSON.stringify(error.response.data)}`);
     }
     throw new Error(`Network Error: ${error.message}`);
@@ -116,7 +130,7 @@ const toolDefinitions = [
       properties: {
         type: { type: "string", enum: ELEMENT_TYPES },
         query: { type: "string", description: "Filter elements by name/content (passed to the getlist processor)." },
-        limit: { type: "number", description: "Max results (0 = all, the default)." },
+        limit: { type: "number", description: "Max results (default 100; 0 = all)." },
         start: { type: "number", description: "Offset for pagination." },
       },
       required: ["type"],
@@ -339,6 +353,21 @@ const toolDefinitions = [
         name: { type: "string" },
       },
     },
+  },
+  {
+    name: "modx_create_media_source",
+    description: "Create a media (file) source. class_key defaults to sources.modFileMediaSource. 'properties' is a {name:value} map of source params (e.g. {\"basePath\":\"assets/files/\",\"baseUrl\":\"assets/files/\"}) merged into the source.",
+    inputSchema: { type: "object", properties: { name: { type: "string" }, description: { type: "string" }, class_key: { type: "string" }, properties: { type: "object", description: "{paramName: value} map, e.g. basePath/baseUrl." } }, required: ["name"] },
+  },
+  {
+    name: "modx_update_media_source",
+    description: "Update a media source. 'properties' is a {name:value} map merged into the source's params (others preserved) — use it to set basePath/baseUrl/etc.",
+    inputSchema: { type: "object", properties: { id: { type: "number" }, name: { type: "string" }, description: { type: "string" }, properties: { type: "object", description: "{paramName: value} map merged into the source." } }, required: ["id"] },
+  },
+  {
+    name: "modx_delete_media_source",
+    description: "Delete a media source by id.",
+    inputSchema: { type: "object", properties: { id: { type: "number" } }, required: ["id"] },
   },
   {
     name: "modx_list_media_source_files",
@@ -868,19 +897,6 @@ const toolDefinitions = [
     inputSchema: { type: "object", properties: {} },
   },
   {
-    name: "modx_install_package",
-    description:
-      "Install a transport package from a provider (default modx.com) by name, e.g. {package:'MIGX'}. Requires the modxmcp.allow_package_install setting to be enabled. Returns 'already_installed' if present. Use modx_check_integrations first to see what's missing.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        package: { type: "string", description: "Package name as listed on the provider (e.g. 'MIGX', 'miniShop2')." },
-        provider: { type: "number", description: "Optional transport provider id (defaults to modx.com)." },
-      },
-      required: ["package"],
-    },
-  },
-  {
     name: "modx_regenerate_token",
     description:
       "Rotate the modxmcp.api_token to a fresh random value and return it. NOTE: this invalidates the current token — update MODX_MCP_TOKEN in your client config immediately, or the next call will be unauthorized.",
@@ -1095,6 +1111,11 @@ const toolDefinitions = [
 
   // ===================== Ops / introspection =====================
   {
+    name: "modx_help",
+    description: "Built-in documentation. Call with no args to list topics; pass {topic} for a guide (e.g. 'tv_input_types', 'study_component', 'minishop2', 'migx', 'acl', 'getting_started'). Read the relevant topic before unfamiliar work, or to learn how to use a newly-installed component.",
+    inputSchema: { type: "object", properties: { topic: { type: "string", description: "Help topic; omit to list topics." } } },
+  },
+  {
     name: "modx_list_actions",
     description: "List the action names this modxMCP server build supports, grouped by area. Use it to detect client/server version skew.",
     inputSchema: { type: "object", properties: {} },
@@ -1103,6 +1124,11 @@ const toolDefinitions = [
     name: "modx_clear_cache",
     description: "Refresh the MODX cache. Pass partitions (e.g. ['resource','context_settings']) to refresh only those; omit for a full refresh.",
     inputSchema: { type: "object", properties: { partitions: { type: "array", items: { type: "string" } } } },
+  },
+  {
+    name: "modx_flush_permissions",
+    description: "Flush cached access permissions (the manager's 'Flush Permissions') so ACL changes apply. ACL write tools already do this automatically; use this for a manual flush.",
+    inputSchema: { type: "object", properties: {} },
   },
   {
     name: "modx_read_audit_log",
@@ -1148,6 +1174,139 @@ const toolDefinitions = [
     name: "modx_delete_user",
     description: "Delete a user by id.",
     inputSchema: { type: "object", properties: { id: { type: "number" } }, required: ["id"] },
+  },
+
+  // ===================== Contexts (modContext) =====================
+  {
+    name: "modx_list_contexts",
+    description: "List contexts (modContext): key, name, description, rank.",
+    inputSchema: { type: "object", properties: { query: { type: "string" }, limit: { type: "number" }, start: { type: "number" } } },
+  },
+  {
+    name: "modx_get_context",
+    description: "Get a context by key.",
+    inputSchema: { type: "object", properties: { key: { type: "string" } }, required: ["key"] },
+  },
+  {
+    name: "modx_create_context",
+    description: "Create a context. 'key' is the unique identifier (e.g. 'mobile').",
+    inputSchema: { type: "object", properties: { key: { type: "string" }, name: { type: "string" }, description: { type: "string" }, rank: { type: "number" } }, required: ["key"] },
+  },
+  {
+    name: "modx_update_context",
+    description: "Update a context (name/description/rank). 'settings' may be a JSON array of context settings (advanced).",
+    inputSchema: { type: "object", properties: { key: { type: "string" }, name: { type: "string" }, description: { type: "string" }, rank: { type: "number" }, settings: { type: "string" } }, required: ["key"] },
+  },
+  {
+    name: "modx_delete_context",
+    description: "Delete a context by key.",
+    inputSchema: { type: "object", properties: { key: { type: "string" } }, required: ["key"] },
+  },
+  {
+    name: "modx_list_context_settings",
+    description: "List settings of a context (modContextSetting).",
+    inputSchema: { type: "object", properties: { context_key: { type: "string" }, namespace: { type: "string" }, area: { type: "string" }, limit: { type: "number" }, start: { type: "number" } }, required: ["context_key"] },
+  },
+  {
+    name: "modx_get_context_setting",
+    description: "Get one context setting (by context_key + key).",
+    inputSchema: { type: "object", properties: { context_key: { type: "string" }, key: { type: "string" } }, required: ["context_key", "key"] },
+  },
+  {
+    name: "modx_create_context_setting",
+    description: "Create a context-level setting (overrides the system setting for that context).",
+    inputSchema: { type: "object", properties: { context_key: { type: "string" }, key: { type: "string" }, value: { type: "string" }, xtype: { type: "string" }, namespace: { type: "string" }, area: { type: "string" } }, required: ["context_key", "key"] },
+  },
+  {
+    name: "modx_update_context_setting",
+    description: "Update a context setting (by context_key + key).",
+    inputSchema: { type: "object", properties: { context_key: { type: "string" }, key: { type: "string" }, value: { type: "string" }, xtype: { type: "string" }, namespace: { type: "string" }, area: { type: "string" } }, required: ["context_key", "key"] },
+  },
+  {
+    name: "modx_delete_context_setting",
+    description: "Delete a context setting (by context_key + key).",
+    inputSchema: { type: "object", properties: { context_key: { type: "string" }, key: { type: "string" } }, required: ["context_key", "key"] },
+  },
+
+  // ===================== Package management =====================
+  {
+    name: "modx_install_package",
+    description: "Install a transport package from a provider (default modx.com) by name, e.g. {package:'MIGX'}. Returns 'already_installed' if present.",
+    inputSchema: { type: "object", properties: { package: { type: "string" }, provider: { type: "number", description: "Provider id (defaults to modx.com)." } }, required: ["package"] },
+  },
+  {
+    name: "modx_uninstall_package",
+    description: "Uninstall a transport package by signature (e.g. 'migx-2.13.0-pl').",
+    inputSchema: { type: "object", properties: { signature: { type: "string" } }, required: ["signature"] },
+  },
+  {
+    name: "modx_list_providers",
+    description: "List transport providers (modx.com and custom, e.g. modstore.pro): id, name, service_url.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "modx_search_packages",
+    description: "Search a provider's catalogue (use before install_package). Defaults to modx.com.",
+    inputSchema: { type: "object", properties: { query: { type: "string" }, provider: { type: "number" }, limit: { type: "number" }, start: { type: "number" } } },
+  },
+  {
+    name: "modx_create_provider",
+    description: "Add a transport provider (e.g. modstore.pro). For paid providers pass username + api_key.",
+    inputSchema: { type: "object", properties: { name: { type: "string" }, service_url: { type: "string" }, description: { type: "string" }, username: { type: "string" }, api_key: { type: "string" } }, required: ["name", "service_url"] },
+  },
+  {
+    name: "modx_update_provider",
+    description: "Update a transport provider.",
+    inputSchema: { type: "object", properties: { id: { type: "number" }, name: { type: "string" }, service_url: { type: "string" }, description: { type: "string" }, username: { type: "string" }, api_key: { type: "string" } }, required: ["id"] },
+  },
+  {
+    name: "modx_delete_provider",
+    description: "Delete a transport provider by id.",
+    inputSchema: { type: "object", properties: { id: { type: "number" } }, required: ["id"] },
+  },
+
+  // ===================== Namespaces (modNamespace) =====================
+  {
+    name: "modx_list_namespaces",
+    description: "List namespaces (modNamespace): name, path, assets_path.",
+    inputSchema: { type: "object", properties: { query: { type: "string" }, limit: { type: "number" }, start: { type: "number" } } },
+  },
+  {
+    name: "modx_create_namespace",
+    description: "Create a namespace.",
+    inputSchema: { type: "object", properties: { name: { type: "string" }, path: { type: "string" }, assets_path: { type: "string" } }, required: ["name"] },
+  },
+  {
+    name: "modx_update_namespace",
+    description: "Update a namespace (by name).",
+    inputSchema: { type: "object", properties: { name: { type: "string" }, path: { type: "string" }, assets_path: { type: "string" } }, required: ["name"] },
+  },
+  {
+    name: "modx_delete_namespace",
+    description: "Delete a namespace by name ('core' cannot be deleted).",
+    inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+  },
+
+  // ===================== Lexicon (Lexicon Management) =====================
+  {
+    name: "modx_list_lexicon_entries",
+    description: "List lexicon entries, filtered by namespace + topic + language (and optional search).",
+    inputSchema: { type: "object", properties: { namespace: { type: "string" }, topic: { type: "string" }, language: { type: "string" }, search: { type: "string" }, limit: { type: "number" }, start: { type: "number" } } },
+  },
+  {
+    name: "modx_list_lexicon_topics",
+    description: "List lexicon topics for a namespace/language.",
+    inputSchema: { type: "object", properties: { namespace: { type: "string" }, language: { type: "string" }, query: { type: "string" } } },
+  },
+  {
+    name: "modx_set_lexicon_entry",
+    description: "Create or override a lexicon entry (DB override of the file value).",
+    inputSchema: { type: "object", properties: { name: { type: "string" }, value: { type: "string" }, namespace: { type: "string" }, topic: { type: "string" }, language: { type: "string" } }, required: ["name", "namespace", "topic"] },
+  },
+  {
+    name: "modx_revert_lexicon_entry",
+    description: "Revert a lexicon entry — remove its DB override so the file value applies.",
+    inputSchema: { type: "object", properties: { name: { type: "string" }, namespace: { type: "string" }, topic: { type: "string" }, language: { type: "string" } }, required: ["name"] },
   },
 
   // ===================== Access Control (ACL) =====================
@@ -1353,8 +1512,29 @@ const toolDefinitions = [
   },
 ];
 
+async function fetchCapabilities() {
+  try {
+    const r = await modxApiRequest({ action: "get_capabilities", data: {} });
+    if (r && r.data && Array.isArray(r.data.disabled_actions)) {
+      return r.data;
+    }
+  } catch (e) {
+    // Server too old or unreachable — advertise everything.
+  }
+  return null;
+}
+
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return { tools: toolDefinitions };
+  // Hide tools whose capability group is disabled on the server (modxmcp.disabled_groups) —
+  // disabled groups never reach the model's tool list, which is what saves tokens. The live
+  // refresh is driven by noteCaps() (called inside modxApiRequest on every response), so no
+  // polling is needed.
+  const caps = await fetchCapabilities();
+  const disabled = new Set(caps && Array.isArray(caps.disabled_actions) ? caps.disabled_actions : []);
+  const tools = disabled.size
+    ? toolDefinitions.filter((t) => !disabled.has(t.name.replace(/^modx_/, "")))
+    : toolDefinitions;
+  return { tools };
 });
 
 function formatCodeFromResult(resultData) {

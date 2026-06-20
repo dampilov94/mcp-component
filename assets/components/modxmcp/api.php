@@ -87,12 +87,15 @@ try {
     
     $mcp = new modxMCP($modx);
     $result = $mcp->processRequest($action, $type, $data);
-    
-    echo json_encode(['success' => true, 'data' => $result], JSON_UNESCAPED_UNICODE);
+
+    // 'caps' = capability fingerprint; the client watches it to live-refresh its tool list.
+    $caps = (string) $modx->getOption('modxmcp.disabled_groups', null, '');
+    echo json_encode(['success' => true, 'data' => $result, 'caps' => $caps], JSON_UNESCAPED_UNICODE);
 } catch (ModxMCPClientException $e) {
     // Expected, actionable error (validation, "not installed", "disabled", "not found").
     http_response_code(400);
-    echo json_encode(['success' => false, 'error' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+    $caps = (string) $modx->getOption('modxmcp.disabled_groups', null, '');
+    echo json_encode(['success' => false, 'error' => $e->getMessage(), 'caps' => $caps], JSON_UNESCAPED_UNICODE);
 } catch (Exception $e) {
     $errorId = uniqid('modxmcp_', true);
     $modx->log(

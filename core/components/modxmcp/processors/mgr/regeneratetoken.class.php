@@ -23,7 +23,7 @@ class ModxmcpRegenerateTokenProcessor extends modProcessor {
                 'key'       => 'modxmcp.api_token',
                 'namespace' => 'modxmcp',
                 'area'      => 'modxmcp:main',
-                'xtype'     => 'text-password',
+                'xtype'     => 'textfield',
             ), '', true, true);
         }
         $setting->set('value', $token);

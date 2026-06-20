@@ -1,5 +1,63 @@
 # Changelog
 
+## 1.8.1 (2026-06-20)
+
+- Built-in documentation (RAG-lite): new always-on `help` tool / action returns on-demand guides
+  (markdown shipped in core/components/modxmcp/docs/) — topics: getting_started, tv_input_types
+  (how to create every TV field type incl. custom ones), study_component (how to learn & use a
+  newly-installed add-on from its source), minishop2, migx, acl. Docs load into the model only
+  when requested.
+
+## 1.8.0 (2026-06-20)
+
+- Capability toggles: each optional group (VersionX, VirtualPage, miniShop2, MIGX, Access
+  Control, property sets, contexts) can be switched off in the CMP (Дополнения > modxMCP) or
+  via `modxmcp.disabled_groups`. A disabled group is rejected server-side AND hidden from the
+  client's tool list, so its tools stop costing tokens. Every API response carries a
+  capability fingerprint; when it changes (CMP toggle), the client fires tools/list_changed
+  on its next call — changes apply automatically, no polling and no manual reconnect.
+- All optional groups are now toggleable and **off by default** (lean tool list out of the box;
+  enable what you need in the CMP). Re-added as toggleable groups: package management
+  (install/uninstall/providers/search), Namespaces, Lexicon Management.
+- CMP capability UI: split into "Компоненты" (VersionX/VirtualPage/miniShop2/MIGX) and
+  "Возможности MODX"; the Save button is enabled only when something changed and disabled again
+  after saving.
+- A call to a disabled capability returns a clear "enable it in Components > modxMCP" message.
+
+## 1.7.0 (2026-06-20)
+
+- Enabled on install: `modxmcp.enabled` now defaults to Yes (still protected by the
+  auto-generated random token), and `modxmcp.api_token` is a visible textfield so it can be
+  copied from System Settings / the CMP. The CMP shows the full token (click-to-select).
+- Integrations rethought: `check_integrations` / the CMP panel now list only add-ons with
+  DEDICATED modxMCP tooling — miniShop2, MIGX, VersionX, VirtualPage. Snippet/chunk-only
+  add-ons are no longer flagged (MCP reads and calls those via the generic element tools).
+- Contexts: list/get/create/update/delete (modContext) + their settings (modContextSetting:
+  list/get/create/update/delete).
+- Access changes apply immediately: ACL write tools now flush permissions automatically
+  (the manager's "Flush Permissions"), plus an explicit `flush_permissions` action.
+- Media (file) sources: create/update/delete (was read-only).
+- Package Management: `uninstall_package` (by signature, gated like install).
+- Media source parameters: create/update_media_source now take `properties` as a simple
+  {name: value} map, merged into the source's params (basePath, baseUrl, ...).
+- Providers: `list_providers`, `search_packages` (search a provider's catalogue before
+  installing), and create/update/delete_provider (gated like install) — e.g. add modstore.pro.
+- ms2 categories: create/update routed through the core resource processors (class_key=
+  msCategory) — the ms2 category processors don't run cleanly headless. Verified live.
+- list_tv_input_types: skip add-on render-dir paths and add MIGX's migx/migxdb explicitly.
+- Package install is always available now: removed the `modxmcp.allow_package_install` gate
+  and setting (install/uninstall/providers no longer require it).
+- Auto-static (`modxmcp.auto_static`) now defaults to ON.
+- Package readme rebuilt from the current concise README (the build workspace had a stale copy).
+- Namespaces: list/create/update/delete (modNamespace).
+- Lexicon Management: list entries/topics, set (override) and revert lexicon entries.
+- Token efficiency: write actions now return just the object (the
+  {success,message,total,errors} envelope is stripped); list rows drop never-useful columns
+  (password hashes, salt, remote_*); list_elements defaults to limit 100 (0 = all).
+- Trimmed the tool surface (155 -> 140) to cut the per-session tool-list cost: removed
+  package management (install/uninstall, providers, search, list_installed kept), Namespaces,
+  and Lexicon Management.
+
 ## 1.6.2 (2026-06-18)
 
 - CMP (Components > modxMCP) is now bilingual — all panel labels, the regenerate-token

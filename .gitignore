@@ -1,8 +1,18 @@
 node_modules/
 core/packages/
+_packages/
 *.transport.zip
 .env
 .DS_Store
 
 # Vendor component sources for study only — never packaged or committed
 _reference/
+
+# Local-only AI handoff notes (contains test-stand credentials — never publish)
+AI_HANDOFF.md
+
+# Reference copy of a clean MODX install, for local study only — never committed
+modx-example-2-8-8/
+
+# Built transport-vehicle artifact — never committed
+modxmcp-1.7.0-pl/

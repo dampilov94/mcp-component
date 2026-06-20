@@ -114,7 +114,7 @@ but you lose the processor's validation — validate inputs yourself.
   xtype, area)`), then read it with `$this->modx->getOption('modxmcp.x', null, $default)`.
 - Add its label/description to **`core/components/modxmcp/lexicon/{en,ru}/setting.inc.php`**
   (`setting_modxmcp.x` and `_desc`).
-- **Gate dangerous actions behind an off-by-default setting** (see `modxmcp.allow_package_install`
+- **Gate dangerous actions behind an off-by-default setting** (see `modxmcp.allow_run_processor`
   / `install_package`). Security defaults must be safe.
 
 ## 7. Editing conventions (important)
@@ -153,7 +153,8 @@ Test environments for this project: **fordev** = clean MODX (good for install/AC
 
 ## 9. Security model (don't regress these)
 
-- Disabled by default (`modxmcp.enabled = No`); token compared with `hash_equals`.
+- Enabled on install (`modxmcp.enabled = Yes`) but protected by an auto-generated random
+  `modxmcp.api_token` (visible in System Settings); token compared with `hash_equals`.
 - Runs as `modxmcp.service_user_id` (admin) — treat as a high-privilege admin API. Works over
   plain HTTP too, but the token then travels in cleartext, so prefer HTTPS (or a trusted network).
 - Root filesystem read off by default; component-file reads limited to `modxmcp.component_code_roots`.

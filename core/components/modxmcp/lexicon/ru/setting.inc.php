@@ -34,8 +34,6 @@ $_lang['area_modxmcp:paths'] = 'modxMCP: Пути';
 $_lang['setting_modxmcp.auto_static'] = 'Авто-статика элементов';
 $_lang['setting_modxmcp.auto_static_desc'] = 'Если включено, создание/обновление чанка/сниппета/шаблона/плагина через MCP автоматически переводит его в статический файл в core/elements/ (источник — Filesystem). Дальше правьте эти файлы напрямую.';
 
-$_lang['setting_modxmcp.allow_package_install'] = 'Разрешить установку пакетов';
-$_lang['setting_modxmcp.allow_package_install_desc'] = 'Если включено, действие install_package может скачивать и устанавливать transport-пакеты из провайдера (по умолчанию modx.com). Выключено по умолчанию, т.к. тянет код из сети и запускает установщик.';
 
 $_lang['setting_modxmcp.allow_run_processor'] = 'Разрешить run_processor';
 $_lang['setting_modxmcp.allow_run_processor_desc'] = 'Если включено, действие run_processor может выполнить ЛЮБОЙ процессор MODX напрямую. Мощный универсальный механизм — по умолчанию выключен. Предпочитайте специализированные действия, если они есть.';

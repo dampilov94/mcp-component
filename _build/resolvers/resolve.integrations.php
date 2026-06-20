@@ -26,35 +26,24 @@ if (!$modx) {
 
 $action = isset($options[xPDOTransport::PACKAGE_ACTION]) ? $options[xPDOTransport::PACKAGE_ACTION] : '';
 if ($action === xPDOTransport::ACTION_INSTALL || $action === xPDOTransport::ACTION_UPGRADE) {
+    // Add-ons with dedicated modxMCP tooling. If present, those tools are usable here.
     $known = array(
-        'minishop2'  => 'miniShop2 (ms2 option tools)',
-        'migx'       => 'MIGX (MIGX TVs/configs)',
-        'pdotools'   => 'pdoTools',
-        'tickets'    => 'Tickets',
-        'collections'=> 'Collections',
-        'formit'     => 'FormIt',
-        'msearch2'   => 'mSearch2',
-        'mfilter2'   => 'mFilter2',
-        'seosuite'   => 'SEO Suite',
-        'versionx'   => 'VersionX (versionx_* tools)',
+        'minishop2'   => 'miniShop2 (ms2_*)',
+        'migx'        => 'MIGX (migx_*)',
+        'versionx'    => 'VersionX (versionx_*)',
+        'virtualpage' => 'VirtualPage (virtualpage_*)',
     );
     $present = array();
-    $absent  = array();
     foreach ($known as $ns => $label) {
         if ($modx->getObject('modNamespace', array('name' => $ns))) {
             $present[] = $label;
-        } else {
-            $absent[] = $label;
         }
     }
-    $modx->log(modX::LOG_LEVEL_INFO, '[modxMCP] Integrations present: ' . (empty($present) ? 'none' : implode(', ', $present)));
-    if (!empty($absent)) {
-        $modx->log(
-            modX::LOG_LEVEL_INFO,
-            '[modxMCP] Optional add-ons not installed: ' . implode(', ', $absent) .
-            '. Install them via Package Management (or the install_package action, after enabling modxmcp.allow_package_install) if you want modxMCP to manage them.'
-        );
-    }
+    $modx->log(
+        modX::LOG_LEVEL_INFO,
+        '[modxMCP] Dedicated integrations detected: ' . (empty($present) ? 'none' : implode(', ', $present)) .
+        '. Other add-ons (snippets/chunks) are handled via the generic element tools.'
+    );
 }
 
 return $success;

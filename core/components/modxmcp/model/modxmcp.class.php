@@ -35,7 +35,27 @@ class modxMCP {
         $this->modx->user = $serviceUser;
         $this->modx->user->set('sudo', 1);
 
+        $this->assertCapabilityEnabled($action);
+
         switch ($action) {
+            case 'get_capabilities':
+                return $this->getCapabilities();
+            case 'help':
+                return $this->getHelp($data);
+            case 'install_package':
+                return $this->installPackage($data);
+            case 'uninstall_package':
+                return $this->uninstallPackage($data);
+            case 'list_providers':
+                return $this->listProviders($data);
+            case 'search_packages':
+                return $this->searchPackages($data);
+            case 'create_provider':
+                return $this->saveProvider($data, true);
+            case 'update_provider':
+                return $this->saveProvider($data, false);
+            case 'delete_provider':
+                return $this->deleteProvider($data);
             case 'list_system_settings':
                 return $this->listSystemSettings($data);
             case 'get_system_setting':
@@ -134,8 +154,14 @@ class modxMCP {
                 return $this->listTvInputTypes();
             case 'check_integrations':
                 return $this->getIntegrationsReport();
-            case 'install_package':
-                return $this->installPackage($data);
+            case 'flush_permissions':
+                return $this->flushPermissions();
+            case 'create_media_source':
+                return $this->saveMediaSource($data, true);
+            case 'update_media_source':
+                return $this->saveMediaSource($data, false);
+            case 'delete_media_source':
+                return $this->deleteMediaSource($data);
             case 'ms2_list_link_types':
             case 'ms2_get_link_type':
             case 'ms2_create_link_type':
@@ -189,6 +215,15 @@ class modxMCP {
         if (array_key_exists($action, $this->aclActionMap())) {
             return $this->runAclAction($action, $data);
         }
+
+        if (array_key_exists($action, $this->contextActionMap())) {
+            return $this->runContextAction($action, $data);
+        }
+
+        if (array_key_exists($action, $this->workspaceActionMap())) {
+            return $this->runWorkspaceAction($action, $data);
+        }
+
 
         if (!in_array($elementType, $this->allowedElementTypes, true)) {
             throw new ModxMCPClientException("Invalid element type: {$elementType}.");
@@ -249,7 +284,7 @@ class modxMCP {
 
         switch ($action) {
             case 'list_elements':
-                $listOptions = array('limit' => isset($data['limit']) ? max(0, (int) $data['limit']) : 0);
+                $listOptions = array('limit' => isset($data['limit']) ? max(0, (int) $data['limit']) : 100);
                 if (!empty($data['query'])) { $listOptions['query'] = (string) $data['query']; }
                 if (!empty($data['start'])) { $listOptions['start'] = (int) $data['start']; }
                 $response = $this->modx->runProcessor($basePath . 'getlist', $listOptions);
@@ -721,6 +756,26 @@ class modxMCP {
         $props = is_array($data) ? $data : array();
         unset($props['action'], $props['elementType']);
         if (!empty($cfg['list']) && !isset($props['limit'])) { $props['limit'] = 0; }
+
+        // A category is an msCategory resource. The ms2 category create/update processors extend
+        // the resource processors with manager-only setup and don't run cleanly headless, so route
+        // create/update through the core resource processors with class_key=msCategory instead.
+        if ($action === 'ms2_create_category' || $action === 'ms2_update_category') {
+            $props['class_key'] = 'msCategory';
+            if ($action === 'ms2_create_category') {
+                if (!isset($props['context_key'])) { $props['context_key'] = 'web'; }
+                if (!isset($props['parent'])) { $props['parent'] = 0; }
+                if (!isset($props['published'])) { $props['published'] = 1; }
+                $resp = $this->modx->runProcessor('resource/create', $props);
+            } else {
+                $resp = $this->modx->runProcessor('resource/update', $props);
+            }
+            if (!$resp || $resp->isError()) { throw new ModxMCPClientException($resp ? $this->formatProcessorErrors($resp) : 'ms2 category: no response.'); }
+            if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
+            $this->logAudit($action, 'ms2', array_intersect_key($props, array_flip(array('id', 'pagetitle', 'parent'))));
+            return $this->normalizeProcessorResponse($resp);
+        }
+
         $result = $this->runMiniShop2Processor($cfg['p'], $props);
         $this->logAudit($action, 'ms2', array_intersect_key($props, array_flip(array('id', 'link', 'master', 'slave', 'name', 'type'))));
         return $result;
@@ -830,37 +885,36 @@ class modxMCP {
                 foreach (preg_split('/\r\n|\r|\n/', (string) $res) as $line) {
                     $line = trim($line);
                     if ($line === '') { continue; }
+                    // Some add-ons (e.g. MIGX) return a render-templates directory path instead
+                    // of a "key==Label" pair; skip those — they aren't usable type keys.
                     if (strpos($line, '==') !== false) {
                         list($k, $lbl) = explode('==', $line, 2);
                         $custom[trim($k)] = trim($lbl);
-                    } else {
+                    } elseif (strpos($line, '/') === false && strpos($line, '\\') === false) {
                         $custom[$line] = $line;
                     }
                 }
             }
         }
+        // MIGX registers its input types via a directory, not a clean name — add them explicitly.
+        if ($this->modx->getObject('modNamespace', array('name' => 'migx'))) {
+            if (!isset($custom['migx']))   { $custom['migx'] = 'MIGX'; }
+            if (!isset($custom['migxdb'])) { $custom['migxdb'] = 'MIGXdb'; }
+        }
         return array('core' => $core, 'custom' => $custom);
     }
 
     /**
-     * Catalogue of popular MODX add-ons modxMCP is aware of. 'ns' = namespace key,
-     * optional 'snippet' = a snippet name to fall back on when no namespace is registered.
+     * Add-ons that modxMCP has DEDICATED tooling for (their own manager UI + built-in MCP
+     * actions). Snippet/chunk-only add-ons are intentionally NOT listed here — MCP can read
+     * and call those itself via the generic element tools, so flagging them adds no value.
      */
     private function knownIntegrations() {
         return array(
-            array('ns' => 'minishop2', 'label' => 'miniShop2',  'note' => 'Deep: ms2 option tools + msProduct fields. Orders/deliveries/payments not exposed.'),
-            array('ns' => 'migx',      'label' => 'MIGX',       'note' => 'Can create MIGX TVs (type=migx); the MIGX config (custom table) has no dedicated tool yet.'),
-            array('ns' => 'pdotools',  'label' => 'pdoTools',   'note' => 'Full: Fenom / pdo* snippets edited as chunks/snippets/templates.'),
-            array('ns' => 'tickets',   'label' => 'Tickets',    'note' => 'Content as resources (set class_key) + settings; no dedicated tool.'),
-            array('ns' => 'collections','label' => 'Collections','note' => 'Collection containers manageable as resources; no dedicated tool.'),
-            array('ns' => 'formit',    'label' => 'FormIt',     'note' => 'Full: form snippet + hooks configured via chunks/snippets.'),
-            array('ns' => 'msearch2',  'label' => 'mSearch2',   'note' => 'Edit snippet calls + settings; the search index rebuild is not exposed.'),
-            array('ns' => 'mfilter2',  'label' => 'mFilter2',   'note' => 'Edit mFilter2 calls via chunks/snippets + TVs/settings.'),
-            array('ns' => 'seosuite',  'label' => 'SEO Suite',  'note' => 'Resource SEO TVs/fields; redirect/meta tables have no dedicated tool.'),
-            array('ns' => 'versionx',  'label' => 'VersionX',   'note' => 'Deep: element/resource history + rollback (versionx_* tools).'),
-            array('ns' => 'office',    'label' => 'Office',     'note' => 'Frontend account snippets/chunks/settings (miniShop2 ecosystem).'),
-            array('ns' => 'login',     'label' => 'Login',      'note' => 'Frontend login/registration snippets + chunks.'),
-            array('ns' => 'getresources', 'label' => 'getResources', 'note' => 'Full: resource-listing snippet edited as elements.', 'snippet' => 'getResources'),
+            array('ns' => 'minishop2',   'label' => 'miniShop2',   'note' => 'Dedicated tools: product options, products, links, categories, orders (ms2_*).'),
+            array('ns' => 'migx',        'label' => 'MIGX',        'note' => 'Dedicated tools: MIGX configs CRUD (migx_*) + create MIGX-type TVs.'),
+            array('ns' => 'versionx',    'label' => 'VersionX',    'note' => 'Dedicated tools: element/resource history + rollback (versionx_*).'),
+            array('ns' => 'virtualpage', 'label' => 'VirtualPage', 'note' => 'Dedicated tools: events / handlers / routes CRUD + resolve (virtualpage_*).'),
         );
     }
 
@@ -898,71 +952,69 @@ class modxMCP {
     }
 
     /**
-     * Install a transport package from a provider (default modx.com) by name.
-     * Gated behind modxmcp.allow_package_install (off by default) because it pulls
-     * code from the network and runs the package installer.
+     * Generate a fresh modxmcp.api_token, save it, and return it once.
      */
-    private function installPackage($data) {
-        if (!$this->modx->getOption('modxmcp.allow_package_install', null, false)) {
-            throw new ModxMCPClientException('install_package is disabled. Set modxmcp.allow_package_install = Yes to enable it.');
-        }
-        $name = isset($data['package']) ? trim((string) $data['package']) : '';
-        if ($name === '') { throw new ModxMCPClientException('install_package: "package" (name) is required.'); }
-
-        $providerId = isset($data['provider']) ? (int) $data['provider'] : 0;
-        if (!$providerId) {
-            $c = $this->modx->newQuery('transport.modTransportProvider');
-            $c->where(array('name:=' => 'modx.com', 'OR:name:=' => 'modxcms.com'));
-            $provider = $this->modx->getObject('transport.modTransportProvider', $c);
-            if (!$provider) { $provider = $this->modx->getObject('transport.modTransportProvider', array('id:>' => 0)); }
-            if (!$provider) { throw new ModxMCPClientException('install_package: no transport provider is configured.'); }
-            $providerId = (int) $provider->get('id');
-        }
-
-        $existing = $this->modx->getObject('transport.modTransportPackage', array('package_name' => $name, 'installed:!=' => null));
-        if ($existing) {
-            return array('status' => 'already_installed', 'package' => $name, 'signature' => $existing->get('signature'));
-        }
-
-        $listResp = $this->modx->runProcessor('workspace/packages/rest/getlist', array('provider' => $providerId, 'query' => $name, 'limit' => 20));
-        if ($listResp->isError()) { throw new ModxMCPClientException('install_package: provider search failed: ' . $this->formatProcessorErrors($listResp)); }
-        $listData = json_decode($listResp->getResponse(), true);
-        $rows = isset($listData['results']) ? $listData['results'] : array();
-        if (empty($rows)) { throw new ModxMCPClientException("install_package: no package named '{$name}' found on the provider."); }
-
-        $chosen = null;
-        foreach ($rows as $row) {
-            if (isset($row['name']) && strcasecmp($row['name'], $name) === 0) { $chosen = $row; break; }
-        }
-        if (!$chosen) { $chosen = $rows[0]; }
-        if (empty($chosen['location']) || empty($chosen['signature'])) {
-            throw new ModxMCPClientException('install_package: provider result is missing location/signature.');
-        }
-
-        $dlResp = $this->modx->runProcessor('workspace/packages/rest/download', array(
-            'info'     => $chosen['location'] . '::' . $chosen['signature'],
-            'provider' => $providerId,
-        ));
-        if ($dlResp->isError()) { throw new ModxMCPClientException('install_package: download failed: ' . $this->formatProcessorErrors($dlResp)); }
-        $dlObj = $dlResp->getObject();
-        $signature = (is_array($dlObj) && !empty($dlObj['signature'])) ? $dlObj['signature'] : $chosen['signature'];
-
-        $instResp = $this->modx->runProcessor('workspace/packages/install', array('signature' => $signature));
-        if ($instResp->isError()) { throw new ModxMCPClientException('install_package: install failed: ' . $this->formatProcessorErrors($instResp)); }
-
-        if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
-        $this->logAudit('install_package', 'system', array('package' => $name, 'signature' => $signature));
-        return array(
-            'status'    => 'installed',
-            'package'   => isset($chosen['name']) ? $chosen['name'] : $name,
-            'signature' => $signature,
-            'version'   => isset($chosen['version']) ? $chosen['version'] : null,
-        );
+    private function flushPermissions() {
+        $cm = $this->modx->getCacheManager();
+        $ok = $cm ? $cm->flushPermissions() : false;
+        $this->logAudit('flush_permissions', 'system', array());
+        return array('flushed' => (bool) $ok);
     }
 
     /**
-     * Generate a fresh modxmcp.api_token, save it, and return it once.
+     * Media (file) sources: create/update via source/* core processors.
+     * `properties` is a simple {name: value} map of source parameters (basePath, baseUrl, ...)
+     * that is MERGED into the source's existing params (the rest are preserved).
      */
+    private function saveMediaSource($data, $isCreate) {
+        $props = is_array($data) ? $data : array();
+        unset($props['action'], $props['elementType']);
+        $userProps = (isset($props['properties']) && is_array($props['properties'])) ? $props['properties'] : null;
+        unset($props['properties']);
+        if ($isCreate) {
+            if (empty($props['name'])) { throw new ModxMCPClientException('create_media_source: name is required.'); }
+            if (empty($props['class_key'])) { $props['class_key'] = 'sources.modFileMediaSource'; }
+            $resp = $this->modx->runProcessor('source/create', $props);
+        } else {
+            if (empty($props['id'])) { throw new ModxMCPClientException('update_media_source: id is required.'); }
+            $resp = $this->modx->runProcessor('source/update', $props);
+        }
+        if (!$resp) { throw new ModxMCPClientException('media source: no response.'); }
+        if ($resp->isError()) { throw new ModxMCPClientException($this->formatProcessorErrors($resp)); }
+        $obj = $resp->getObject();
+        $id = $isCreate ? ((is_array($obj) && isset($obj['id'])) ? (int) $obj['id'] : 0) : (int) $props['id'];
+        if ($userProps !== null && $id > 0) { $this->mergeMediaSourceProperties($id, $userProps); }
+        if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
+        $this->logAudit($isCreate ? 'create_media_source' : 'update_media_source', 'source', array('id' => $id, 'name' => isset($props['name']) ? $props['name'] : null));
+        return array('id' => $id, 'properties_set' => $userProps !== null ? array_keys($userProps) : array());
+    }
+
+    private function mergeMediaSourceProperties($id, array $map) {
+        $source = $this->modx->getObject('sources.modMediaSource', (int) $id);
+        if (!$source) { throw new ModxMCPClientException("media source {$id} not found for properties update."); }
+        $current = $source->getProperties();
+        if (!is_array($current)) { $current = array(); }
+        foreach ($map as $k => $v) {
+            if (isset($current[$k]) && is_array($current[$k])) {
+                $current[$k]['value'] = $v;
+            } else {
+                $current[$k] = array('name' => $k, 'desc' => '', 'type' => 'textfield', 'options' => array(), 'value' => $v, 'area' => '');
+            }
+        }
+        $source->setProperties($current);
+        if (!$source->save()) { throw new ModxMCPClientException("Could not save media source {$id} properties."); }
+    }
+
+    private function deleteMediaSource($data) {
+        if (empty($data['id'])) { throw new ModxMCPClientException('delete_media_source: id is required.'); }
+        $resp = $this->modx->runProcessor('source/remove', array('id' => (int) $data['id']));
+        if (!$resp) { throw new ModxMCPClientException('delete_media_source: no response.'); }
+        if ($resp->isError()) { throw new ModxMCPClientException($this->formatProcessorErrors($resp)); }
+        if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
+        $this->logAudit('delete_media_source', 'source', array('id' => (int) $data['id']));
+        return array('deleted' => true, 'id' => (int) $data['id']);
+    }
+
     private function regenerateToken() {
         try {
             $token = bin2hex(random_bytes(32));
@@ -976,7 +1028,7 @@ class modxMCP {
                 'key'       => 'modxmcp.api_token',
                 'namespace' => 'modxmcp',
                 'area'      => 'modxmcp:main',
-                'xtype'     => 'text-password',
+                'xtype'     => 'textfield',
             ), '', true, true);
         }
         $setting->set('value', $token);
@@ -985,6 +1037,58 @@ class modxMCP {
         if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
         $this->logAudit('regenerate_token', 'system', array());
         return array('token' => $token);
+    }
+
+    /**
+     * Contexts (modContext) + their settings (modContextSetting), via core processors.
+     */
+    private function contextActionMap() {
+        return array(
+            'list_contexts'          => array('processor' => 'context/getlist', 'list' => true),
+            'get_context'            => array('processor' => 'context/get'),
+            'create_context'         => array('processor' => 'context/create'),
+            'update_context'         => array('processor' => 'context/update'),
+            'delete_context'         => array('processor' => 'context/remove'),
+            'list_context_settings'  => array('processor' => 'context/setting/getlist', 'list' => true),
+            'get_context_setting'    => array('processor' => 'context/setting/get'),
+            'create_context_setting' => array('processor' => 'context/setting/create'),
+            'update_context_setting' => array('processor' => 'context/setting/update'),
+            'delete_context_setting' => array('processor' => 'context/setting/remove'),
+        );
+    }
+
+    private function runContextAction($action, $data) {
+        $map = $this->contextActionMap();
+        if (!isset($map[$action])) { throw new ModxMCPClientException("Unknown context action: {$action}."); }
+        $cfg = $map[$action];
+        $props = is_array($data) ? $data : array();
+        unset($props['action'], $props['elementType']);
+        $this->modx->lexicon->load('core:default', 'core:context', 'core:setting');
+
+        // context/setting/create identifies the context via `fk` (get/remove/getlist use
+        // `context_key`); mirror context_key -> fk so a single param works everywhere.
+        if (in_array($action, array('create_context_setting', 'update_context_setting'), true)) {
+            if (!isset($props['fk']) && isset($props['context_key'])) { $props['fk'] = $props['context_key']; }
+            if (!isset($props['namespace'])) { $props['namespace'] = 'core'; }
+        }
+
+        $isList = !empty($cfg['list']);
+        if ($isList && !isset($props['limit'])) { $props['limit'] = 0; }
+
+        $response = $this->modx->runProcessor($cfg['processor'], $props);
+        if (!$response) { throw new ModxMCPClientException("Context processor not found or returned nothing: {$cfg['processor']}"); }
+        if ($response->isError()) { throw new ModxMCPClientException($this->formatProcessorErrors($response)); }
+
+        $this->logAudit($action, 'context', array_intersect_key($props, array_flip(array('key', 'context_key', 'name'))));
+
+        if ($isList) {
+            $decoded = json_decode($response->getResponse(), true);
+            return array(
+                'total'   => isset($decoded['total']) ? (int) $decoded['total'] : 0,
+                'results' => $this->stripNoiseFields(isset($decoded['results']) ? $decoded['results'] : array()),
+            );
+        }
+        return $this->normalizeProcessorResponse($response);
     }
 
     /**
@@ -1092,6 +1196,12 @@ class modxMCP {
         if (!$response) { throw new ModxMCPClientException("ACL processor not found or returned nothing: {$cfg['processor']}"); }
         if ($response->isError()) { throw new ModxMCPClientException($this->formatProcessorErrors($response)); }
 
+        // Apply access changes immediately (the manager's "Flush Permissions"). The core
+        // ACL processors already flush on save; this also covers the ones that don't.
+        if (strpos($action, 'list_') !== 0 && strpos($action, 'get_') !== 0 && $this->modx->getCacheManager()) {
+            $this->modx->getCacheManager()->flushPermissions();
+        }
+
         $logFields = array_intersect_key($props, array_flip(array('id', 'usergroup', 'user', 'target', 'principal', 'resource', 'resourceGroup', 'name')));
         $this->logAudit($action, 'acl', $logFields);
 
@@ -1099,7 +1209,7 @@ class modxMCP {
             $decoded = json_decode($response->getResponse(), true);
             return array(
                 'total'   => isset($decoded['total']) ? (int) $decoded['total'] : 0,
-                'results' => isset($decoded['results']) ? $decoded['results'] : array(),
+                'results' => $this->stripNoiseFields(isset($decoded['results']) ? $decoded['results'] : array()),
             );
         }
         return $this->normalizeProcessorResponse($response);
@@ -1247,17 +1357,224 @@ class modxMCP {
             'resource_tvs'  => array('get_resource_tvs', 'update_resource_tvs'),
             'tv_inputs'     => array('list_tv_input_types'),
             'system'        => array('list_system_settings', 'get_system_setting', 'create_system_setting', 'update_system_setting', 'delete_system_setting'),
-            'media'         => array('list_media_sources', 'get_media_source', 'list_media_source_files', 'read_media_source_file'),
-            'components'    => array('list_installed_components', 'get_component_files', 'read_component_file', 'check_integrations', 'install_package'),
+            'media'         => array('list_media_sources', 'get_media_source', 'list_media_source_files', 'read_media_source_file', 'create_media_source', 'update_media_source', 'delete_media_source'),
+            'components'    => array('list_installed_components', 'get_component_files', 'read_component_file', 'check_integrations'),
             'code_search'   => array('search_code', 'find_usages', 'list_resources'),
             'versionx'      => array('versionx_list_versions', 'versionx_get_version', 'versionx_revert_version'),
             'virtualpage'   => array('virtualpage_list_events', 'virtualpage_get_event', 'virtualpage_create_event', 'virtualpage_update_event', 'virtualpage_list_handlers', 'virtualpage_get_handler', 'virtualpage_create_handler', 'virtualpage_update_handler', 'virtualpage_list_routes', 'virtualpage_get_route', 'virtualpage_create_route', 'virtualpage_update_route', 'virtualpage_delete_event', 'virtualpage_delete_handler', 'virtualpage_delete_route', 'virtualpage_resolve_route', 'virtualpage_clear_cache'),
             'minishop2'     => array('ms2_list_option_types', 'ms2_list_options', 'ms2_get_option', 'ms2_create_option', 'ms2_update_option', 'ms2_assign_option_to_category', 'ms2_get_product_options', 'ms2_update_product_options', 'ms2_list_link_types', 'ms2_get_link_type', 'ms2_create_link_type', 'ms2_update_link_type', 'ms2_delete_link_type', 'ms2_list_product_links', 'ms2_create_product_link', 'ms2_delete_product_link', 'ms2_list_categories', 'ms2_create_category', 'ms2_update_category', 'ms2_list_orders', 'ms2_get_order', 'ms2_update_order'),
             'migx'          => array('migx_list_configs', 'migx_get_config', 'migx_create_config', 'migx_update_config', 'migx_delete_config'),
-            'access'        => array('list_users', 'get_user', 'create_user', 'update_user', 'delete_user', 'list_user_groups', 'get_user_group', 'create_user_group', 'update_user_group', 'delete_user_group', 'list_user_group_members', 'add_user_to_group', 'update_group_member', 'remove_user_from_group', 'list_roles', 'get_role', 'create_role', 'update_role', 'delete_role', 'list_access_policies', 'create_access_policy', 'update_access_policy', 'delete_access_policy', 'list_access_policy_templates', 'create_access_policy_template', 'update_access_policy_template', 'delete_access_policy_template', 'list_access_permissions', 'list_resource_groups', 'create_resource_group', 'update_resource_group', 'delete_resource_group', 'assign_resource_to_group', 'remove_resource_from_group', 'list_context_access', 'grant_context_access', 'update_context_access', 'revoke_context_access', 'list_resourcegroup_access', 'grant_resourcegroup_access', 'update_resourcegroup_access', 'revoke_resourcegroup_access'),
+            'access'        => array('list_users', 'get_user', 'create_user', 'update_user', 'delete_user', 'list_user_groups', 'get_user_group', 'create_user_group', 'update_user_group', 'delete_user_group', 'list_user_group_members', 'add_user_to_group', 'update_group_member', 'remove_user_from_group', 'list_roles', 'get_role', 'create_role', 'update_role', 'delete_role', 'list_access_policies', 'create_access_policy', 'update_access_policy', 'delete_access_policy', 'list_access_policy_templates', 'create_access_policy_template', 'update_access_policy_template', 'delete_access_policy_template', 'list_access_permissions', 'list_resource_groups', 'create_resource_group', 'update_resource_group', 'delete_resource_group', 'assign_resource_to_group', 'remove_resource_from_group', 'list_context_access', 'grant_context_access', 'update_context_access', 'revoke_context_access', 'list_resourcegroup_access', 'grant_resourcegroup_access', 'update_resourcegroup_access', 'revoke_resourcegroup_access', 'flush_permissions'),
             'property_sets' => array('list_property_sets', 'get_property_set', 'create_property_set', 'update_property_set', 'delete_property_set', 'assign_property_set', 'unassign_property_set'),
-            'ops'           => array('list_actions', 'run_processor', 'clear_cache', 'read_audit_log', 'regenerate_token'),
+            'contexts'      => array('list_contexts', 'get_context', 'create_context', 'update_context', 'delete_context', 'list_context_settings', 'get_context_setting', 'create_context_setting', 'update_context_setting', 'delete_context_setting'),
+            'package_management' => array('install_package', 'uninstall_package', 'list_providers', 'search_packages', 'create_provider', 'update_provider', 'delete_provider'),
+            'namespaces'    => array('list_namespaces', 'create_namespace', 'update_namespace', 'delete_namespace'),
+            'lexicon'       => array('list_lexicon_entries', 'list_lexicon_topics', 'set_lexicon_entry', 'revert_lexicon_entry'),
+            'ops'           => array('list_actions', 'get_capabilities', 'help', 'run_processor', 'clear_cache', 'read_audit_log', 'regenerate_token'),
         );
+    }
+
+    /**
+     * Capability groups that the admin can switch off (via modxmcp.disabled_groups). Core
+     * groups (elements, system, media, ops, ...) are always on. Disabling a group makes the
+     * server reject its actions AND makes the client stop advertising those tools.
+     */
+    // --- Package management (toggleable group) ---
+    private function defaultProviderId() {
+        $c = $this->modx->newQuery('transport.modTransportProvider');
+        $c->where(array('name:=' => 'modx.com', 'OR:name:=' => 'modxcms.com'));
+        $p = $this->modx->getObject('transport.modTransportProvider', $c);
+        if (!$p) { $p = $this->modx->getObject('transport.modTransportProvider', array('id:>' => 0)); }
+        return $p ? (int) $p->get('id') : 0;
+    }
+
+    private function installPackage($data) {
+        $name = isset($data['package']) ? trim((string) $data['package']) : '';
+        if ($name === '') { throw new ModxMCPClientException('install_package: "package" (name) is required.'); }
+        $providerId = isset($data['provider']) ? (int) $data['provider'] : $this->defaultProviderId();
+        if (!$providerId) { throw new ModxMCPClientException('install_package: no transport provider is configured.'); }
+        $existing = $this->modx->getObject('transport.modTransportPackage', array('package_name' => $name, 'installed:!=' => null));
+        if ($existing) { return array('status' => 'already_installed', 'package' => $name, 'signature' => $existing->get('signature')); }
+        $listResp = $this->modx->runProcessor('workspace/packages/rest/getlist', array('provider' => $providerId, 'query' => $name, 'limit' => 20));
+        if (!$listResp || $listResp->isError()) { throw new ModxMCPClientException('install_package: provider search failed: ' . ($listResp ? $this->formatProcessorErrors($listResp) : 'no response')); }
+        $listData = json_decode($listResp->getResponse(), true);
+        $rows = isset($listData['results']) ? $listData['results'] : array();
+        if (empty($rows)) { throw new ModxMCPClientException("install_package: no package named '{$name}' found on the provider."); }
+        $chosen = null;
+        foreach ($rows as $row) { if (isset($row['name']) && strcasecmp($row['name'], $name) === 0) { $chosen = $row; break; } }
+        if (!$chosen) { $chosen = $rows[0]; }
+        if (empty($chosen['location']) || empty($chosen['signature'])) { throw new ModxMCPClientException('install_package: provider result is missing location/signature.'); }
+        $dlResp = $this->modx->runProcessor('workspace/packages/rest/download', array('info' => $chosen['location'] . '::' . $chosen['signature'], 'provider' => $providerId));
+        if (!$dlResp || $dlResp->isError()) { throw new ModxMCPClientException('install_package: download failed: ' . ($dlResp ? $this->formatProcessorErrors($dlResp) : 'no response')); }
+        $dlObj = $dlResp->getObject();
+        $signature = (is_array($dlObj) && !empty($dlObj['signature'])) ? $dlObj['signature'] : $chosen['signature'];
+        $instResp = $this->modx->runProcessor('workspace/packages/install', array('signature' => $signature));
+        if (!$instResp || $instResp->isError()) { throw new ModxMCPClientException('install_package: install failed: ' . ($instResp ? $this->formatProcessorErrors($instResp) : 'no response')); }
+        if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
+        $this->logAudit('install_package', 'system', array('package' => $name, 'signature' => $signature));
+        return array('status' => 'installed', 'package' => isset($chosen['name']) ? $chosen['name'] : $name, 'signature' => $signature, 'version' => isset($chosen['version']) ? $chosen['version'] : null);
+    }
+
+    private function uninstallPackage($data) {
+        $sig = isset($data['signature']) ? (string) $data['signature'] : '';
+        if ($sig === '') { throw new ModxMCPClientException('uninstall_package: "signature" is required (e.g. migx-2.13.0-pl).'); }
+        $resp = $this->modx->runProcessor('workspace/packages/uninstall', array('signature' => $sig));
+        if (!$resp || $resp->isError()) { throw new ModxMCPClientException($resp ? $this->formatProcessorErrors($resp) : 'uninstall_package: no response.'); }
+        if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
+        $this->logAudit('uninstall_package', 'system', array('signature' => $sig));
+        return $this->normalizeProcessorResponse($resp);
+    }
+
+    private function listProviders($data) {
+        $resp = $this->modx->runProcessor('workspace/providers/getlist', array('limit' => 0));
+        if (!$resp || $resp->isError()) { throw new ModxMCPClientException($resp ? $this->formatProcessorErrors($resp) : 'list_providers: no response.'); }
+        $d = json_decode($resp->getResponse(), true);
+        return array('total' => isset($d['total']) ? (int) $d['total'] : 0, 'results' => isset($d['results']) ? $d['results'] : array());
+    }
+
+    private function searchPackages($data) {
+        $providerId = isset($data['provider']) ? (int) $data['provider'] : $this->defaultProviderId();
+        if (!$providerId) { throw new ModxMCPClientException('search_packages: no transport provider configured.'); }
+        $params = array('provider' => $providerId, 'query' => isset($data['query']) ? (string) $data['query'] : '', 'limit' => isset($data['limit']) ? (int) $data['limit'] : 20, 'start' => isset($data['start']) ? (int) $data['start'] : 0);
+        $resp = $this->modx->runProcessor('workspace/packages/rest/getlist', $params);
+        if (!$resp || $resp->isError()) { throw new ModxMCPClientException($resp ? $this->formatProcessorErrors($resp) : 'search_packages: no response (provider unreachable?).'); }
+        $d = json_decode($resp->getResponse(), true);
+        return array('provider' => $providerId, 'total' => isset($d['total']) ? (int) $d['total'] : 0, 'results' => isset($d['results']) ? $d['results'] : array());
+    }
+
+    private function saveProvider($data, $isCreate) {
+        $props = is_array($data) ? $data : array();
+        unset($props['action'], $props['elementType']);
+        if ($isCreate) {
+            if (empty($props['name']) || empty($props['service_url'])) { throw new ModxMCPClientException('create_provider: name and service_url are required.'); }
+            $resp = $this->modx->runProcessor('workspace/providers/create', $props);
+        } else {
+            if (empty($props['id'])) { throw new ModxMCPClientException('update_provider: id is required.'); }
+            $resp = $this->modx->runProcessor('workspace/providers/update', $props);
+        }
+        if (!$resp || $resp->isError()) { throw new ModxMCPClientException($resp ? $this->formatProcessorErrors($resp) : 'provider: no response.'); }
+        $this->logAudit($isCreate ? 'create_provider' : 'update_provider', 'provider', array_intersect_key($props, array_flip(array('id', 'name', 'service_url'))));
+        return $this->normalizeProcessorResponse($resp);
+    }
+
+    private function deleteProvider($data) {
+        if (empty($data['id'])) { throw new ModxMCPClientException('delete_provider: id is required.'); }
+        $resp = $this->modx->runProcessor('workspace/providers/remove', array('id' => (int) $data['id']));
+        if (!$resp || $resp->isError()) { throw new ModxMCPClientException($resp ? $this->formatProcessorErrors($resp) : 'delete_provider: no response.'); }
+        $this->logAudit('delete_provider', 'provider', array('id' => (int) $data['id']));
+        return array('deleted' => true, 'id' => (int) $data['id']);
+    }
+
+    // --- Namespaces + Lexicon (toggleable groups) ---
+    private function workspaceActionMap() {
+        return array(
+            'list_namespaces'      => array('processor' => 'workspace/namespace/getlist', 'list' => true),
+            'create_namespace'     => array('processor' => 'workspace/namespace/create'),
+            'update_namespace'     => array('processor' => 'workspace/namespace/update'),
+            'delete_namespace'     => array('processor' => 'workspace/namespace/remove'),
+            'list_lexicon_entries' => array('processor' => 'workspace/lexicon/getlist', 'list' => true),
+            'list_lexicon_topics'  => array('processor' => 'workspace/lexicon/topic/getlist', 'list' => true),
+            'set_lexicon_entry'    => array('processor' => 'workspace/lexicon/create'),
+            'revert_lexicon_entry' => array('processor' => 'workspace/lexicon/revert'),
+        );
+    }
+
+    private function runWorkspaceAction($action, $data) {
+        $map = $this->workspaceActionMap();
+        if (!isset($map[$action])) { throw new ModxMCPClientException("Unknown workspace action: {$action}."); }
+        $cfg = $map[$action];
+        $props = is_array($data) ? $data : array();
+        unset($props['action'], $props['elementType']);
+        $this->modx->lexicon->load('core:default', 'core:workspaces');
+        $isList = !empty($cfg['list']);
+        if ($isList && !isset($props['limit'])) { $props['limit'] = 0; }
+        $response = $this->modx->runProcessor($cfg['processor'], $props);
+        if (!$response || $response->isError()) { throw new ModxMCPClientException($response ? $this->formatProcessorErrors($response) : "Workspace processor not found: {$cfg['processor']}"); }
+        $this->logAudit($action, 'workspace', array_intersect_key($props, array_flip(array('name', 'namespace', 'topic', 'language'))));
+        if ($isList) {
+            $decoded = json_decode($response->getResponse(), true);
+            return array('total' => isset($decoded['total']) ? (int) $decoded['total'] : 0, 'results' => $this->stripNoiseFields(isset($decoded['results']) ? $decoded['results'] : array()));
+        }
+        return $this->normalizeProcessorResponse($response);
+    }
+
+    private function toggleableGroupKeys() {
+        return array('versionx', 'virtualpage', 'minishop2', 'migx', 'access', 'property_sets', 'contexts', 'package_management', 'namespaces', 'lexicon');
+    }
+
+    private function disabledGroups() {
+        $raw = (string) $this->modx->getOption('modxmcp.disabled_groups', null, '');
+        $out = array();
+        foreach (explode(',', $raw) as $g) { $g = trim($g); if ($g !== '') { $out[$g] = true; } }
+        return $out;
+    }
+
+    private function actionToGroup() {
+        $groups = $this->listSupportedActions();
+        $toggle = array_flip($this->toggleableGroupKeys());
+        $map = array();
+        foreach ($groups as $g => $actions) {
+            if (!isset($toggle[$g])) { continue; }
+            foreach ($actions as $a) { $map[$a] = $g; }
+        }
+        return $map;
+    }
+
+    private function assertCapabilityEnabled($action) {
+        $map = $this->actionToGroup();
+        if (!isset($map[$action])) { return; }
+        $disabled = $this->disabledGroups();
+        if (isset($disabled[$map[$action]])) {
+            throw new ModxMCPClientException("Возможность '{$map[$action]}' выключена в modxMCP — включите её в админке: Дополнения → modxMCP. (Capability '{$map[$action]}' is disabled; enable it in Components > modxMCP.)");
+        }
+    }
+
+    /**
+     * Reports which capability groups exist, which are off, and the flat list of disabled
+     * action names — the client uses this to hide disabled tools from its tool list.
+     */
+    /**
+     * Built-in documentation (RAG-lite): returns a help topic's markdown on demand. No topic
+     * (or 'index') returns the topic list. Docs live in core/components/modxmcp/docs/.
+     */
+    private function getHelp($data) {
+        $dir = rtrim($this->modx->getOption('core_path'), '/') . '/components/modxmcp/docs/';
+        $topic = isset($data['topic']) ? preg_replace('/[^a-z0-9_]/', '', strtolower((string) $data['topic'])) : '';
+        $available = array();
+        foreach ((array) glob($dir . '*.md') as $f) { $available[] = basename($f, '.md'); }
+        sort($available);
+        if ($topic === '' || $topic === 'index') {
+            $idx = @file_get_contents($dir . 'index.md');
+            return array('topics' => $available, 'index' => ($idx !== false) ? $idx : '');
+        }
+        $file = $dir . $topic . '.md';
+        if (!file_exists($file)) {
+            return array('error' => "Unknown help topic '{$topic}'.", 'topics' => $available);
+        }
+        return array('topic' => $topic, 'content' => (string) @file_get_contents($file));
+    }
+
+    public function getCapabilities() {
+        $groups = $this->listSupportedActions();
+        $toggle = $this->toggleableGroupKeys();
+        $disabled = $this->disabledGroups();
+        $disabledActions = array();
+        foreach ($toggle as $g) {
+            if (isset($disabled[$g]) && isset($groups[$g])) {
+                foreach ($groups[$g] as $a) { $disabledActions[] = $a; }
+            }
+        }
+        return array(
+            'toggleable_groups' => $toggle,
+            'disabled_groups'   => array_keys($disabled),
+            'disabled_actions'  => $disabledActions,
+            'fingerprint'       => $this->capabilitiesFingerprint(),
+        );
+    }
+
+    /** Short fingerprint of the capability config; the client watches it on every response. */
+    public function capabilitiesFingerprint() {
+        return (string) $this->modx->getOption('modxmcp.disabled_groups', null, '');
     }
 
     // --- Property sets (modPropertySet + modElementPropertySet), direct xPDO ---
@@ -2651,16 +2968,45 @@ class modxMCP {
 
     private function normalizeProcessorResponse($response) {
         $raw = $response->getResponse();
-        if (is_array($raw)) { return $raw; }
+        if (is_array($raw)) { return $this->unwrapProcessorPayload($raw); }
         $decoded = json_decode((string) $raw, true);
         if (is_array($decoded)) {
-            return $decoded;
+            return $this->unwrapProcessorPayload($decoded);
         }
         $object = $response->getObject();
         if (!empty($object)) {
             return $object;
         }
-        return ['success' => true, 'message' => $response->getMessage()];
+        return ['success' => true];
+    }
+
+    /**
+     * Processor responses are wrapped as {success, message, total, errors, object}. The client
+     * only needs the object, so strip the envelope to save tokens.
+     */
+    private function unwrapProcessorPayload($decoded) {
+        if (is_array($decoded) && array_key_exists('object', $decoded) && array_key_exists('success', $decoded)) {
+            $obj = $decoded['object'];
+            if (!empty($obj)) { return $obj; }
+            return array('success' => !empty($decoded['success']));
+        }
+        return $decoded;
+    }
+
+    /**
+     * Drop never-useful / sensitive columns from list rows (e.g. user password hashes) to keep
+     * responses small.
+     */
+    private function stripNoiseFields($rows) {
+        if (!is_array($rows)) { return $rows; }
+        $noise = array('password', 'cachepwd', 'salt', 'hash_class', 'remote_data', 'remote_key', 'session_stale', 'sudo');
+        foreach ($rows as &$row) {
+            if (is_array($row)) {
+                foreach ($noise as $k) { unset($row[$k]); }
+            }
+        }
+        unset($row);
+        return $rows;
     }
 
     private function listVersionXVersions(array $data) {

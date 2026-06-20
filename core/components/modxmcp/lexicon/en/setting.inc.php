@@ -34,8 +34,6 @@ $_lang['area_modxmcp:paths'] = 'modxMCP: Paths';
 $_lang['setting_modxmcp.auto_static'] = 'Auto static elements';
 $_lang['setting_modxmcp.auto_static_desc'] = 'When enabled, MCP create/update of a chunk/snippet/template/plugin automatically converts it to a static file under core/elements/ (source = Filesystem). Edit those files directly afterwards.';
 
-$_lang['setting_modxmcp.allow_package_install'] = 'Allow package install';
-$_lang['setting_modxmcp.allow_package_install_desc'] = 'When enabled, the install_package MCP action may download and install transport packages from a provider (default modx.com). Off by default because it fetches code over the network and runs the installer.';
 
 $_lang['setting_modxmcp.allow_run_processor'] = 'Allow run_processor';
 $_lang['setting_modxmcp.allow_run_processor_desc'] = 'When enabled, the run_processor MCP action may execute ANY MODX processor directly. Powerful escape hatch — off by default. Prefer dedicated actions when they exist.';
