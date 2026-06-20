@@ -62,8 +62,16 @@ if (!API_TOKEN) {
   );
 }
 
+// Identify the server from package.json so the name/version never drift from the release.
+let pkgInfo = { name: "modx-mcp", version: "0.0.0" };
+try {
+  pkgInfo = require(path.resolve(__dirname, "..", "package.json"));
+} catch (e) {
+  // Keep the fallback identity if package.json can't be read.
+}
+
 const server = new Server(
-  { name: "modx-codex-server", version: "7.1.0" },
+  { name: pkgInfo.name || "modx-mcp", version: pkgInfo.version || "0.0.0" },
   { capabilities: { tools: { listChanged: true } } },
 );
 
@@ -129,7 +137,7 @@ const toolDefinitions = [
       type: "object",
       properties: {
         type: { type: "string", enum: ELEMENT_TYPES },
-        query: { type: "string", description: "Filter elements by name/content (passed to the getlist processor)." },
+        query: { type: "string", description: "Filter by name (for resources: pagetitle/longtitle/alias)." },
         limit: { type: "number", description: "Max results (default 100; 0 = all)." },
         start: { type: "number", description: "Offset for pagination." },
       },
@@ -1549,6 +1557,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const result = await modxApiRequest({
         action: "list_elements",
         type: args.type,
+        data: args,
       });
       return {
         content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }],

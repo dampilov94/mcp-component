@@ -284,18 +284,32 @@ class modxMCP {
 
         switch ($action) {
             case 'list_elements':
-                $listOptions = array('limit' => isset($data['limit']) ? max(0, (int) $data['limit']) : 100);
-                if (!empty($data['query'])) { $listOptions['query'] = (string) $data['query']; }
-                if (!empty($data['start'])) { $listOptions['start'] = (int) $data['start']; }
-                $response = $this->modx->runProcessor($basePath . 'getlist', $listOptions);
-                if ($response->isError()) throw new ModxMCPClientException($this->formatProcessorErrors($response));
-                
-                $results = json_decode($response->getResponse(), true);
+                // Filter by name directly: the core element getlist processors ignore a `query`
+                // property (they only honour `id`), so a name search has to be done here. limit
+                // defaults to 100; 0 = all. start paginates.
+                $limit = isset($data['limit']) ? max(0, (int) $data['limit']) : 100;
+                $start = isset($data['start']) ? max(0, (int) $data['start']) : 0;
+                $listClassMap = [
+                    'chunk' => 'modChunk', 'snippet' => 'modSnippet', 'template' => 'modTemplate',
+                    'resource' => 'modResource', 'tv' => 'modTemplateVar', 'category' => 'modCategory', 'plugin' => 'modPlugin',
+                ];
+                $listClass = $listClassMap[$elementType];
+                $lc = $this->modx->newQuery($listClass);
+                if (!empty($data['query'])) {
+                    $q = '%' . trim((string) $data['query']) . '%';
+                    if ($elementType === 'resource') {
+                        $lc->where([['pagetitle:LIKE' => $q, 'OR:longtitle:LIKE' => $q, 'OR:alias:LIKE' => $q]]);
+                    } else {
+                        $lc->where([$nameField . ':LIKE' => $q]);
+                    }
+                }
+                $lc->sortby($nameField, 'ASC');
+                if ($limit > 0) { $lc->limit($limit, $start); }
                 $list =[];
-                foreach ($results['results'] as $el) {
+                foreach ($this->modx->getCollection($listClass, $lc) as $el) {
                     $list[] =[
-                        'id' => $el['id'],
-                        'name' => isset($el[$nameField]) ? $el[$nameField] : (isset($el['name']) ? $el['name'] : 'Unknown')
+                        'id' => (int) $el->get('id'),
+                        'name' => $el->get($nameField),
                     ];
                 }
                 return $list;

@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.8.2 (2026-06-21)
+
+- Fix: the CMP "save capabilities" action no longer silently re-enables package
+  management, namespaces and lexicon. The savegroups processor used a hardcoded
+  7-group whitelist while the model exposes 10 toggleable groups, so saving dropped
+  the 3 missing groups from `modxmcp.disabled_groups` (turning them on). The
+  whitelist is now taken from the model (`getCapabilities()`), a single source of truth.
+- Fix: `list_elements` now actually filters by `query` and paginates. The Node client
+  was not forwarding `query`/`limit`/`start`, and the core element getlist processors
+  ignore a `query` property anyway — so the name filter is now done in the model
+  (resources match pagetitle/longtitle/alias), and the client forwards the params.
+- Fix: the MCP client now reports its real name/version (`modx-mcp` / package.json
+  version) instead of the stale `modx-codex-server` / `7.1.0`.
+
 ## 1.8.1 (2026-06-20)
 
 - Built-in documentation (RAG-lite): new always-on `help` tool / action returns on-demand guides
