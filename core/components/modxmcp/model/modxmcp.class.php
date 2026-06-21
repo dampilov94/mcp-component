@@ -246,6 +246,7 @@ class modxMCP {
                 'make_static'     => 'makeStatic',
                 'view_element'        => 'viewElementLines',
                 'edit_element_lines'  => 'editElementLines',
+                'bulk_resources'      => 'bulkResources',
             ),
             'resource_tvs' => array(
                 'get_resource_tvs'    => 'getResourceTvs',
@@ -827,6 +828,85 @@ class modxMCP {
             'usages' => $usages,
             'warning' => $matchCount > 0 ? "Name '{$name}' is referenced in {$matchCount} place(s) (and possibly more) — deleting may break them." : null,
         );
+    }
+
+    /**
+     * Bulk resource operations. Select targets by explicit `ids` or by a parent/context/query
+     * filter, then apply one operation to all of them. Operations: publish, unpublish,
+     * set_template (needs `template`), move (needs `parent_to` and/or `context_to`), delete.
+     * `dry_run` previews the change per resource without applying. Each change is routed through
+     * the core resource processors (correct URI regeneration / events) via update/delete_element.
+     */
+    private function bulkResources($data) {
+        $op = isset($data['operation']) ? (string) $data['operation'] : '';
+        $ops = array('publish', 'unpublish', 'set_template', 'move', 'delete');
+        if (!in_array($op, $ops, true)) {
+            throw new ModxMCPClientException('bulk_resources: operation must be one of: ' . implode(', ', $ops) . '.');
+        }
+        $limit = isset($data['limit']) ? max(1, (int) $data['limit']) : 200;
+
+        $ids = array();
+        if (isset($data['ids']) && is_array($data['ids'])) {
+            foreach ($data['ids'] as $i) { $i = (int) $i; if ($i > 0) { $ids[] = $i; } }
+        } elseif (isset($data['parent']) || !empty($data['context']) || !empty($data['query'])) {
+            $lr = $this->listResources(array(
+                'parent'  => isset($data['parent']) ? $data['parent'] : '',
+                'context' => isset($data['context']) ? $data['context'] : '',
+                'query'   => isset($data['query']) ? $data['query'] : '',
+                'limit'   => $limit,
+            ));
+            foreach ($lr['results'] as $r) { $ids[] = (int) $r['id']; }
+        }
+        $ids = array_values(array_unique($ids));
+        if (!$ids) { throw new ModxMCPClientException('bulk_resources: no targets — pass "ids" or a parent/context/query filter.'); }
+        if (count($ids) > $limit) { $ids = array_slice($ids, 0, $limit); }
+
+        if ($op === 'set_template' && empty($data['template'])) { throw new ModxMCPClientException('bulk_resources: set_template requires "template".'); }
+        if ($op === 'move' && !isset($data['parent_to']) && empty($data['context_to'])) { throw new ModxMCPClientException('bulk_resources: move requires "parent_to" and/or "context_to".'); }
+
+        $dry = !empty($data['dry_run']);
+        $results = array();
+        foreach ($ids as $id) {
+            $r = $this->modx->getObject('modResource', $id);
+            if (!$r) { $results[] = array('id' => $id, 'status' => 'not_found'); continue; }
+            $row = array('id' => $id, 'pagetitle' => $r->get('pagetitle'));
+
+            if ($dry) {
+                if ($op === 'publish')      { $row['change'] = 'published: ' . (int) $r->get('published') . ' -> 1'; }
+                elseif ($op === 'unpublish'){ $row['change'] = 'published: ' . (int) $r->get('published') . ' -> 0'; }
+                elseif ($op === 'set_template') { $row['change'] = 'template: ' . (int) $r->get('template') . ' -> ' . (int) $data['template']; }
+                elseif ($op === 'move')     { $row['change'] = 'parent: ' . (int) $r->get('parent') . (isset($data['parent_to']) ? ' -> ' . (int) $data['parent_to'] : '') . (!empty($data['context_to']) ? '; context -> ' . $data['context_to'] : ''); }
+                elseif ($op === 'delete')   { $row['change'] = 'DELETE'; $row['child_resources'] = (int) $this->modx->getCount('modResource', array('parent' => $id)); }
+                $results[] = $row;
+                continue;
+            }
+
+            try {
+                if ($op === 'delete') {
+                    $this->processRequest('delete_element', 'resource', array('id' => $id));
+                    $row['status'] = 'deleted';
+                } else {
+                    $upd = array('id' => $id);
+                    if ($op === 'publish')          { $upd['published'] = 1; }
+                    elseif ($op === 'unpublish')    { $upd['published'] = 0; }
+                    elseif ($op === 'set_template') { $upd['template'] = (int) $data['template']; }
+                    elseif ($op === 'move') {
+                        if (isset($data['parent_to']))   { $upd['parent'] = (int) $data['parent_to']; }
+                        if (!empty($data['context_to'])) { $upd['context_key'] = (string) $data['context_to']; }
+                    }
+                    $this->processRequest('update_element', 'resource', $upd);
+                    $row['status'] = 'ok';
+                }
+            } catch (Exception $e) {
+                $row['status'] = 'error';
+                $row['error'] = $e->getMessage();
+            }
+            $results[] = $row;
+        }
+
+        if (!$dry) { $this->modx->getCacheManager()->refresh(); }
+        $this->logAudit('bulk_resources', 'resource', array('operation' => $op, 'count' => count($ids), 'dry_run' => $dry));
+        return array('operation' => $op, 'dry_run' => $dry, 'count' => count($results), 'results' => $results);
     }
 
     private function shouldAutoStatic($type) {

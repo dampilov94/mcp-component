@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.11 (2026-06-22)
+
+- `bulk_resources` — apply one operation to many resources at once: publish, unpublish,
+  set_template, move (parent/context) or delete. Select targets by explicit `ids` or by a
+  parent/context/query filter. `dry_run` previews the per-resource change (and child counts for
+  delete) without applying. Changes route through the core resource processors (correct URI
+  regeneration / events); delete is a soft delete (MODX trash, recoverable).
+
 ## 1.8.10 (2026-06-22)
 
 - `delete_element` gains `dry_run`: previews what would be deleted plus where it is still

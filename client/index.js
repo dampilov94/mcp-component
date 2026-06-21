@@ -969,6 +969,27 @@ const toolDefinitions = [
     },
   },
   {
+    name: "modx_bulk_resources",
+    description:
+      "Apply ONE operation to many resources at once: publish, unpublish, set_template (needs `template`), move (needs `parent_to` and/or `context_to`), or delete. Select targets by explicit `ids` OR by a parent/context/query filter. ALWAYS run dry_run:true FIRST — it reports the change per resource (and child-resource counts for delete) without applying. Changes go through the core resource processors (correct URI/events). Note: delete is a soft delete (moves resources to the MODX trash, recoverable), matching the manager.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: { type: "string", enum: ["publish", "unpublish", "set_template", "move", "delete"] },
+        ids: { type: "array", items: { type: "number" }, description: "Explicit resource ids (preferred)." },
+        parent: { type: "number", description: "Filter: select children of this parent id." },
+        context: { type: "string", description: "Filter: context key." },
+        query: { type: "string", description: "Filter: pagetitle/alias/uri substring." },
+        template: { type: "number", description: "For set_template: the new template id." },
+        parent_to: { type: "number", description: "For move: the new parent id." },
+        context_to: { type: "string", description: "For move: the new context key." },
+        dry_run: { type: "boolean", description: "Preview the change per resource without applying. Do this first." },
+        limit: { type: "number", description: "Max resources to touch (default 200)." },
+      },
+      required: ["operation"],
+    },
+  },
+  {
     name: "modx_list_tv_input_types",
     description:
       "List the TV input (widget) types available on this site: core types plus any custom ones registered by other components (e.g. MIGX adds 'migx'/'migxdb'). Use the returned keys as 'field_type' when creating a TV.",
