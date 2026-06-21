@@ -893,7 +893,7 @@ const toolDefinitions = [
   {
     name: "modx_search_code",
     description:
-      "Full-text search across element and resource CONTENT (and names). Finds the chunk/snippet/template/plugin/TV/resource that contains a string, including where an element is referenced or mentioned. Matches static elements by reading their static file. Use this to navigate the codebase (e.g. query 'header' finds the header chunk and everything that uses or mentions it).",
+      "Full-text search across element and resource CONTENT (and names). Finds the chunk/snippet/template/plugin/TV/resource that contains a string, including where an element is referenced or mentioned. Matches static elements by reading their static file. Use this to navigate the codebase (e.g. query 'header' finds the header chunk and everything that uses or mentions it). Each content hit returns `id`, `line` (1-based line of the match) and `line_text` (the exact line, verbatim) — so for a one-line change you can go straight to modx_edit_element_lines using `line` as start_line/end_line and `line_text` as `expect`, with no separate read. For multi-line context, open a window with modx_view_element around `line`.",
     inputSchema: {
       type: "object",
       properties: {

@@ -667,11 +667,21 @@ class modxMCP {
         $pos = strpos($hayContent, $needle);
         $field = ($pos !== false) ? $map['content'] : $nameField;
         $snippet = '';
+        $line = null;
+        $lineText = null;
         if ($pos !== false) {
             $start = max(0, $pos - 60);
             $snippet = substr($content, $start, strlen($query) + 120);
             $snippet = trim(preg_replace('/\s+/', ' ', $snippet));
             if ($start > 0) { $snippet = '…' . $snippet; }
+            // 1-based line of the match + the exact line text (verbatim, EOL-normalised the same
+            // way view_element/edit_element_lines do) so it can be reused directly as `expect`.
+            $lineStart = strrpos(substr($content, 0, $pos), "\n");
+            $lineStart = ($lineStart === false) ? 0 : $lineStart + 1;
+            $lineEnd = strpos($content, "\n", $pos);
+            if ($lineEnd === false) { $lineEnd = strlen($content); }
+            $line = substr_count($content, "\n", 0, $lineStart) + 1;
+            $lineText = rtrim(substr($content, $lineStart, $lineEnd - $lineStart), "\r");
         }
         return array(
             'type' => $type,
@@ -679,6 +689,8 @@ class modxMCP {
             'name' => $name,
             'matched_field' => $field,
             'static' => $type !== 'resource' ? (bool) $object->get('static') : false,
+            'line' => $line,
+            'line_text' => $lineText,
             'snippet' => $snippet,
         );
     }

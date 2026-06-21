@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.8 (2026-06-21)
+
+- `search_code` content hits now include `line` (1-based line of the match) and `line_text`
+  (the exact matched line, verbatim, EOL-normalised like view_element). For a one-line change
+  this closes the search→edit loop with no separate read: feed `line` as start_line/end_line
+  and `line_text` as `expect` straight into `edit_element_lines`. Name-only matches return
+  `line: null`. Tool description updated to steer models to this flow.
+
 ## 1.8.7 (2026-06-21)
 
 - Tool descriptions now steer any model toward efficient editing (client-side only; server

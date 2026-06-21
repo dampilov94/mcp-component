@@ -16,6 +16,10 @@ tell the user to enable it there. `modx_list_actions` shows all groups incl. dis
 `modx_list_tv_input_types`, and `modx_help` topics. To understand an installed add-on, read its
 source with `modx_get_component_files` + `modx_read_component_file` (see the `study_component` topic).
 
+**Find → edit shortcut.** `modx_search_code` returns each content hit with `line` and `line_text`
+(the exact matched line). For a one-line change, pass `line` as start_line/end_line and `line_text`
+as `expect` to `modx_edit_element_lines` directly — no need to read the whole element first.
+
 **Editing code efficiently.** `modx_update_element` replaces the WHOLE content. To change a few
 lines of a large chunk/snippet/template/plugin, prefer line editing: `modx_view_element` shows
 numbered lines (windowed via `start_line`/`end_line`), then `modx_edit_element_lines` applies edits
