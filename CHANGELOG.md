@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.8.13 (2026-06-22)
+
+- Media-source file management (was read-only): `create_media_file`, `update_media_file`,
+  `delete_media_file`, `rename_media_file`, `create_media_folder`, `delete_media_folder` —
+  via the modMediaSource API, so an AI can actually create/edit/upload site files & folders.
+- Trash: `undelete_resource` (restore from trash) and `empty_recycle_bin` (purge) — completes
+  the soft-delete lifecycle.
+- Duplicate: `duplicate_resource` (optionally with children) and `duplicate_element`
+  (chunk/snippet/template/plugin/tv). Reorder: `reorder_resources` (set menuindex/parent).
+- Diagnostics: `read_error_log` (tail MODX error log), `refresh_uris`, `remove_locks`,
+  `system_info` (MODX/PHP/db versions + paths).
+
 ## 1.8.12 (2026-06-22)
 
 - Health/version endpoint: a GET to the API endpoint now returns a small unauthenticated

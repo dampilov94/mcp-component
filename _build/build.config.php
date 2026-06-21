@@ -5,5 +5,5 @@
  */
 define('PKG_NAME', 'modxMCP');
 define('PKG_NAMESPACE', 'modxmcp');
-define('PKG_VERSION', '1.8.12');
+define('PKG_VERSION', '1.8.13');
 define('PKG_RELEASE', 'pl');

@@ -4,7 +4,7 @@ if (!class_exists("ModxMCPClientException")) {
     class ModxMCPClientException extends Exception {}
 }
 class modxMCP {
-    const VERSION = '1.8.12';
+    const VERSION = '1.8.13';
     public $modx;
     public $config =[];
     private $actionSpecsCache = null;
@@ -248,6 +248,11 @@ class modxMCP {
                 'view_element'        => 'viewElementLines',
                 'edit_element_lines'  => 'editElementLines',
                 'bulk_resources'      => 'bulkResources',
+                'duplicate_element'   => 'duplicateElement',
+                'duplicate_resource'  => 'duplicateResource',
+                'undelete_resource'   => 'undeleteResource',
+                'empty_recycle_bin'   => 'emptyRecycleBin',
+                'reorder_resources'   => 'reorderResources',
             ),
             'resource_tvs' => array(
                 'get_resource_tvs'    => 'getResourceTvs',
@@ -271,6 +276,12 @@ class modxMCP {
                 'create_media_source'     => array('m' => 'saveMediaSource', 'call' => 'create'),
                 'update_media_source'     => array('m' => 'saveMediaSource', 'call' => 'update'),
                 'delete_media_source'     => 'deleteMediaSource',
+                'create_media_file'   => 'createMediaFile',
+                'update_media_file'   => 'updateMediaFile',
+                'delete_media_file'   => 'deleteMediaFile',
+                'rename_media_file'   => 'renameMediaFile',
+                'create_media_folder' => 'createMediaFolder',
+                'delete_media_folder' => 'deleteMediaFolder',
             ),
             'components' => array(
                 'list_installed_components' => array('m' => 'listInstalledComponents', 'call' => 'bare'),
@@ -435,6 +446,10 @@ class modxMCP {
                 'read_audit_log'   => 'readAuditLog',
                 'regenerate_token' => array('m' => 'regenerateToken', 'call' => 'bare'),
                 'describe_object'  => 'describeObject',
+                'read_error_log'   => 'readErrorLog',
+                'refresh_uris'     => 'refreshUris',
+                'remove_locks'     => 'removeLocks',
+                'system_info'      => 'systemInfo',
             ),
         );
     }
@@ -908,6 +923,217 @@ class modxMCP {
         if (!$dry) { $this->modx->getCacheManager()->refresh(); }
         $this->logAudit('bulk_resources', 'resource', array('operation' => $op, 'count' => count($ids), 'dry_run' => $dry));
         return array('operation' => $op, 'dry_run' => $dry, 'count' => count($results), 'results' => $results);
+    }
+
+    // --- Media-source file & folder operations (modMediaSource API) ---
+
+    private function initMediaSource($data) {
+        $sel = array();
+        if (isset($data['source']) && $data['source'] !== '') {
+            if (is_numeric($data['source'])) { $sel['id'] = (int) $data['source']; }
+            else { $sel['name'] = (string) $data['source']; }
+        } elseif (!empty($data['id'])) {
+            $sel['id'] = (int) $data['id'];
+        } elseif (!empty($data['name'])) {
+            $sel['name'] = (string) $data['name'];
+        }
+        $source = $this->resolveMediaSource($sel);
+        if (!$source) { throw new ModxMCPClientException('Media source not found (provide "source" = id or name).'); }
+        $source->initialize();
+        return $source;
+    }
+
+    private function mediaSourceError($source, $fallback) {
+        $errs = method_exists($source, 'getErrors') ? $source->getErrors() : array();
+        if (is_array($errs) && $errs) {
+            $parts = array();
+            foreach ($errs as $k => $v) { $parts[] = is_string($k) ? "{$k}: {$v}" : (string) $v; }
+            return implode('; ', $parts);
+        }
+        return $fallback;
+    }
+
+    private function createMediaFile($data) {
+        $source = $this->initMediaSource($data);
+        // createObject concatenates container + name, so the container must end with "/".
+        $dir = isset($data['path']) ? trim((string) $data['path'], '/') : '';
+        $dir = ($dir === '') ? '/' : $dir . '/';
+        $name = isset($data['name']) ? (string) $data['name'] : '';
+        if ($name === '') { throw new ModxMCPClientException('create_media_file: "name" is required.'); }
+        $res = $source->createObject($dir, $name, isset($data['content']) ? (string) $data['content'] : '');
+        if ($res === false) { throw new ModxMCPClientException('create_media_file failed: ' . $this->mediaSourceError($source, 'unknown error')); }
+        if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
+        $this->logAudit('create_media_file', 'source', array('source' => (int) $source->get('id'), 'path' => $dir, 'name' => $name));
+        return array('created' => true, 'path' => rtrim($dir, '/') . '/' . $name);
+    }
+
+    private function updateMediaFile($data) {
+        $source = $this->initMediaSource($data);
+        $path = isset($data['path']) ? (string) $data['path'] : '';
+        if ($path === '') { throw new ModxMCPClientException('update_media_file: "path" (file) is required.'); }
+        if (!array_key_exists('content', $data)) { throw new ModxMCPClientException('update_media_file: "content" is required.'); }
+        $res = $source->updateObject($path, (string) $data['content']);
+        if ($res === false) { throw new ModxMCPClientException('update_media_file failed: ' . $this->mediaSourceError($source, 'unknown error')); }
+        if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
+        $this->logAudit('update_media_file', 'source', array('source' => (int) $source->get('id'), 'path' => $path));
+        return array('updated' => true, 'path' => $path);
+    }
+
+    private function deleteMediaFile($data) {
+        $source = $this->initMediaSource($data);
+        $path = isset($data['path']) ? (string) $data['path'] : '';
+        if ($path === '') { throw new ModxMCPClientException('delete_media_file: "path" is required.'); }
+        $res = $source->removeObject($path);
+        if ($res === false) { throw new ModxMCPClientException('delete_media_file failed: ' . $this->mediaSourceError($source, 'unknown error')); }
+        if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
+        $this->logAudit('delete_media_file', 'source', array('source' => (int) $source->get('id'), 'path' => $path));
+        return array('deleted' => true, 'path' => $path);
+    }
+
+    private function renameMediaFile($data) {
+        $source = $this->initMediaSource($data);
+        $path = isset($data['path']) ? (string) $data['path'] : '';
+        $newName = isset($data['new_name']) ? (string) $data['new_name'] : '';
+        if ($path === '' || $newName === '') { throw new ModxMCPClientException('rename_media_file: "path" and "new_name" are required.'); }
+        $res = $source->renameObject($path, $newName);
+        if ($res === false) { throw new ModxMCPClientException('rename_media_file failed: ' . $this->mediaSourceError($source, 'unknown error')); }
+        if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
+        $this->logAudit('rename_media_file', 'source', array('source' => (int) $source->get('id'), 'path' => $path, 'new_name' => $newName));
+        return array('renamed' => true, 'path' => $path, 'new_name' => $newName);
+    }
+
+    private function createMediaFolder($data) {
+        $source = $this->initMediaSource($data);
+        $parent = isset($data['parent']) ? (string) $data['parent'] : '/';
+        $name = isset($data['name']) ? (string) $data['name'] : '';
+        if ($name === '') { throw new ModxMCPClientException('create_media_folder: "name" is required.'); }
+        $res = $source->createContainer($name, $parent);
+        if ($res === false) { throw new ModxMCPClientException('create_media_folder failed: ' . $this->mediaSourceError($source, 'unknown error')); }
+        if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
+        $this->logAudit('create_media_folder', 'source', array('source' => (int) $source->get('id'), 'parent' => $parent, 'name' => $name));
+        return array('created' => true, 'parent' => $parent, 'name' => $name);
+    }
+
+    private function deleteMediaFolder($data) {
+        $source = $this->initMediaSource($data);
+        $rel = isset($data['path']) ? trim((string) $data['path'], '/') : '';
+        if ($rel === '') { throw new ModxMCPClientException('delete_media_folder: "path" is required (refusing to remove the source root).'); }
+        // MODX 2.x removeContainer() takes an ABSOLUTE path (unlike createContainer/removeObject).
+        $path = rtrim($this->getMediaSourceRootPath($source), '/\\') . '/' . $rel;
+        $res = $source->removeContainer($path);
+        if ($res === false) { throw new ModxMCPClientException('delete_media_folder failed: ' . $this->mediaSourceError($source, 'unknown error')); }
+        if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
+        $this->logAudit('delete_media_folder', 'source', array('source' => (int) $source->get('id'), 'path' => $path));
+        return array('deleted' => true, 'path' => $path);
+    }
+
+    // --- Trash / duplicate / reorder (core resource & element processors) ---
+
+    private function undeleteResource($data) {
+        if (empty($data['id'])) { throw new ModxMCPClientException('undelete_resource: "id" is required.'); }
+        $resp = $this->modx->runProcessor('resource/undelete', array('id' => (int) $data['id']));
+        if (!$resp || $resp->isError()) { throw new ModxMCPClientException($resp ? $this->formatProcessorErrors($resp) : 'undelete_resource: no response.'); }
+        if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
+        $this->logAudit('undelete_resource', 'resource', array('id' => (int) $data['id']));
+        return array('undeleted' => true, 'id' => (int) $data['id']);
+    }
+
+    private function emptyRecycleBin($data) {
+        $resp = $this->modx->runProcessor('resource/emptyrecyclebin', array());
+        if (!$resp || $resp->isError()) { throw new ModxMCPClientException($resp ? $this->formatProcessorErrors($resp) : 'empty_recycle_bin: no response.'); }
+        if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
+        $this->logAudit('empty_recycle_bin', 'resource', array());
+        return $this->normalizeProcessorResponse($resp);
+    }
+
+    private function duplicateResource($data) {
+        if (empty($data['id'])) { throw new ModxMCPClientException('duplicate_resource: "id" is required.'); }
+        $props = array('id' => (int) $data['id']);
+        if (!empty($data['name'])) { $props['name'] = (string) $data['name']; }
+        if (isset($data['duplicate_children'])) { $props['duplicate_children'] = (bool) $data['duplicate_children']; }
+        if (!empty($data['published_mode'])) { $props['published_mode'] = (string) $data['published_mode']; }
+        $resp = $this->modx->runProcessor('resource/duplicate', $props);
+        if (!$resp || $resp->isError()) { throw new ModxMCPClientException($resp ? $this->formatProcessorErrors($resp) : 'duplicate_resource: no response.'); }
+        if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
+        $this->logAudit('duplicate_resource', 'resource', array('id' => (int) $data['id']));
+        return $this->normalizeProcessorResponse($resp);
+    }
+
+    private function duplicateElement($data) {
+        $type = isset($data['type']) ? (string) $data['type'] : '';
+        if (!in_array($type, array('chunk', 'snippet', 'template', 'plugin', 'tv'), true)) {
+            throw new ModxMCPClientException('duplicate_element: type must be one of chunk, snippet, template, plugin, tv.');
+        }
+        if (empty($data['id'])) { throw new ModxMCPClientException('duplicate_element: "id" is required.'); }
+        $props = array('id' => (int) $data['id']);
+        if (!empty($data['name'])) { $props['name'] = (string) $data['name']; }
+        $resp = $this->modx->runProcessor('element/' . $type . '/duplicate', $props);
+        if (!$resp || $resp->isError()) { throw new ModxMCPClientException($resp ? $this->formatProcessorErrors($resp) : 'duplicate_element: no response.'); }
+        if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
+        $this->logAudit('duplicate_element', $type, array('id' => (int) $data['id']));
+        return $this->normalizeProcessorResponse($resp);
+    }
+
+    private function reorderResources($data) {
+        $items = (isset($data['items']) && is_array($data['items'])) ? $data['items'] : null;
+        if (!$items) { throw new ModxMCPClientException('reorder_resources: "items" (list of {id, menuindex, parent?}) is required.'); }
+        $results = array();
+        foreach ($items as $it) {
+            if (empty($it['id']) || !isset($it['menuindex'])) {
+                $results[] = array('id' => isset($it['id']) ? (int) $it['id'] : null, 'status' => 'skipped (need id + menuindex)');
+                continue;
+            }
+            $upd = array('id' => (int) $it['id'], 'menuindex' => (int) $it['menuindex']);
+            if (isset($it['parent'])) { $upd['parent'] = (int) $it['parent']; }
+            try {
+                $this->processRequest('update_element', 'resource', $upd);
+                $results[] = array('id' => (int) $it['id'], 'status' => 'ok', 'menuindex' => (int) $it['menuindex']);
+            } catch (Exception $e) {
+                $results[] = array('id' => (int) $it['id'], 'status' => 'error', 'error' => $e->getMessage());
+            }
+        }
+        if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
+        $this->logAudit('reorder_resources', 'resource', array('count' => count($results)));
+        return array('count' => count($results), 'results' => $results);
+    }
+
+    // --- Diagnostics / maintenance ---
+
+    private function readErrorLog($data) {
+        $path = rtrim($this->modx->getOption('core_path'), '/') . '/cache/logs/error.log';
+        if (!file_exists($path)) { return array('total' => 0, 'lines' => array(), 'path' => $path); }
+        $lines = file($path, FILE_IGNORE_NEW_LINES);
+        if ($lines === false) { $lines = array(); }
+        $limit = isset($data['limit']) ? max(1, (int) $data['limit']) : 100;
+        $tail = array_slice($lines, -$limit);
+        return array('total' => count($tail), 'lines' => $tail);
+    }
+
+    private function refreshUris($data) {
+        $resp = $this->modx->runProcessor('system/refreshuris', array());
+        if (!$resp || $resp->isError()) { throw new ModxMCPClientException($resp ? $this->formatProcessorErrors($resp) : 'refresh_uris: no response.'); }
+        if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
+        $this->logAudit('refresh_uris', 'system', array());
+        return array('refreshed' => true);
+    }
+
+    private function removeLocks($data) {
+        $resp = $this->modx->runProcessor('system/remove_locks', array());
+        if (!$resp || $resp->isError()) { throw new ModxMCPClientException($resp ? $this->formatProcessorErrors($resp) : 'remove_locks: no response.'); }
+        $this->logAudit('remove_locks', 'system', array());
+        return $this->normalizeProcessorResponse($resp);
+    }
+
+    private function systemInfo($data) {
+        $v = method_exists($this->modx, 'getVersionData') ? $this->modx->getVersionData() : array();
+        return array(
+            'modx_version'    => isset($v['full_version']) ? $v['full_version'] : (isset($v['version']) ? $v['version'] : null),
+            'modxmcp_version' => self::VERSION,
+            'php_version'     => PHP_VERSION,
+            'dbtype'          => $this->modx->getOption('dbtype'),
+            'base_path'       => $this->modx->getOption('base_path'),
+            'core_path'       => $this->modx->getOption('core_path'),
+        );
     }
 
     private function shouldAutoStatic($type) {

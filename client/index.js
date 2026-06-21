@@ -990,6 +990,81 @@ const toolDefinitions = [
     },
   },
   {
+    name: "modx_create_media_file",
+    description: "Create a file inside a media source (writes content). `source` = source id or name, `path` = target directory (relative to the source base), `name` = filename, `content` = file body.",
+    inputSchema: { type: "object", properties: { source: { type: "string", description: "Media source id or name." }, path: { type: "string", description: "Directory within the source (default root)." }, name: { type: "string" }, content: { type: "string" } }, required: ["source", "name"] },
+  },
+  {
+    name: "modx_update_media_file",
+    description: "Overwrite a file's content inside a media source. `source` = id/name, `path` = file path within the source, `content` = new body.",
+    inputSchema: { type: "object", properties: { source: { type: "string" }, path: { type: "string" }, content: { type: "string" } }, required: ["source", "path", "content"] },
+  },
+  {
+    name: "modx_delete_media_file",
+    description: "Delete a file inside a media source. `source` = id/name, `path` = file path within the source.",
+    inputSchema: { type: "object", properties: { source: { type: "string" }, path: { type: "string" } }, required: ["source", "path"] },
+  },
+  {
+    name: "modx_rename_media_file",
+    description: "Rename a file inside a media source. `source` = id/name, `path` = current file path, `new_name` = new filename.",
+    inputSchema: { type: "object", properties: { source: { type: "string" }, path: { type: "string" }, new_name: { type: "string" } }, required: ["source", "path", "new_name"] },
+  },
+  {
+    name: "modx_create_media_folder",
+    description: "Create a folder inside a media source. `source` = id/name, `parent` = parent directory (default root), `name` = folder name.",
+    inputSchema: { type: "object", properties: { source: { type: "string" }, parent: { type: "string" }, name: { type: "string" } }, required: ["source", "name"] },
+  },
+  {
+    name: "modx_delete_media_folder",
+    description: "Delete a folder (and its contents) inside a media source. `source` = id/name, `path` = folder path within the source.",
+    inputSchema: { type: "object", properties: { source: { type: "string" }, path: { type: "string" } }, required: ["source", "path"] },
+  },
+  {
+    name: "modx_duplicate_resource",
+    description: "Duplicate a resource. `id` = source resource; optional `name` (new pagetitle), `duplicate_children` (bool), `published_mode` (preserve|publish|unpublish).",
+    inputSchema: { type: "object", properties: { id: { type: "number" }, name: { type: "string" }, duplicate_children: { type: "boolean" }, published_mode: { type: "string", enum: ["preserve", "publish", "unpublish"] } }, required: ["id"] },
+  },
+  {
+    name: "modx_duplicate_element",
+    description: "Duplicate an element (chunk/snippet/template/plugin/tv). `type` + `id`; optional `name` for the copy.",
+    inputSchema: { type: "object", properties: { type: { type: "string", enum: ["chunk", "snippet", "template", "plugin", "tv"] }, id: { type: "number" }, name: { type: "string" } }, required: ["type", "id"] },
+  },
+  {
+    name: "modx_undelete_resource",
+    description: "Restore a soft-deleted resource from the trash (un-deletes it). `id` = resource id.",
+    inputSchema: { type: "object", properties: { id: { type: "number" } }, required: ["id"] },
+  },
+  {
+    name: "modx_empty_recycle_bin",
+    description: "Permanently purge ALL trashed (soft-deleted) resources. Irreversible — there is no further undo.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "modx_reorder_resources",
+    description: "Reorder resources in the tree by setting menuindex (and optionally parent). `items` = [{id, menuindex, parent?}], applied per resource.",
+    inputSchema: { type: "object", properties: { items: { type: "array", items: { type: "object", properties: { id: { type: "number" }, menuindex: { type: "number" }, parent: { type: "number" } }, required: ["id", "menuindex"] } } }, required: ["items"] },
+  },
+  {
+    name: "modx_read_error_log",
+    description: "Read the tail of the MODX error log (core/cache/logs/error.log) for diagnostics. Optional `limit` (lines, default 100).",
+    inputSchema: { type: "object", properties: { limit: { type: "number" } } },
+  },
+  {
+    name: "modx_refresh_uris",
+    description: "Regenerate all resource URIs (run after bulk alias/structure changes that left stale URIs).",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "modx_remove_locks",
+    description: "Clear stale manager edit locks (when an element/resource is reported locked by a dead session).",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "modx_system_info",
+    description: "Environment/diagnostic info: MODX version, modxMCP version, PHP version, db type, key paths.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
     name: "modx_list_tv_input_types",
     description:
       "List the TV input (widget) types available on this site: core types plus any custom ones registered by other components (e.g. MIGX adds 'migx'/'migxdb'). Use the returned keys as 'field_type' when creating a TV.",
