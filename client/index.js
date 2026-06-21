@@ -271,13 +271,15 @@ const toolDefinitions = [
   },
   {
     name: "modx_delete_element",
-    description: "Удалить элемент MODX.",
+    description:
+      "Delete a MODX element. Run with dry_run:true FIRST — it returns what would be deleted plus where the element is still referenced (for resources: child-resource count), without deleting. Review that before the real delete.",
     inputSchema: {
       type: "object",
       properties: {
         type: { type: "string", enum: ELEMENT_TYPES },
         name: { type: "string" },
         id: { type: "number" },
+        dry_run: { type: "boolean", description: "Preview what would be deleted + its usages, without deleting." },
       },
       required: ["type"],
     },

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.8.10 (2026-06-22)
+
+- `delete_element` gains `dry_run`: previews what would be deleted plus where it is still
+  referenced (elements: content matches for its name, with the element's own self-match
+  filtered out; resources: child-resource count) — without deleting. The real delete is
+  unchanged. Tool description steers models to dry-run first.
+
 ## 1.8.9 (2026-06-21)
 
 - `replace_across` — site-wide search & replace across code elements (chunk/snippet/template/

@@ -200,7 +200,13 @@ class modxMCP {
                 
             case 'delete_element':
                 if (empty($data['id'])) throw new ModxMCPClientException("{$elementType} not found by name or ID is missing.");
-                
+
+                // Safety preview: dry_run reports what would be deleted + where it's still used,
+                // WITHOUT deleting. Run this before a real delete.
+                if (!empty($data['dry_run'])) {
+                    return $this->previewDelete($elementType, (int) $data['id']);
+                }
+
                 $processorAction = ($elementType === 'resource') ? 'delete' : 'remove';
                 $response = $this->modx->runProcessor($basePath . $processorAction, ['id' => $data['id']]);
                 if ($response->isError()) throw new ModxMCPClientException("Delete failed: " . $this->formatProcessorErrors($response));
@@ -779,6 +785,48 @@ class modxMCP {
         }
 
         return array('name' => $name, 'content_matches' => $usages);
+    }
+
+    /**
+     * Preview a delete without performing it: what the object is, and (for elements) where its
+     * name is still referenced; (for resources) how many child resources it has.
+     */
+    private function previewDelete($elementType, $id) {
+        if ($elementType === 'resource') {
+            $r = $this->modx->getObject('modResource', $id);
+            if (!$r) { throw new ModxMCPClientException("resource {$id} not found."); }
+            $children = (int) $this->modx->getCount('modResource', array('parent' => $id));
+            return array(
+                'dry_run' => true,
+                'would_delete' => array('type' => 'resource', 'id' => $id, 'pagetitle' => $r->get('pagetitle'), 'uri' => $r->get('uri')),
+                'child_resources' => $children,
+                'warning' => $children > 0 ? "Has {$children} child resource(s) that would be affected." : null,
+            );
+        }
+        $classMap = array(
+            'chunk' => array('modChunk', 'name'), 'snippet' => array('modSnippet', 'name'),
+            'template' => array('modTemplate', 'templatename'), 'tv' => array('modTemplateVar', 'name'),
+            'category' => array('modCategory', 'category'), 'plugin' => array('modPlugin', 'name'),
+        );
+        if (!isset($classMap[$elementType])) { throw new ModxMCPClientException("Cannot preview delete for type {$elementType}."); }
+        list($class, $nameField) = $classMap[$elementType];
+        $obj = $this->modx->getObject($class, $id);
+        if (!$obj) { throw new ModxMCPClientException("{$elementType} {$id} not found."); }
+        $name = (string) $obj->get($nameField);
+        $usages = ($elementType === 'category') ? array('name' => $name) : $this->findUsages(array('name' => $name, 'limit' => 100));
+        // Drop the element's own name-field self-match — that's not a usage.
+        if (isset($usages['content_matches'])) {
+            $usages['content_matches'] = array_values(array_filter($usages['content_matches'], function ($h) use ($id, $elementType) {
+                return !((int) $h['id'] === (int) $id && $h['type'] === $elementType);
+            }));
+        }
+        $matchCount = isset($usages['content_matches']) ? count($usages['content_matches']) : 0;
+        return array(
+            'dry_run' => true,
+            'would_delete' => array('type' => $elementType, 'id' => $id, 'name' => $name),
+            'usages' => $usages,
+            'warning' => $matchCount > 0 ? "Name '{$name}' is referenced in {$matchCount} place(s) (and possibly more) — deleting may break them." : null,
+        );
     }
 
     private function shouldAutoStatic($type) {
