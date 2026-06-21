@@ -281,6 +281,50 @@ const toolDefinitions = [
     },
   },
   {
+    name: "modx_view_element",
+    description:
+      "View a chunk/snippet/template/plugin as NUMBERED lines (like `cat -n`), optionally windowed by start_line/end_line. Use this to find the exact line numbers to edit with modx_edit_element_lines — cheaper than pulling the whole element. Returns total_lines and the numbered window.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        type: { type: "string", enum: ["chunk", "snippet", "template", "plugin"] },
+        id: { type: "number" },
+        name: { type: "string" },
+        start_line: { type: "number", description: "1-based first line of the window (default 1)." },
+        end_line: { type: "number", description: "1-based last line of the window (default = end of file)." },
+      },
+      required: ["type"],
+    },
+  },
+  {
+    name: "modx_edit_element_lines",
+    description:
+      "Edit a chunk/snippet/template/plugin BY LINE, sending only the changed lines (no need to resend the whole element). Each edit replaces the inclusive range [start_line..end_line] with `replacement`. Conventions: delete = replacement \"\"; insert before a line = set end_line to start_line-1. Strongly recommended: pass `expect` (the current text of those lines) as a safety anchor — it is verified, and relocated to its unique match if the line numbers drifted; any mismatch aborts the WHOLE call (atomic, nothing is written). Multiple edits are applied together (bottom-up). Read first with modx_view_element to get line numbers.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        type: { type: "string", enum: ["chunk", "snippet", "template", "plugin"] },
+        id: { type: "number" },
+        name: { type: "string" },
+        edits: {
+          type: "array",
+          description: "List of line edits applied atomically.",
+          items: {
+            type: "object",
+            properties: {
+              start_line: { type: "number", description: "1-based first line of the range." },
+              end_line: { type: "number", description: "1-based last line (inclusive). Omit = same as start_line. For insert, set to start_line-1." },
+              replacement: { type: "string", description: "New text for the range (multi-line ok). \"\" deletes the lines." },
+              expect: { type: "string", description: "Current text of the targeted lines — safety anchor; mismatch aborts the whole call." },
+            },
+            required: ["start_line"],
+          },
+        },
+      },
+      required: ["type", "edits"],
+    },
+  },
+  {
     name: "modx_list_system_settings",
     description: "Получить список системных настроек MODX.",
     inputSchema: {

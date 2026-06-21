@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.8.6 (2026-06-21)
+
+- Token-efficient partial editing of code elements (chunk/snippet/template/plugin) — no more
+  resending the whole element to change a few lines:
+  - `view_element` — returns the element as numbered lines (like `cat -n`), optionally windowed
+    by `start_line`/`end_line`, plus `total_lines`.
+  - `edit_element_lines` — apply line edits, sending only the changed lines. Each edit replaces
+    the inclusive range `[start_line..end_line]` with `replacement` (multi-line ok; `""` deletes;
+    insert = empty range `end_line = start_line - 1`). An optional `expect` (current text of the
+    lines) is a safety anchor: verified at the stated position and relocated to its unique match
+    if the line numbers drifted — any mismatch aborts the whole call (atomic, nothing written).
+    Reads/writes the static file when the element is static, else the DB field; preserves EOL.
+
 ## 1.8.5 (2026-06-21)
 
 - Access hardening at the endpoint (both off by default, so existing setups are unaffected):

@@ -238,6 +238,8 @@ class modxMCP {
                 'update_element'  => array('element' => true),
                 'delete_element'  => array('element' => true),
                 'make_static'     => 'makeStatic',
+                'view_element'        => 'viewElementLines',
+                'edit_element_lines'  => 'editElementLines',
             ),
             'resource_tvs' => array(
                 'get_resource_tvs'    => 'getResourceTvs',
@@ -832,6 +834,225 @@ class modxMCP {
         $this->modx->getCacheManager()->refresh();
         $this->logAudit('make_static', $res['type'], array('id' => $res['id']));
         return $res;
+    }
+
+    // --- Line-based viewing / editing (token-efficient partial edits) ---
+
+    private function lineEditMap() {
+        return array(
+            'chunk'    => array('class' => 'modChunk',    'field' => 'snippet'),
+            'snippet'  => array('class' => 'modSnippet',  'field' => 'snippet'),
+            'template' => array('class' => 'modTemplate', 'field' => 'content'),
+            'plugin'   => array('class' => 'modPlugin',   'field' => 'plugincode'),
+        );
+    }
+
+    /** Resolve a chunk/snippet/template/plugin by type + id|name. Returns [el, type, id, mapEntry]. */
+    private function resolveLineEditElement($data) {
+        $type = isset($data['type']) ? (string) $data['type'] : '';
+        $map = $this->lineEditMap();
+        if (!isset($map[$type])) {
+            throw new ModxMCPClientException('type must be one of: chunk, snippet, template, plugin.');
+        }
+        $id = !empty($data['id']) ? (int) $data['id'] : (int) $this->resolveIdByName($type, isset($data['name']) ? $data['name'] : '');
+        if ($id <= 0) {
+            throw new ModxMCPClientException('Element not found (provide id or name).');
+        }
+        $el = $this->modx->getObject($map[$type]['class'], $id);
+        if (!$el) {
+            throw new ModxMCPClientException("{$type} {$id} not found.");
+        }
+        return array($el, $type, $id, $map[$type]);
+    }
+
+    /** Read the element's EFFECTIVE content: from the static file if static, else the DB field.
+     *  Returns [content, isStatic, staticAbsPath|null]. */
+    private function readEffectiveContent($el, $m) {
+        $isStatic = (bool) $el->get('static');
+        $staticAbs = null;
+        if ($isStatic) {
+            $rel = (string) $el->get('static_file');
+            if ($rel !== '') {
+                $rel = $this->resolveModxPathPlaceholders($rel);
+                $staticAbs = $this->isAbsolutePath($rel)
+                    ? $rel
+                    : rtrim($this->modx->getOption('base_path'), '/\\') . '/' . ltrim($rel, '/\\');
+            }
+            if ($staticAbs !== null && is_file($staticAbs)) {
+                return array((string) file_get_contents($staticAbs), $isStatic, $staticAbs);
+            }
+        }
+        return array((string) $el->get($m['field']), $isStatic, $staticAbs);
+    }
+
+    /** Write content back where it came from: static file first (source of truth), then DB field. */
+    private function writeEffectiveContent($el, $m, $isStatic, $staticAbs, $content) {
+        if ($isStatic && $staticAbs !== null) {
+            $dir = dirname($staticAbs);
+            if (!is_dir($dir) && !@mkdir($dir, 0755, true)) {
+                throw new ModxMCPClientException("cannot create directory {$dir}");
+            }
+            if (@file_put_contents($staticAbs, $content) === false) {
+                throw new ModxMCPClientException("cannot write static file {$staticAbs}");
+            }
+        }
+        $el->set($m['field'], $content);
+        if (!$el->save()) {
+            throw new ModxMCPClientException('element save failed.');
+        }
+    }
+
+    /** Split content into lines, reporting the dominant EOL so it can be rejoined unchanged. */
+    private function splitLines($content, &$eol) {
+        $eol = (strpos($content, "\r\n") !== false) ? "\r\n" : "\n";
+        return explode("\n", str_replace("\r\n", "\n", $content));
+    }
+
+    /**
+     * Return an element's content as numbered lines (like `cat -n`), optionally windowed by
+     * start_line/end_line — so the model can target edits without pulling the whole file.
+     * data: type, id|name, start_line?, end_line?.
+     */
+    private function viewElementLines($data) {
+        list($el, $type, $id, $m) = $this->resolveLineEditElement($data);
+        list($content, $isStatic, $staticAbs) = $this->readEffectiveContent($el, $m);
+        $eol = "\n";
+        $lines = $this->splitLines($content, $eol);
+        $total = count($lines);
+        $start = isset($data['start_line']) ? max(1, (int) $data['start_line']) : 1;
+        $end = isset($data['end_line']) ? (int) $data['end_line'] : $total;
+        if ($end > $total) { $end = $total; }
+        if ($end < $start) { $end = $start; }
+        $buf = array();
+        for ($i = $start; $i <= $end && $i <= $total; $i++) {
+            $buf[] = $i . "\t" . $lines[$i - 1];
+        }
+        return array(
+            'type' => $type,
+            'id' => $id,
+            'name' => $el->get($type === 'template' ? 'templatename' : 'name'),
+            'static' => $isStatic,
+            'total_lines' => $total,
+            'start_line' => $start,
+            'end_line' => min($end, $total),
+            'numbered' => implode("\n", $buf),
+        );
+    }
+
+    /**
+     * Resolve one edit's target range. With `expect` given, it is the anchor: verified at the
+     * stated position, else relocated to its unique match anywhere in the file (so a small line
+     * drift doesn't corrupt). Without `expect`, the literal range is used (must be in bounds).
+     */
+    private function locateEditRange($lines, $start, $end, $expect, $idx) {
+        $total = count($lines);
+        if ($expect === null) {
+            if ($start < 1 || $end > $total) {
+                throw new ModxMCPClientException("edit #{$idx}: lines {$start}-{$end} out of range (1..{$total}).");
+            }
+            return array($start, $end);
+        }
+        $expectLines = explode("\n", str_replace("\r\n", "\n", $expect));
+        $len = count($expectLines);
+        if ($start >= 1 && ($start + $len - 1) <= $total && array_slice($lines, $start - 1, $len) === $expectLines) {
+            return array($start, $start + $len - 1);
+        }
+        $matches = array();
+        for ($i = 0; $i + $len <= $total; $i++) {
+            if (array_slice($lines, $i, $len) === $expectLines) { $matches[] = $i + 1; }
+        }
+        if (count($matches) === 1) { return array($matches[0], $matches[0] + $len - 1); }
+        if (count($matches) === 0) {
+            throw new ModxMCPClientException("edit #{$idx}: expected text not found (the lines have changed since you read them).");
+        }
+        throw new ModxMCPClientException("edit #{$idx}: expected text matches " . count($matches) . " places; make it more specific.");
+    }
+
+    /**
+     * Apply line-based edits to a chunk/snippet/template/plugin. Only the changed lines travel —
+     * no need to resend the whole element. data:
+     *   type, id|name,
+     *   edits: [ { start_line, end_line?, replacement?, expect? }, ... ]
+     * Semantics (1-based, inclusive): replace [start_line..end_line] with `replacement`
+     * (multi-line ok; "" = delete the lines). Insert = empty range (end_line = start_line - 1),
+     * inserting `replacement` before start_line. `expect` (current text of the lines) is an
+     * optional safety anchor — verified/relocated before applying; mismatch aborts the WHOLE
+     * call (atomic). Writes back to the static file if static, else the DB; preserves EOL.
+     */
+    private function editElementLines($data) {
+        list($el, $type, $id, $m) = $this->resolveLineEditElement($data);
+        $edits = (isset($data['edits']) && is_array($data['edits'])) ? $data['edits'] : null;
+        if (!$edits) {
+            throw new ModxMCPClientException('edit_element_lines: a non-empty "edits" array is required.');
+        }
+        list($content, $isStatic, $staticAbs) = $this->readEffectiveContent($el, $m);
+        $eol = "\n";
+        $lines = $this->splitLines($content, $eol);
+        $total = count($lines);
+
+        // Resolve every edit against the ORIGINAL lines (so ranges/anchors are consistent).
+        $resolved = array();
+        foreach ($edits as $idx => $e) {
+            if (!is_array($e) || !isset($e['start_line'])) {
+                throw new ModxMCPClientException("edit #{$idx}: start_line is required.");
+            }
+            $s = (int) $e['start_line'];
+            $en = isset($e['end_line']) ? (int) $e['end_line'] : $s;
+            $isInsert = ($en === $s - 1);
+            $replacement = isset($e['replacement']) ? (string) $e['replacement'] : '';
+            $expect = array_key_exists('expect', $e) ? (string) $e['expect'] : null;
+
+            if ($isInsert) {
+                if ($s < 1 || $s > $total + 1) {
+                    throw new ModxMCPClientException("edit #{$idx}: insert position {$s} out of range (1.." . ($total + 1) . ").");
+                }
+                $rs = $s; $re = $s - 1;
+            } else {
+                if ($en < $s) {
+                    throw new ModxMCPClientException("edit #{$idx}: end_line < start_line.");
+                }
+                list($rs, $re) = $this->locateEditRange($lines, $s, $en, $expect, $idx);
+            }
+            $replLines = ($replacement === '') ? array() : explode("\n", str_replace("\r\n", "\n", $replacement));
+            $resolved[] = array('s' => $rs, 'e' => $re, 'repl' => $replLines, 'insert' => $isInsert);
+        }
+
+        // Reject overlapping replace/delete ranges.
+        $covered = array();
+        foreach ($resolved as $r) {
+            if ($r['insert']) { continue; }
+            for ($i = $r['s']; $i <= $r['e']; $i++) {
+                if (isset($covered[$i])) {
+                    throw new ModxMCPClientException("edits overlap on line {$i}.");
+                }
+                $covered[$i] = true;
+            }
+        }
+
+        // Apply bottom-up so earlier line indices stay valid.
+        usort($resolved, function ($a, $b) { return $b['s'] - $a['s']; });
+        foreach ($resolved as $r) {
+            $offset = $r['s'] - 1;
+            $length = $r['insert'] ? 0 : ($r['e'] - $r['s'] + 1);
+            array_splice($lines, $offset, $length, $r['repl']);
+        }
+
+        $newContent = implode($eol, $lines);
+        $totalAfter = count($lines);
+
+        return $this->runWithTransaction(function () use ($el, $m, $isStatic, $staticAbs, $newContent, $type, $id, $edits, $total, $totalAfter) {
+            $this->writeEffectiveContent($el, $m, $isStatic, $staticAbs, $newContent);
+            $this->modx->cacheManager->refresh();
+            $this->logAudit('edit_element_lines', $type, array('id' => $id, 'edits' => count($edits)));
+            return array(
+                'type' => $type,
+                'id' => $id,
+                'static' => $isStatic,
+                'edits_applied' => count($edits),
+                'total_lines_before' => $total,
+                'total_lines_after' => $totalAfter,
+            );
+        });
     }
 
     /**

@@ -16,5 +16,11 @@ tell the user to enable it there. `modx_list_actions` shows all groups incl. dis
 `modx_list_tv_input_types`, and `modx_help` topics. To understand an installed add-on, read its
 source with `modx_get_component_files` + `modx_read_component_file` (see the `study_component` topic).
 
+**Editing code efficiently.** `modx_update_element` replaces the WHOLE content. To change a few
+lines of a large chunk/snippet/template/plugin, prefer line editing: `modx_view_element` shows
+numbered lines (windowed via `start_line`/`end_line`), then `modx_edit_element_lines` applies edits
+sending only the changed lines. Pass `expect` (the current text of the lines) as a safety anchor —
+it is verified/relocated and a mismatch aborts the whole call. Works on static and DB-stored elements.
+
 **Static files.** `make_static` (and the `modxmcp.auto_static` setting) store an element's code as
 a file under `core/elements/` so it can be edited over FTP / kept in git.
