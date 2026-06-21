@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.8.5 (2026-06-21)
+
+- Access hardening at the endpoint (both off by default, so existing setups are unaffected):
+  - `modxmcp.allowed_ips` — optional client-IP allowlist. Empty = allow all. CSV of exact IPs
+    and/or IPv4 CIDR ranges (e.g. `203.0.113.4, 10.0.0.0/8`), matched against `REMOTE_ADDR`.
+    `X-Forwarded-For` is intentionally not trusted (spoofable).
+  - `modxmcp.require_https` — when on, non-HTTPS requests are rejected (honours a
+    reverse-proxy `X-Forwarded-Proto: https` header in addition to direct TLS / port 443).
+  - Both checks run before token validation, so disallowed clients never reach the token path.
+
 ## 1.8.4 (2026-06-21)
 
 - File reads are now bounded: `read_component_file` and `read_media_source_file` cap the
