@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.8.4 (2026-06-21)
+
+- File reads are now bounded: `read_component_file` and `read_media_source_file` cap the
+  returned content at `modxmcp.max_read_bytes` (new setting, default 256KB) and accept an
+  optional `offset` + `bytes` window for ranged reads. The response reports `size` (total),
+  `offset`, `returned_bytes` and a `truncated` flag, so a huge file can no longer blow up the
+  client's context.
+- The write-audit trail moved out of `core/cache/` (which MODX wipes on a cache refresh) to
+  `core/components/modxmcp/logs/audit.log`, so it survives cache clears.
+
 ## 1.8.3 (2026-06-21)
 
 - Internal: action dispatch is now driven by a single registry (`actionRegistry()`) that is

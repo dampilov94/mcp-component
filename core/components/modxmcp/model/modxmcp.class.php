@@ -1307,13 +1307,18 @@ class modxMCP {
         $this->writeAuditFile($action, $elementType, $payload);
     }
 
+    private function auditLogDir() {
+        // Live under the component (not core/cache/, which MODX wipes on a cache refresh).
+        return rtrim($this->modx->getOption('core_path'), '/') . '/components/modxmcp/logs';
+    }
+
     private function auditLogPath() {
-        return rtrim($this->modx->getOption('core_path'), '/') . '/cache/modxmcp/audit.log';
+        return $this->auditLogDir() . '/audit.log';
     }
 
     private function writeAuditFile($action, $elementType, array $payload) {
         try {
-            $dir = rtrim($this->modx->getOption('core_path'), '/') . '/cache/modxmcp';
+            $dir = $this->auditLogDir();
             if (!is_dir($dir)) { @mkdir($dir, 0755, true); }
             $entry = array(
                 'ts'      => date('c'),
@@ -1856,23 +1861,50 @@ class modxMCP {
             throw new ModxMCPClientException("File not found: {$relativePath}");
         }
 
-        $content = file_get_contents($absolutePath);
+        return array_merge([
+            'media_source' => $this->normalizeMediaSource($source, false),
+            'path' => $relativePath,
+        ], $this->readFileBounded($absolutePath, $data));
+    }
+
+    /**
+     * Read a file with a byte cap (modxmcp.max_read_bytes, default 256KB) and an optional
+     * offset/bytes window, so a huge file can't blow up the client's context. Returns
+     * mime/encoding/content plus size (total file size), offset, returned_bytes and a
+     * `truncated` flag (true when more bytes remain past offset+returned).
+     */
+    private function readFileBounded($absolutePath, array $data) {
+        $total = (int) filesize($absolutePath);
+        $maxAllowed = (int) $this->modx->getOption('modxmcp.max_read_bytes', null, 262144);
+        if ($maxAllowed <= 0) { $maxAllowed = 262144; }
+        $offset = isset($data['offset']) ? max(0, (int) $data['offset']) : 0;
+        if ($offset > $total) { $offset = $total; }
+        $requested = isset($data['bytes']) ? (int) $data['bytes'] : (isset($data['length']) ? (int) $data['length'] : $maxAllowed);
+        if ($requested <= 0 || $requested > $maxAllowed) { $requested = $maxAllowed; }
+
+        $raw = ($total > 0 && $offset < $total)
+            ? (string) file_get_contents($absolutePath, false, null, $offset, $requested)
+            : '';
+        $returned = strlen($raw);
+
         $mime = function_exists('mime_content_type') ? mime_content_type($absolutePath) : 'application/octet-stream';
         $isText = is_string($mime) && (
             strpos($mime, 'text/') === 0 ||
             strpos($mime, 'json') !== false ||
             strpos($mime, 'xml') !== false ||
             strpos($mime, 'javascript') !== false ||
-            strpos($mime, 'svg') !== false
+            strpos($mime, 'svg') !== false ||
+            strpos($mime, 'x-httpd-php') !== false
         );
 
         return [
-            'media_source' => $this->normalizeMediaSource($source, false),
-            'path' => $relativePath,
             'mime' => $mime,
-            'size' => filesize($absolutePath),
+            'size' => $total,
+            'offset' => $offset,
+            'returned_bytes' => $returned,
+            'truncated' => ($offset + $returned) < $total,
             'encoding' => $isText ? 'utf-8' : 'base64',
-            'content' => $isText ? $content : base64_encode($content),
+            'content' => $isText ? $raw : base64_encode($raw),
         ];
     }
 
@@ -1993,27 +2025,12 @@ class modxMCP {
                 continue;
             }
 
-            $content = file_get_contents($absolutePath);
-            $mime = function_exists('mime_content_type') ? mime_content_type($absolutePath) : 'application/octet-stream';
-            $isText = is_string($mime) && (
-                strpos($mime, 'text/') === 0 ||
-                strpos($mime, 'json') !== false ||
-                strpos($mime, 'xml') !== false ||
-                strpos($mime, 'javascript') !== false ||
-                strpos($mime, 'svg') !== false ||
-                strpos($mime, 'x-httpd-php') !== false
-            );
-
-            return [
+            return array_merge([
                 'component' => $data['name'],
                 'scope' => $scope,
                 'root_path' => $componentRoot,
                 'path' => $relativePath,
-                'mime' => $mime,
-                'size' => filesize($absolutePath),
-                'encoding' => $isText ? 'utf-8' : 'base64',
-                'content' => $isText ? $content : base64_encode($content),
-            ];
+            ], $this->readFileBounded($absolutePath, $data));
         }
 
         throw new ModxMCPClientException("Component file not found: {$data['name']} / {$relativePath}.");
