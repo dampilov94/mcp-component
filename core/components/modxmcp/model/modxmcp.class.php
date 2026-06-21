@@ -4,6 +4,7 @@ if (!class_exists("ModxMCPClientException")) {
     class ModxMCPClientException extends Exception {}
 }
 class modxMCP {
+    const VERSION = '1.8.12';
     public $modx;
     public $config =[];
     private $actionSpecsCache = null;

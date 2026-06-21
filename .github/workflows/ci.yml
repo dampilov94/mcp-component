@@ -30,9 +30,10 @@ jobs:
           PKG=$(php -r "include '_build/build.config.php'; echo PKG_VERSION;")
           NPM=$(node -p "require('./package.json').version")
           LOCK=$(node -p "require('./package-lock.json').version")
-          echo "build.config.php=$PKG  package.json=$NPM  package-lock.json=$LOCK"
-          if [ "$PKG" != "$NPM" ] || [ "$NPM" != "$LOCK" ]; then
-            echo "::error::Version mismatch across build.config.php / package.json / package-lock.json"
+          MODEL=$(php -r "require 'core/components/modxmcp/model/modxmcp.class.php'; echo modxMCP::VERSION;")
+          echo "build.config.php=$PKG  package.json=$NPM  package-lock.json=$LOCK  model::VERSION=$MODEL"
+          if [ "$PKG" != "$NPM" ] || [ "$NPM" != "$LOCK" ] || [ "$LOCK" != "$MODEL" ]; then
+            echo "::error::Version mismatch across build.config.php / package.json / package-lock.json / modxMCP::VERSION"
             exit 1
           fi
 

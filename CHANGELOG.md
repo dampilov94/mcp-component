@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.8.12 (2026-06-22)
+
+- Health/version endpoint: a GET to the API endpoint now returns a small unauthenticated
+  payload `{component, version, enabled}` (server build version from the new `modxMCP::VERSION`
+  constant) for client/server skew detection. POST is unchanged.
+- The Node client checks this on startup and logs a warning to stderr if its version differs
+  from the server's (non-fatal; old servers that 405 a GET are ignored).
+- CI now also asserts `modxMCP::VERSION` matches build.config.php / package.json / lock.
+
 ## 1.8.11 (2026-06-22)
 
 - `bulk_resources` — apply one operation to many resources at once: publish, unpublish,

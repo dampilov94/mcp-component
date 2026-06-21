@@ -14,9 +14,27 @@ $modx->setLogLevel(modX::LOG_LEVEL_ERROR);
 
 header('Content-Type: application/json; charset=utf-8');
 
+// Lightweight unauthenticated health/version probe (GET) for client/server skew detection.
+// Returns only non-sensitive info: component name, server build version, enabled flag.
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    $version = 'unknown';
+    $corePath = $modx->getOption('modxmcp.core_path', null, $modx->getOption('core_path') . 'components/modxmcp/');
+    $modelFile = $corePath . 'model/modxmcp.class.php';
+    if (file_exists($modelFile)) {
+        require_once $modelFile;
+        if (defined('modxMCP::VERSION')) { $version = modxMCP::VERSION; }
+    }
+    echo json_encode([
+        'component' => 'modxMCP',
+        'version'   => $version,
+        'enabled'   => (bool) $modx->getOption('modxmcp.enabled', null, false),
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
-    header('Allow: POST');
+    header('Allow: GET, POST');
     echo json_encode(['success' => false, 'error' => 'Method Not Allowed'], JSON_UNESCAPED_UNICODE);
     exit;
 }

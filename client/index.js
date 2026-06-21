@@ -1717,10 +1717,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
+// Best-effort client/server version-skew check (GET health endpoint). Non-fatal: older
+// servers return 405 for GET, which is ignored.
+async function checkServerSkew() {
+  try {
+    const r = await axios.get(MODX_SITE_URL, { timeout: 5000 });
+    const serverVersion = r.data && r.data.version;
+    if (serverVersion && serverVersion !== "unknown" && serverVersion !== pkgInfo.version) {
+      console.error(
+        `modxMCP: version skew — client v${pkgInfo.version}, server v${serverVersion}. ` +
+          `Update whichever is behind (client: git pull / npm; server: install the matching transport package).`,
+      );
+    }
+  } catch (e) {
+    // Old server (GET not supported) or unreachable — ignore.
+  }
+}
+
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("MODX MCP Server started successfully.");
+  checkServerSkew();
 }
 
 main().catch(console.error);
