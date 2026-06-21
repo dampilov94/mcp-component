@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.8.7 (2026-06-21)
+
+- Tool descriptions now steer any model toward efficient editing (client-side only; server
+  logic unchanged from 1.8.6):
+  - `update_element` states it replaces the WHOLE content and points to view/edit-by-line for
+    small changes to large elements.
+  - `get_element` points to `view_element` (numbered, windowable) for large elements.
+  - `edit_element_lines` spells out the multi-edit contract: all line numbers refer to the file
+    as last seen via `view_element` (the original); the server applies edits together bottom-up
+    so earlier inserts/deletes never shift later ones; ranges must not overlap; send all spots
+    in one call with original numbers.
+
 ## 1.8.6 (2026-06-21)
 
 - Token-efficient partial editing of code elements (chunk/snippet/template/plugin) — no more

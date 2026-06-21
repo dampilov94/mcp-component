@@ -169,7 +169,8 @@ const toolDefinitions = [
   },
   {
     name: "modx_get_element",
-    description: "Прочитать существующий элемент MODX.",
+    description:
+      "Read a MODX element (returns its fields + full code). For a large chunk/snippet/template/plugin you only need to edit, prefer modx_view_element (numbered, windowable) so you don't pull the whole body into context.",
     inputSchema: {
       type: "object",
       properties: {
@@ -182,7 +183,8 @@ const toolDefinitions = [
   },
   {
     name: "modx_update_element",
-    description: "Обновить элемент MODX.",
+    description:
+      "Update a MODX element by REPLACING its whole content (send the complete new `content`). Best for small elements or full rewrites. For a few changes inside a large chunk/snippet/template/plugin, do NOT use this — use modx_view_element + modx_edit_element_lines instead (sends only the changed lines, far fewer tokens, atomic with a safety anchor).",
     inputSchema: {
       type: "object",
       properties: {
@@ -299,7 +301,7 @@ const toolDefinitions = [
   {
     name: "modx_edit_element_lines",
     description:
-      "Edit a chunk/snippet/template/plugin BY LINE, sending only the changed lines (no need to resend the whole element). Each edit replaces the inclusive range [start_line..end_line] with `replacement`. Conventions: delete = replacement \"\"; insert before a line = set end_line to start_line-1. Strongly recommended: pass `expect` (the current text of those lines) as a safety anchor — it is verified, and relocated to its unique match if the line numbers drifted; any mismatch aborts the WHOLE call (atomic, nothing is written). Multiple edits are applied together (bottom-up). Read first with modx_view_element to get line numbers.",
+      "Edit a chunk/snippet/template/plugin BY LINE, sending only the changed lines (no need to resend the whole element). Each edit replaces the inclusive range [start_line..end_line] with `replacement`. Conventions: delete = replacement \"\"; insert before a line = set end_line to start_line-1. Strongly recommended: pass `expect` (the current text of those lines) as a safety anchor — it is verified, and relocated to its unique match if the line numbers drifted; any mismatch aborts the WHOLE call (atomic, nothing is written). MULTI-EDIT RULES: all line numbers refer to the file exactly as you last saw it in modx_view_element (the original) — do NOT adjust them for the effect of your other edits; the server applies edits together (bottom-up) so earlier inserts/deletes never shift later ones. Ranges must not overlap. So to change several spots in one big file, send them all in ONE call with original line numbers. Read first with modx_view_element to get line numbers.",
     inputSchema: {
       type: "object",
       properties: {
