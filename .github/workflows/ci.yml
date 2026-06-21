@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PHP syntax check (php -l) on every PHP file
+        run: |
+          php -v
+          # _reference/ and modx-example are gitignored (not in the repo); node_modules excluded defensively.
+          find . -name '*.php' -not -path './node_modules/*' -print0 \
+            | xargs -0 -n1 php -l
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Client syntax check
+        run: node --check client/index.js
+
+      - name: Version consistency (build.config.php == package.json == package-lock.json)
+        run: |
+          PKG=$(php -r "include '_build/build.config.php'; echo PKG_VERSION;")
+          NPM=$(node -p "require('./package.json').version")
+          LOCK=$(node -p "require('./package-lock.json').version")
+          echo "build.config.php=$PKG  package.json=$NPM  package-lock.json=$LOCK"
+          if [ "$PKG" != "$NPM" ] || [ "$NPM" != "$LOCK" ]; then
+            echo "::error::Version mismatch across build.config.php / package.json / package-lock.json"
+            exit 1
+          fi
+
+      - name: CHANGELOG has an entry for the current version
+        run: |
+          PKG=$(php -r "include '_build/build.config.php'; echo PKG_VERSION;")
+          if ! grep -q "## ${PKG} " CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## ${PKG}' entry"
+            exit 1
+          fi
+          echo "CHANGELOG has an entry for ${PKG}."
