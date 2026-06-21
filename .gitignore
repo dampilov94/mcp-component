@@ -8,11 +8,9 @@ _packages/
 # Vendor component sources for study only — never packaged or committed
 _reference/
 
-# Local-only AI handoff notes (contains test-stand credentials — never publish)
+# Local-only AI working notes (dev brief + roadmap; internal, not part of the package)
 AI_HANDOFF.md
+AI_ROADMAP.md
 
 # Reference copy of a clean MODX install, for local study only — never committed
 modx-example-2-8-8/
-
-# Built transport-vehicle artifact — never committed
-modxmcp-1.7.0-pl/
