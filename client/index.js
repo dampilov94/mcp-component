@@ -228,7 +228,7 @@ const toolDefinitions = [
   },
   {
     name: "modx_create_element",
-    description: "Создать новый элемент MODX.",
+    description: "Create a new MODX element.",
     inputSchema: {
       type: "object",
       properties: {
@@ -330,7 +330,7 @@ const toolDefinitions = [
   },
   {
     name: "modx_list_system_settings",
-    description: "Получить список системных настроек MODX.",
+    description: "List MODX system settings.",
     inputSchema: {
       type: "object",
       properties: {
@@ -341,7 +341,7 @@ const toolDefinitions = [
   },
   {
     name: "modx_get_system_setting",
-    description: "Получить одну системную настройку MODX.",
+    description: "Get one MODX system setting by key.",
     inputSchema: {
       type: "object",
       properties: {
@@ -352,7 +352,7 @@ const toolDefinitions = [
   },
   {
     name: "modx_create_system_setting",
-    description: "Создать системную настройку MODX.",
+    description: "Create a MODX system setting.",
     inputSchema: {
       type: "object",
       properties: {
@@ -367,7 +367,7 @@ const toolDefinitions = [
   },
   {
     name: "modx_update_system_setting",
-    description: "Обновить системную настройку MODX.",
+    description: "Update a MODX system setting.",
     inputSchema: {
       type: "object",
       properties: {
@@ -382,7 +382,7 @@ const toolDefinitions = [
   },
   {
     name: "modx_delete_system_setting",
-    description: "Удалить системную настройку MODX.",
+    description: "Delete a MODX system setting.",
     inputSchema: {
       type: "object",
       properties: {
@@ -393,7 +393,7 @@ const toolDefinitions = [
   },
   {
     name: "modx_list_media_sources",
-    description: "Получить список media sources MODX.",
+    description: "List MODX media sources.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -401,7 +401,7 @@ const toolDefinitions = [
   },
   {
     name: "modx_get_media_source",
-    description: "Получить один media source MODX.",
+    description: "Get one MODX media source.",
     inputSchema: {
       type: "object",
       properties: {
@@ -427,7 +427,7 @@ const toolDefinitions = [
   },
   {
     name: "modx_list_media_source_files",
-    description: "Получить список файлов и папок внутри media source.",
+    description: "List files and folders inside a media source.",
     inputSchema: {
       type: "object",
       properties: {
@@ -439,7 +439,7 @@ const toolDefinitions = [
   },
   {
     name: "modx_read_media_source_file",
-    description: "Прочитать файл внутри media source.",
+    description: "Read a file inside a media source.",
     inputSchema: {
       type: "object",
       properties: {
@@ -486,7 +486,7 @@ const toolDefinitions = [
     },
     {
     name: "modx_get_resource_tvs",
-    description: "Получить TV-значения ресурса.",
+    description: "Get a resource's template-variable (TV) values.",
     inputSchema: {
       type: "object",
       properties: {
@@ -497,7 +497,7 @@ const toolDefinitions = [
   },
   {
     name: "modx_update_resource_tvs",
-    description: "Обновить TV-значения ресурса.",
+    description: "Update a resource's template-variable (TV) values.",
     inputSchema: {
       type: "object",
       properties: {
