@@ -37,6 +37,19 @@ require_once MODX_CORE_PATH . 'model/modx/modx.class.php';
 
 $modx = new modX();
 $modx->initialize('mgr');
+
+// When triggered over the web (workspace inside a docroot), require the site's modxMCP token
+// as ?key=… so a stranger can't trigger builds. CLI runs are unrestricted.
+$__isCli = (PHP_SAPI === 'cli') || (defined('XPDO_CLI_MODE') && XPDO_CLI_MODE);
+if (!$__isCli) {
+    $__expected = (string) $modx->getOption('modxmcp.api_token', null, '');
+    $__provided = isset($_GET['key']) ? (string) $_GET['key'] : '';
+    if ($__expected === '' || !hash_equals($__expected, $__provided)) {
+        header('HTTP/1.1 403 Forbidden');
+        die("Forbidden: web build requires ?key=<modxmcp.api_token>. Or run via CLI.\n");
+    }
+}
+
 $modx->setLogLevel(modX::LOG_LEVEL_INFO);
 $modx->setLogTarget((defined('XPDO_CLI_MODE') && XPDO_CLI_MODE) ? 'ECHO' : 'HTML');
 echo ((defined('XPDO_CLI_MODE') && XPDO_CLI_MODE) ? '' : '<pre>');

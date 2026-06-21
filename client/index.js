@@ -937,7 +937,35 @@ const toolDefinitions = [
       },
     },
   },
-
+  {
+    name: "modx_replace_across",
+    description:
+      "Site-wide search & replace across code elements (chunk/snippet/template/plugin): find every element whose CONTENT contains `find` and replace ALL occurrences with `replacement`, in ONE call (no per-element reads/writes from your side). Honours static files vs DB. SUBSTRING match — `find:\"foo\"` also matches inside `footer`/`food`; make `find` specific. ALWAYS run dry_run:true FIRST and review the returned `preview` (the exact lines that would change) before the real run. case_sensitive defaults to TRUE here. Use for renames / URL / class changes across the codebase. (Does not touch resources — edit those individually.)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        find: { type: "string", description: "Exact substring to find in element content." },
+        replacement: { type: "string", description: "Replacement (\"\" removes the substring)." },
+        types: { type: "array", items: { type: "string", enum: ["chunk", "snippet", "template", "plugin"] }, description: "Element types to scan. Default: all four." },
+        case_sensitive: { type: "boolean", description: "Case-sensitive match (default false)." },
+        dry_run: { type: "boolean", description: "Preview only — report matches without writing (default false). Do this first." },
+        limit: { type: "number", description: "Max elements to touch (default 200)." },
+      },
+      required: ["find", "replacement"],
+    },
+  },
+  {
+    name: "modx_describe_object",
+    description:
+      "Schema introspection: list an xPDO class's fields (name + php/db type, null, default) and its primary key, so you use REAL field names instead of guessing. Accepts a class name (e.g. modResource) or an alias (resource/chunk/snippet/template/plugin/tv/category/user/context/setting). Use before create/update on an unfamiliar object.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        class: { type: "string", description: "xPDO class or alias, e.g. 'modResource' or 'resource'." },
+      },
+      required: ["class"],
+    },
+  },
   {
     name: "modx_list_tv_input_types",
     description:

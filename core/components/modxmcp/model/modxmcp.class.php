@@ -274,6 +274,7 @@ class modxMCP {
                 'search_code'    => 'searchCode',
                 'find_usages'    => 'findUsages',
                 'list_resources' => 'listResources',
+                'replace_across' => 'replaceAcross',
             ),
             'versionx' => array(
                 'versionx_list_versions'  => 'listVersionXVersions',
@@ -425,6 +426,7 @@ class modxMCP {
                 'clear_cache'      => 'clearCacheAction',
                 'read_audit_log'   => 'readAuditLog',
                 'regenerate_token' => array('m' => 'regenerateToken', 'call' => 'bare'),
+                'describe_object'  => 'describeObject',
             ),
         );
     }
@@ -1065,6 +1067,120 @@ class modxMCP {
                 'total_lines_after' => $totalAfter,
             );
         });
+    }
+
+    /**
+     * Site-wide search & replace across code elements (chunk/snippet/template/plugin). Finds
+     * every element whose CONTENT contains `find` and replaces all occurrences with
+     * `replacement`, in one call. Honours static files vs DB. Set `dry_run` to preview the
+     * affected elements + occurrence counts without writing. data:
+     *   find (required), replacement (required), types?[], case_sensitive?, dry_run?, limit?.
+     */
+    private function replaceAcross($data) {
+        $find = isset($data['find']) ? (string) $data['find'] : '';
+        if ($find === '') { throw new ModxMCPClientException('replace_across: "find" is required.'); }
+        if (!array_key_exists('replacement', $data)) { throw new ModxMCPClientException('replace_across: "replacement" is required (use "" to delete the string).'); }
+        $replacement = (string) $data['replacement'];
+        // Default to case-SENSITIVE here (unlike search_code): a replacement is usually exact,
+        // and a loose match across the whole site is a footgun.
+        $cs = array_key_exists('case_sensitive', $data) ? !empty($data['case_sensitive']) : true;
+        $dry = !empty($data['dry_run']);
+        $allowed = $this->lineEditMap();
+        $types = (isset($data['types']) && is_array($data['types']) && $data['types'])
+            ? array_values(array_filter($data['types'], function ($t) use ($allowed) { return isset($allowed[$t]); }))
+            : array('chunk', 'snippet', 'template', 'plugin');
+        if (!$types) { throw new ModxMCPClientException('replace_across: types must be among chunk, snippet, template, plugin.'); }
+        $limit = isset($data['limit']) ? max(1, (int) $data['limit']) : 200;
+
+        // Reuse the tested search (incl. static-file scanning) to locate candidate elements.
+        $hits = $this->searchCode(array('query' => $find, 'types' => $types, 'limit' => $limit, 'case_sensitive' => $cs));
+
+        $results = array();
+        $totalOcc = 0;
+        foreach ($hits['results'] as $h) {
+            $type = $h['type'];
+            if (!isset($allowed[$type])) { continue; }
+            $m = $allowed[$type];
+            $el = $this->modx->getObject($m['class'], (int) $h['id']);
+            if (!$el) { continue; }
+            list($content, $isStatic, $staticAbs) = $this->readEffectiveContent($el, $m);
+            $count = $cs ? substr_count($content, $find) : substr_count(strtolower($content), strtolower($find));
+            if ($count === 0) { continue; } // name-only match — nothing to replace in content
+            if (!$dry) {
+                $new = $cs ? str_replace($find, $replacement, $content) : str_ireplace($find, $replacement, $content);
+                $this->runWithTransaction(function () use ($el, $m, $isStatic, $staticAbs, $new) {
+                    $this->writeEffectiveContent($el, $m, $isStatic, $staticAbs, $new);
+                    return true;
+                });
+                $this->logAudit('replace_across', $type, array('id' => (int) $h['id'], 'occurrences' => $count));
+            }
+            $row = array('type' => $type, 'id' => (int) $h['id'], 'name' => $h['name'], 'occurrences' => $count, 'static' => $isStatic);
+            if ($dry) {
+                // Show the actual lines that would change (substring match — 'foo' also hits
+                // 'footer'), so the preview is reviewable, not just a count.
+                $eol = "\n";
+                $ls = $this->splitLines($content, $eol);
+                $needle = $cs ? $find : strtolower($find);
+                $preview = array();
+                foreach ($ls as $li => $lt) {
+                    $hay = $cs ? $lt : strtolower($lt);
+                    if (strpos($hay, $needle) !== false) {
+                        $preview[] = array('line' => $li + 1, 'line_text' => $lt);
+                        if (count($preview) >= 5) { break; }
+                    }
+                }
+                $row['preview'] = $preview;
+            }
+            $results[] = $row;
+            $totalOcc += $count;
+        }
+        if (!$dry && $results) { $this->modx->cacheManager->refresh(); }
+        return array(
+            'find' => $find,
+            'replacement' => $replacement,
+            'case_sensitive' => $cs,
+            'dry_run' => $dry,
+            'elements' => count($results),
+            'total_occurrences' => $totalOcc,
+            'capped_at' => $limit,
+            'results' => $results,
+        );
+    }
+
+    /**
+     * Schema introspection: list an xPDO class's fields (name + php/db type, null, default) and
+     * its primary key, so the model can use real field names instead of guessing. Accepts a
+     * class name (modResource) or a friendly alias (resource/chunk/tv/user/...). data: class.
+     */
+    private function describeObject($data) {
+        $class = isset($data['class']) ? trim((string) $data['class']) : '';
+        if ($class === '') { throw new ModxMCPClientException('describe_object: "class" is required (e.g. modResource, or alias "resource").'); }
+        $alias = array(
+            'chunk' => 'modChunk', 'snippet' => 'modSnippet', 'template' => 'modTemplate',
+            'plugin' => 'modPlugin', 'tv' => 'modTemplateVar', 'resource' => 'modResource',
+            'category' => 'modCategory', 'user' => 'modUser', 'usergroup' => 'modUserGroup',
+            'context' => 'modContext', 'setting' => 'modSystemSetting',
+        );
+        if (isset($alias[strtolower($class)])) { $class = $alias[strtolower($class)]; }
+        $meta = $this->modx->getFieldMeta($class);
+        if (empty($meta)) {
+            if (!$this->modx->loadClass($class)) {
+                throw new ModxMCPClientException("describe_object: unknown class '{$class}'. For add-on classes load the package first (e.g. via a known action).");
+            }
+            $meta = $this->modx->getFieldMeta($class);
+        }
+        if (empty($meta)) { throw new ModxMCPClientException("describe_object: no field metadata for '{$class}'."); }
+        $fields = array();
+        foreach ($meta as $name => $def) {
+            $fields[] = array(
+                'field'   => $name,
+                'phptype' => isset($def['phptype']) ? $def['phptype'] : null,
+                'dbtype'  => isset($def['dbtype']) ? $def['dbtype'] : null,
+                'null'    => isset($def['null']) ? (bool) $def['null'] : null,
+                'default' => array_key_exists('default', $def) ? $def['default'] : null,
+            );
+        }
+        return array('class' => $class, 'primary_key' => $this->modx->getPK($class), 'fields' => $fields);
     }
 
     /**

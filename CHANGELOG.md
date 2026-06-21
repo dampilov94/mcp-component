@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.8.9 (2026-06-21)
+
+- `replace_across` — site-wide search & replace across code elements (chunk/snippet/template/
+  plugin) in one call: replaces all occurrences of `find` with `replacement`, honouring static
+  files vs DB. `case_sensitive` defaults to TRUE; substring match. `dry_run` returns the exact
+  lines that would change (a reviewable preview), not just counts — run it first.
+- `describe_object` — schema introspection: lists an xPDO class's fields (php/db type, null,
+  default) + primary key, by class name or alias (resource/chunk/tv/user/…), so the model uses
+  real field names instead of guessing.
+- Build workspace hardening: `_build/build.transport.php` now refuses web runs without
+  `?key=<modxmcp.api_token>` (CLI unaffected), and a root `.htaccess` denies HTTP access to the
+  workspace source while leaving the (token-gated) build entry reachable — for setups where the
+  repo/workspace sits inside the docroot.
+
 ## 1.8.8 (2026-06-21)
 
 - `search_code` content hits now include `line` (1-based line of the match) and `line_text`

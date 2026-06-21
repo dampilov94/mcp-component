@@ -1,0 +1,23 @@
+# Protect the modxMCP build workspace when this repo lives inside a web docroot
+# (e.g. the build stand). Denies direct HTTP access to the source files; the only
+# reachable entry point is the build script, which is itself token-gated (?key=).
+# Has no effect on the installed component (api.php / CMP live elsewhere) and is
+# never shipped in the transport package.
+
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>
+
+<Files "build.transport.php">
+    <IfModule mod_authz_core.c>
+        Require all granted
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Allow from all
+    </IfModule>
+</Files>
