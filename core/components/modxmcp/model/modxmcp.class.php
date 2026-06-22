@@ -4,7 +4,7 @@ if (!class_exists("ModxMCPClientException")) {
     class ModxMCPClientException extends Exception {}
 }
 class modxMCP {
-    const VERSION = '1.8.13';
+    const VERSION = '1.8.14';
     public $modx;
     public $config =[];
     private $actionSpecsCache = null;
@@ -450,6 +450,7 @@ class modxMCP {
                 'refresh_uris'     => 'refreshUris',
                 'remove_locks'     => 'removeLocks',
                 'system_info'      => 'systemInfo',
+                'project_overview' => 'projectOverview',
             ),
         );
     }
@@ -1134,6 +1135,179 @@ class modxMCP {
             'base_path'       => $this->modx->getOption('base_path'),
             'core_path'       => $this->modx->getOption('core_path'),
         );
+    }
+
+    /**
+     * Compact, token-safe project map so a model orients in ONE call. Scales with the site's
+     * STRUCTURE, never its CONTENT: resources/products are COUNTS only; the resource tree is
+     * roots + child counts (depth 1, capped); structural lists are capped with totals. A site
+     * with 100k resources returns the same small payload as a tiny one. Per-item browsing stays
+     * in the paginated tools (list_resources, list_elements). data: sections?[], max_tree_nodes?.
+     */
+    private function projectOverview($data) {
+        $all = array('modx', 'counts', 'templates', 'tvs', 'resource_tree', 'resources_by_template', 'resources_by_context', 'element_categories', 'content_types', 'contexts', 'integrations');
+        $req = (isset($data['sections']) && is_array($data['sections']) && $data['sections'])
+            ? array_values(array_intersect($all, $data['sections']))
+            : $all;
+        $want = array_flip($req);
+        $cap = 200;
+        $maxTree = isset($data['max_tree_nodes']) ? max(1, (int) $data['max_tree_nodes']) : 50;
+        $cnt = function ($class, $crit = null) { return (int) $this->modx->getCount($class, $crit); };
+        $out = array();
+
+        if (isset($want['modx'])) {
+            $v = method_exists($this->modx, 'getVersionData') ? $this->modx->getVersionData() : array();
+            $out['modx'] = array(
+                'version'         => isset($v['full_version']) ? $v['full_version'] : (isset($v['version']) ? $v['version'] : null),
+                'site_url'        => $this->modx->getOption('site_url'),
+                'modxmcp_version' => self::VERSION,
+            );
+        }
+
+        if (isset($want['counts'])) {
+            $out['counts'] = array(
+                'resources'           => $cnt('modResource'),
+                'published_resources' => $cnt('modResource', array('published' => 1, 'deleted' => 0)),
+                'deleted_resources'   => $cnt('modResource', array('deleted' => 1)),
+                'templates'           => $cnt('modTemplate'),
+                'tvs'                 => $cnt('modTemplateVar'),
+                'chunks'              => $cnt('modChunk'),
+                'snippets'            => $cnt('modSnippet'),
+                'plugins'             => $cnt('modPlugin'),
+                'categories'          => $cnt('modCategory'),
+                'contexts'            => $cnt('modContext'),
+                'users'               => $cnt('modUser'),
+                'media_sources'       => $cnt('sources.modMediaSource'),
+            );
+            $products = $cnt('modResource', array('class_key' => 'msProduct'));
+            if ($products > 0) { $out['counts']['ms2_products'] = $products; }
+        }
+
+        // Build the template list once (reused by templates + resources_by_template).
+        $tplRows = null;
+        if (isset($want['templates']) || isset($want['resources_by_template'])) {
+            $tplRows = array();
+            $q = $this->modx->newQuery('modTemplate');
+            $q->select(array('id', 'templatename'));
+            $q->sortby('templatename', 'ASC');
+            $q->limit($cap);
+            foreach ($this->modx->getCollection('modTemplate', $q) as $t) {
+                $tplRows[(int) $t->get('id')] = $t->get('templatename');
+            }
+        }
+
+        if (isset($want['templates'])) {
+            $tplTotal = $cnt('modTemplate');
+            // tv names + template→tv attachments (bounded by #templates × #tvs).
+            $tvName = array();
+            $tq = $this->modx->newQuery('modTemplateVar');
+            $tq->select(array('id', 'name'));
+            foreach ($this->modx->getCollection('modTemplateVar', $tq) as $tv) { $tvName[(int) $tv->get('id')] = $tv->get('name'); }
+            $attach = array();
+            $lq = $this->modx->newQuery('modTemplateVarTemplate');
+            $lq->select(array('templateid', 'tmplvarid'));
+            foreach ($this->modx->getCollection('modTemplateVarTemplate', $lq) as $l) {
+                $attach[(int) $l->get('templateid')][] = (int) $l->get('tmplvarid');
+            }
+            $items = array();
+            foreach ($tplRows as $tid => $name) {
+                $tvids = isset($attach[$tid]) ? $attach[$tid] : array();
+                $names = array();
+                foreach ($tvids as $i) { if (isset($tvName[$i])) { $names[] = $tvName[$i]; } }
+                $items[] = array('id' => $tid, 'name' => $name, 'tv_ids' => $tvids, 'tv_names' => $names, 'resource_count' => $cnt('modResource', array('template' => $tid)));
+            }
+            $out['templates'] = array('total' => $tplTotal, 'truncated' => $tplTotal > count($items), 'items' => $items);
+        }
+
+        if (isset($want['resources_by_template'])) {
+            $rbt = array();
+            foreach ($tplRows as $tid => $name) { $rbt[] = array('template_id' => $tid, 'template_name' => $name, 'count' => $cnt('modResource', array('template' => $tid))); }
+            $out['resources_by_template'] = $rbt;
+        }
+
+        if (isset($want['tvs'])) {
+            $tvTotal = $cnt('modTemplateVar');
+            $items = array();
+            $q = $this->modx->newQuery('modTemplateVar');
+            $q->select(array('id', 'name', 'type', 'caption'));
+            $q->sortby('name', 'ASC');
+            $q->limit($cap);
+            foreach ($this->modx->getCollection('modTemplateVar', $q) as $tv) {
+                $items[] = array('id' => (int) $tv->get('id'), 'name' => $tv->get('name'), 'type' => $tv->get('type'), 'caption' => $tv->get('caption'));
+            }
+            $out['tvs'] = array('total' => $tvTotal, 'truncated' => $tvTotal > count($items), 'items' => $items);
+        }
+
+        if (isset($want['resource_tree'])) {
+            $rootTotal = $cnt('modResource', array('parent' => 0, 'deleted' => 0));
+            $q = $this->modx->newQuery('modResource', array('parent' => 0, 'deleted' => 0));
+            $q->select(array('id', 'pagetitle', 'context_key', 'template', 'published', 'isfolder'));
+            $q->sortby('context_key', 'ASC');
+            $q->sortby('menuindex', 'ASC');
+            $q->limit($maxTree);
+            $roots = array();
+            foreach ($this->modx->getCollection('modResource', $q) as $r) {
+                $rid = (int) $r->get('id');
+                $roots[] = array(
+                    'id'          => $rid,
+                    'pagetitle'   => $r->get('pagetitle'),
+                    'context_key' => $r->get('context_key'),
+                    'template'    => (int) $r->get('template'),
+                    'published'   => (bool) $r->get('published'),
+                    'isfolder'    => (bool) $r->get('isfolder'),
+                    'child_count' => $cnt('modResource', array('parent' => $rid, 'deleted' => 0)),
+                );
+            }
+            $out['resource_tree'] = array('depth' => 1, 'total_roots' => $rootTotal, 'truncated' => $rootTotal > count($roots), 'note' => 'Roots + child counts only. Drill down with list_resources(parent=...).', 'roots' => $roots);
+        }
+
+        if (isset($want['resources_by_context'])) {
+            $rbc = array();
+            $cq = $this->modx->newQuery('modContext');
+            $cq->select(array('key'));
+            foreach ($this->modx->getCollection('modContext', $cq) as $ctx) {
+                $k = $ctx->get('key');
+                $rbc[] = array('context' => $k, 'count' => $cnt('modResource', array('context_key' => $k, 'deleted' => 0)));
+            }
+            $out['resources_by_context'] = $rbc;
+        }
+
+        if (isset($want['element_categories'])) {
+            $catTotal = $cnt('modCategory');
+            $items = array();
+            $q = $this->modx->newQuery('modCategory');
+            $q->select(array('id', 'category'));
+            $q->sortby('category', 'ASC');
+            $q->limit($cap);
+            foreach ($this->modx->getCollection('modCategory', $q) as $c) { $items[] = array('id' => (int) $c->get('id'), 'name' => $c->get('category')); }
+            $out['element_categories'] = array('total' => $catTotal, 'truncated' => $catTotal > count($items), 'items' => $items);
+        }
+
+        if (isset($want['content_types'])) {
+            $items = array();
+            $q = $this->modx->newQuery('modContentType');
+            $q->select(array('id', 'name', 'mime_type', 'file_extensions'));
+            $q->limit($cap);
+            foreach ($this->modx->getCollection('modContentType', $q) as $ct) {
+                $items[] = array('id' => (int) $ct->get('id'), 'name' => $ct->get('name'), 'mime' => $ct->get('mime_type'), 'extensions' => $ct->get('file_extensions'));
+            }
+            $out['content_types'] = $items;
+        }
+
+        if (isset($want['contexts'])) {
+            $items = array();
+            $q = $this->modx->newQuery('modContext');
+            $q->select(array('key', 'name'));
+            foreach ($this->modx->getCollection('modContext', $q) as $ctx) { $items[] = array('key' => $ctx->get('key'), 'name' => $ctx->get('name')); }
+            $out['contexts'] = $items;
+        }
+
+        if (isset($want['integrations'])) {
+            $rep = $this->getIntegrationsReport();
+            $out['integrations'] = isset($rep['integrations']) ? $rep['integrations'] : array();
+        }
+
+        return $out;
     }
 
     private function shouldAutoStatic($type) {

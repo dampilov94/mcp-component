@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.8.14 (2026-06-22)
+
+- `project_overview` — orient on a whole installed site in ONE compact, token-safe call:
+  template↔TV map, resource/product COUNTS (overall + by template + by context), a shallow
+  resource tree (roots + child counts, capped), element categories, content types, contexts,
+  integrations. Scales with structure not content (a 100k-resource site returns the same small
+  payload); per-item browsing stays in list_resources / list_elements. `sections` and
+  `max_tree_nodes` params; documented as the "orient first" step in getting_started.
+
 ## 1.8.13 (baseline)
 
 Capability baseline (history before this point intentionally collapsed). The server exposes a

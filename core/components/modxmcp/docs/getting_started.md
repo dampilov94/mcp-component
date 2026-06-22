@@ -12,6 +12,11 @@ contexts, property sets, package management, namespaces, lexicon) can be switche
 manager (Components → modxMCP). If a tool you need is missing, the group is probably disabled —
 tell the user to enable it there. `modx_list_actions` shows all groups incl. disabled ones.
 
+**Orient first.** On an unfamiliar site, call `modx_project_overview` once — it returns a
+compact map (template↔TV, resource/product counts overall + by template/context, a shallow
+resource tree, categories, content types, integrations) without pulling content, so it's cheap
+even on huge sites. Then drill in with `list_resources` / `list_elements` where needed.
+
 **Discovery first.** Before unfamiliar work: `modx_list_actions`, `modx_check_integrations`,
 `modx_list_tv_input_types`, and `modx_help` topics. To understand an installed add-on, read its
 source with `modx_get_component_files` + `modx_read_component_file` (see the `study_component` topic).

@@ -1060,6 +1060,18 @@ const toolDefinitions = [
     inputSchema: { type: "object", properties: {} },
   },
   {
+    name: "modx_project_overview",
+    description:
+      "Orient on the whole installed site in ONE compact, cheap call. Returns STRUCTURE + COUNTS (not content): template↔TV map, resource/product COUNTS (overall + by template + by context), a shallow resource tree (roots + child counts only), element categories, content types, contexts, installed integrations. Token-safe on huge sites (100k resources return the same small payload) — for per-item browsing use list_resources / list_elements. Call this FIRST when starting on an unfamiliar project. Optional `sections` to fetch only some parts; `max_tree_nodes` caps the tree roots.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sections: { type: "array", items: { type: "string", enum: ["modx", "counts", "templates", "tvs", "resource_tree", "resources_by_template", "resources_by_context", "element_categories", "content_types", "contexts", "integrations"] }, description: "Subset of sections to return (default: all)." },
+        max_tree_nodes: { type: "number", description: "Max root resources in resource_tree (default 50)." },
+      },
+    },
+  },
+  {
     name: "modx_system_info",
     description: "Environment/diagnostic info: MODX version, modxMCP version, PHP version, db type, key paths.",
     inputSchema: { type: "object", properties: {} },
