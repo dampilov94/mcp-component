@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.8.15 (2026-06-23)
+
+- TV authoring guidance (mission: help any model pick the right input type): `list_tv_input_types`
+  now returns per-core-type `use` (when to pick it) + `requires` (extra create_element keys like
+  elements/media_source); the `tv_input_types` help doc rewritten into a "task → type" decision
+  guide with correct examples.
+- Robustness: `list_tv_input_types` no longer 500s when a third-party plugin on the manager event
+  `OnTVInputRenderList` fatals headlessly (e.g. Ace's `addLexiconTopic() on null`). The event
+  invocation is now guarded (Exception + Throwable) — a misbehaving plugin's custom types are
+  skipped instead of crashing the action.
+
 ## 1.8.14 (2026-06-22)
 
 - `project_overview` — orient on a whole installed site in ONE compact, token-safe call:

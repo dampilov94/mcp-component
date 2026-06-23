@@ -4,7 +4,7 @@ if (!class_exists("ModxMCPClientException")) {
     class ModxMCPClientException extends Exception {}
 }
 class modxMCP {
-    const VERSION = '1.8.14';
+    const VERSION = '1.8.15';
     public $modx;
     public $config =[];
     private $actionSpecsCache = null;
@@ -1851,18 +1851,44 @@ class modxMCP {
      * exactly as the manager builds the TV 'Input Type' dropdown.
      */
     private function listTvInputTypes() {
+        // Each core type carries `use` (when to pick it) + `requires` (extra create_element keys)
+        // so a model can choose the right field_type without reading the docs. See help topic
+        // tv_input_types for full examples.
+        $g = function ($label, $use, $requires) { return array('label' => $label, 'use' => $use, 'requires' => $requires); };
         $core = array(
-            'text' => 'Text', 'textarea' => 'Textarea', 'textareamini' => 'Textarea (Mini)',
-            'rawtext' => 'Text (No Filters)', 'rawtextarea' => 'Textarea (No Filters)',
-            'richtext' => 'RichText', 'date' => 'Date', 'number' => 'Number',
-            'email' => 'Email', 'url' => 'URL', 'hidden' => 'Hidden',
-            'checkbox' => 'Checkbox', 'listbox' => 'Listbox (Single-Select)',
-            'listbox-multiple' => 'Listbox (Multi-Select)', 'radio' => 'Radio Options',
-            'image' => 'Image', 'file' => 'File', 'resourcelist' => 'Resource List',
-            'tag' => 'Tag', 'autotag' => 'Auto-Tag',
+            'text'             => $g('Text', 'short single-line text (titles, labels, css class)', array()),
+            'textarea'         => $g('Textarea', 'multi-line plain text (no editor)', array()),
+            'textareamini'     => $g('Textarea (Mini)', 'a few lines of plain text', array()),
+            'rawtext'          => $g('Text (No Filters)', 'single-line text stored raw (HTML/code, not output-filtered)', array()),
+            'rawtextarea'      => $g('Textarea (No Filters)', 'multi-line raw text/HTML/code (not filtered)', array()),
+            'richtext'         => $g('RichText', 'formatted body content via the WYSIWYG editor', array()),
+            'date'             => $g('Date', 'a date / datetime value', array('input_properties.format? (e.g. %Y-%m-%d)')),
+            'number'           => $g('Number', 'a numeric value', array('input_properties.min/max/step? (optional)')),
+            'email'            => $g('Email', 'an email address', array()),
+            'url'              => $g('URL', 'a URL', array()),
+            'hidden'           => $g('Hidden', 'a value not shown in the edit form', array()),
+            'checkbox'         => $g('Checkbox', 'one or more on/off options', array('elements (Label==value||...) for multiple', 'default_text?')),
+            'listbox'          => $g('Listbox (Single-Select)', 'pick ONE value from a fixed list', array('elements (Label==value||...)', 'default_text?')),
+            'listbox-multiple' => $g('Listbox (Multi-Select)', 'pick SEVERAL values from a list', array('elements (Label==value||...)')),
+            'radio'            => $g('Radio Options', 'pick ONE value shown as radio buttons', array('elements (Label==value||...)', 'default_text?')),
+            'image'            => $g('Image', 'pick/upload an image', array('media_source (id)')),
+            'file'             => $g('File', 'pick/upload a file', array('media_source (id)')),
+            'resourcelist'     => $g('Resource List', 'pick a MODX resource (page) by id', array('input_properties.parents? to limit the tree')),
+            'tag'              => $g('Tag', 'comma-separated tags', array()),
+            'autotag'          => $g('Auto-Tag', 'tags with auto-complete', array()),
         );
         $custom = array();
-        $results = $this->modx->invokeEvent('OnTVInputRenderList');
+        // OnTVInputRenderList is a manager event; some add-ons (e.g. Ace) implement it assuming a
+        // manager-controller context and fatal headlessly. A misbehaving plugin must not 500 this
+        // action — catch it and just skip its custom types. (Two catches for PHP 5/7+ portability.)
+        $results = null;
+        try {
+            $results = $this->modx->invokeEvent('OnTVInputRenderList');
+        } catch (Exception $e) {
+            $results = null;
+        } catch (Throwable $e) {
+            $results = null;
+        }
         if (is_array($results)) {
             foreach ($results as $res) {
                 if (is_array($res)) { $res = implode("\n", $res); }

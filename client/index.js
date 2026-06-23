@@ -1079,7 +1079,7 @@ const toolDefinitions = [
   {
     name: "modx_list_tv_input_types",
     description:
-      "List the TV input (widget) types available on this site: core types plus any custom ones registered by other components (e.g. MIGX adds 'migx'/'migxdb'). Use the returned keys as 'field_type' when creating a TV.",
+      "List the TV input (widget) types available on this site. Core types come with `use` (when to pick each) and `requires` (extra create_element keys like elements/media_source) so you choose the right `field_type` for the task; plus any custom types other components register (e.g. MIGX adds 'migx'/'migxdb'). Use a key as `field_type` when creating a TV. See the `tv_input_types` help topic for full examples.",
     inputSchema: { type: "object", properties: {} },
   },
   {
