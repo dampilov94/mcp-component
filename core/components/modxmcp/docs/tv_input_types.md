@@ -3,7 +3,8 @@
 A TV is a custom field on resources. Create one with `modx_create_element` (`type:"tv"`). The
 hardest part is choosing the **right input type** (`field_type`) for the task and wiring its
 extras. Use the table below; `modx_list_tv_input_types` returns the same `use`/`requires` hints
-live (plus any add-on types installed on this site).
+live (plus any add-on types installed on this site). Unsure which to pick? Describe the need to
+`modx_suggest_tv_type` (English or Russian) — it returns ranked types + a ready create skeleton.
 
 ## Pick by task
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.8.17 (2026-06-23)
+
+- `suggest_tv_type` — describe a field need (English or Russian) and get ranked candidate TV
+  `field_type`s with reasons + a ready-to-edit create_element skeleton (with the extra keys that
+  type needs) for the top pick. Deterministic bilingual keyword rules; helps a model unsure about
+  MODX pick the right TV type. (group: tv_inputs)
+- `list_tv_input_types` now also reports a `colorpicker` custom type when its namespace is
+  installed, even if the OnTVInputRenderList event was swallowed (e.g. a broken plugin on it).
+
 ## 1.8.16 (2026-06-23)
 
 - MIGX authoring guide (`migx` help doc) rewritten to lead with a complete, copy-pasteable

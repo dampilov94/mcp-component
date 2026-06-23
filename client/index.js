@@ -1077,6 +1077,18 @@ const toolDefinitions = [
     inputSchema: { type: "object", properties: {} },
   },
   {
+    name: "modx_suggest_tv_type",
+    description:
+      "Unsure which TV input type fits a need? Describe it (English or Russian) and get ranked candidate `field_type`s with reasons + a ready-to-edit create_element skeleton for the top pick (with the extra keys that type needs). Deterministic helper for picking the right TV type; then create it with modx_create_element. See also the tv_input_types help topic.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        description: { type: "string", description: "What the field should hold, e.g. 'a hero background image', 'repeating gallery rows', 'выбор статуса из списка'." },
+      },
+      required: ["description"],
+    },
+  },
+  {
     name: "modx_list_tv_input_types",
     description:
       "List the TV input (widget) types available on this site. Core types come with `use` (when to pick each) and `requires` (extra create_element keys like elements/media_source) so you choose the right `field_type` for the task; plus any custom types other components register (e.g. MIGX adds 'migx'/'migxdb'). Use a key as `field_type` when creating a TV. See the `tv_input_types` help topic for full examples.",
