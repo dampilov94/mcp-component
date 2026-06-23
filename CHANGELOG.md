@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.19 (2026-06-23)
+
+- Docs/steering: `getting_started` rewritten around a numbered **recommended workflow**
+  (orient → locate → look-before-change/`describe_object` → cheap edits → dry-run destructive →
+  verify) so a model that's weak at MODX follows the safe, token-efficient path; `index` help
+  landing refreshed to surface `project_overview`, `suggest_tv_type`, `describe_object` and the
+  current topics. Helps reduce "which of ~180 tools do I use?" load.
+
 ## 1.8.18 (2026-06-23)
 
 - MIGX guide expanded (verified against the MIGX 3.0.2 source): documents `inputTV` — reuse an

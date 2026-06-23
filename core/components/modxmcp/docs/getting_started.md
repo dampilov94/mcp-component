@@ -1,35 +1,40 @@
 # Getting started
 
-**Model.** Everything is an *action* called via a `modx_*` tool. Responses are the data directly
-(the success envelope is stripped). Errors come back with a clear message — read it and fix the call.
+Everything is an *action* called via a `modx_*` tool. Responses are the data directly (the
+success envelope is stripped). Errors come back with a clear message — read it and fix the call.
 
-**Elements vs other objects.** For elements/resources the element tools take a `type`
-(`chunk`/`snippet`/`template`/`resource`/`tv`/`category`/`plugin`) plus fields. Most other areas
-(settings, ACL, miniShop2, contexts, …) have their own dedicated `modx_*` tools.
+## Recommended workflow (follow this order)
 
-**Capability groups.** Optional groups (miniShop2, MIGX, VersionX, VirtualPage, Access Control,
-contexts, property sets, package management, namespaces, lexicon) can be switched off in the
-manager (Components → modxMCP). If a tool you need is missing, the group is probably disabled —
-tell the user to enable it there. `modx_list_actions` shows all groups incl. disabled ones.
+1. **Orient** — on an unfamiliar site call `modx_project_overview` once: a compact map
+   (templates↔TVs, resource/product counts overall + by template/context, a shallow resource
+   tree, categories, content types, integrations) with no content, cheap even on huge sites.
+2. **Locate** — `modx_search_code` (full-text; returns each hit's `line` + `line_text`),
+   `modx_find_usages`, `modx_list_resources` / `modx_list_elements` (with a `query` filter).
+3. **Look before you change** — read the target (`modx_get_element`, or `modx_view_element` for
+   numbered lines of a big element). On an unfamiliar object, `modx_describe_object` gives the
+   real field names + types so you don't guess.
+4. **Change cheaply** — for a few lines, `modx_edit_element_lines` (send only changed lines, with
+   an `expect` anchor) instead of `modx_update_element` (full rewrite). For a site-wide string
+   change, `modx_replace_across`.
+5. **Be safe with destructive ops** — `modx_delete_element`, `modx_bulk_resources` and
+   `modx_replace_across` all take `dry_run:true` — preview first, then run for real. Resource
+   delete is **soft** (MODX trash) → restore with `modx_undelete_resource`.
+6. **Apply & verify** — clear cache if needed (`modx_clear_cache`), then re-read to confirm.
 
-**Orient first.** On an unfamiliar site, call `modx_project_overview` once — it returns a
-compact map (template↔TV, resource/product counts overall + by template/context, a shallow
-resource tree, categories, content types, integrations) without pulling content, so it's cheap
-even on huge sites. Then drill in with `list_resources` / `list_elements` where needed.
+## Key facts
 
-**Discovery first.** Before unfamiliar work: `modx_list_actions`, `modx_check_integrations`,
-`modx_list_tv_input_types`, and `modx_help` topics. To understand an installed add-on, read its
-source with `modx_get_component_files` + `modx_read_component_file` (see the `study_component` topic).
+- **Elements vs other objects.** Element tools take a `type`
+  (`chunk`/`snippet`/`template`/`resource`/`tv`/`category`/`plugin`) plus fields. Other areas
+  (settings, ACL, miniShop2, contexts, media, …) have their own dedicated `modx_*` tools.
+- **Capability groups.** Optional groups (miniShop2, MIGX, VersionX, VirtualPage, Access Control,
+  contexts, property sets, package management, namespaces, lexicon) can be switched off in the
+  manager (Components → modxMCP). If a tool you need is missing, that group is probably disabled —
+  ask the user to enable it. `modx_list_actions` shows all groups incl. disabled ones.
+- **TV fields.** Unsure which input type? `modx_suggest_tv_type` (describe the need, EN/RU) →
+  ranked types + a create skeleton. Details in the `tv_input_types` topic; repeating rows → `migx`.
+- **Static files.** `make_static` (and `modxmcp.auto_static`) store an element's code as a file
+  under `core/elements/` so it can be edited over FTP / kept in git.
+- **Study an add-on.** `modx_get_component_files` + `modx_read_component_file` read installed
+  component source; see the `study_component` topic.
 
-**Find → edit shortcut.** `modx_search_code` returns each content hit with `line` and `line_text`
-(the exact matched line). For a one-line change, pass `line` as start_line/end_line and `line_text`
-as `expect` to `modx_edit_element_lines` directly — no need to read the whole element first.
-
-**Editing code efficiently.** `modx_update_element` replaces the WHOLE content. To change a few
-lines of a large chunk/snippet/template/plugin, prefer line editing: `modx_view_element` shows
-numbered lines (windowed via `start_line`/`end_line`), then `modx_edit_element_lines` applies edits
-sending only the changed lines. Pass `expect` (the current text of the lines) as a safety anchor —
-it is verified/relocated and a mismatch aborts the whole call. Works on static and DB-stored elements.
-
-**Static files.** `make_static` (and the `modxmcp.auto_static` setting) store an element's code as
-a file under `core/elements/` so it can be edited over FTP / kept in git.
+Deeper guides via `modx_help`: `tv_input_types`, `migx`, `minishop2`, `acl`, `study_component`.

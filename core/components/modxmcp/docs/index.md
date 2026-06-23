@@ -1,14 +1,15 @@
 # modxMCP — built-in help
 
-Call `modx_help` with one of these `topic` values to get a focused guide. Read the relevant
-topic before doing unfamiliar work — it explains the correct fields and workflow.
+Call `modx_help` with a `topic` for a focused guide. **New to a site? Read `getting_started`
+first** (the recommended workflow), and call `modx_project_overview` to orient in one cheap call.
 
-- `getting_started` — core concepts, how actions/responses work, capability groups.
-- `tv_input_types` — how to create every kind of TV (template variable) field, incl. custom ones.
-- `study_component` — how to learn and use a newly-installed component (read its source, call its processors).
+- `getting_started` — recommended workflow + core concepts (start here).
+- `tv_input_types` — choose the right TV input type per task and wire it (see also `modx_suggest_tv_type`).
+- `migx` — repeating structured rows: inline configs, `inputTV` (+ `ForMigx` convention), gotchas.
+- `study_component` — learn & use a newly-installed add-on from its source.
 - `minishop2` — products, options, links, categories, orders.
-- `migx` — MIGX configurations.
 - `acl` — users, groups, roles, policies, resource/context access.
 
-Other discovery tools: `modx_list_actions` (what this server supports, incl. disabled groups),
-`modx_check_integrations` (which add-ons are installed), `modx_list_tv_input_types` (available TV input types).
+Discovery tools: `modx_project_overview` (whole-site map, cheap), `modx_list_actions` (supported
+actions incl. disabled groups), `modx_check_integrations` (installed add-ons),
+`modx_list_tv_input_types` (TV types + hints), `modx_describe_object` (real field names of a class).
