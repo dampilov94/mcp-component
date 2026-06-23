@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.8.16 (2026-06-23)
+
+- MIGX authoring guide (`migx` help doc) rewritten to lead with a complete, copy-pasteable
+  INLINE MIGX TV example (a gallery: fields + columns as JSON strings in `input_properties`,
+  no separate config object) so a model can build a working MIGX TV on a fresh site without an
+  existing config to copy. Field/column reference + the renderChunk gotchas (server-side render,
+  `renderchunktpl` key, mandatory virtual `dataIndex`) kept. Verified live: the documented
+  example creates a valid `field_type:"migx"` TV end-to-end.
+
 ## 1.8.15 (2026-06-23)
 
 - TV authoring guidance (mission: help any model pick the right input type): `list_tv_input_types`

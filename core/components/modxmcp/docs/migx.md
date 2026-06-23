@@ -1,47 +1,67 @@
-# MIGX
+# MIGX — repeating structured rows in a TV
 
-- **Configurations**: `modx_migx_list_configs`, `modx_migx_get_config`, `modx_migx_create_config`,
-  `modx_migx_update_config`, `modx_migx_delete_config`. The grid/tab definitions (`formtabs`,
-  `columns`, …) are JSON strings in MIGX's own format — copy the structure from an existing config
-  (get one first) rather than guessing.
-- **MIGX TVs**: create a TV with `field_type:"migx"`. Two ways to configure it via
-  `input_properties`:
-  - **Named config**: `{"configs":"MyConfig"}` — points at a migxConfig object (reusable across
-    TVs, but an xPDO-created config needs the one-time native-editor save; see Gotchas).
-  - **Inline (recommended for one-off TVs)**: leave `configs` empty and put the JSON straight into
-    `{"formtabs":"<json>","columns":"<json>"}`. MIGX falls back to these inline properties when no
-    config is bound (`migxinputrender` uses `$properties['columns']`/`['formtabs']`), so there is
-    **no separate config object to register** — the grid and add/edit form work immediately after
-    `clear_cache`. Verified stable across resource saves on MIGX 3.0.2.
-  See the `tv_input_types` topic.
+MIGX stores a list of rows (e.g. a gallery, slides, feature blocks) in one TV. A row has fields;
+a grid shows columns. **Recommended path: an INLINE config** — put the field/column JSON straight
+into the TV's `input_properties`, no separate config object, works immediately after `clear_cache`.
+(Named configs are reusable but need an extra registration step — see the end.)
 
-## Gotchas (verified on MODX 2.8.8 + MIGX 3.0.2)
+## Simplest working example (copy, then adapt)
 
-- **Register a programmatically-created config once via the native MIGX editor.** A config made
-  with `modx_migx_create_config` (direct xPDO) stores valid `formtabs`/`columns` JSON, but the
-  TV's embedded grid renders the *default* "Title" column with empty rows until the config is
-  opened and saved once in **Components → MIGX** (right-click the row → Редактировать → Сохранить).
-  That native save populates MIGX's relational form-tab tables (`migx_formtabs`/`migx_formtab_fields`,
-  adding `MIGX_id`s) and registers the config for TV rendering. This is a one-time step **per
-  config**; later edits to `columns` via the API apply directly after `clear_cache` (no editor
-  re-save needed).
-- **`renderChunk` columns ARE rendered server-side** (`migx.class.php` → `checkRenderOptions` →
-  `renderChunk($tpl, $row, false)` → `parseChunk` + `processElementTags`). Set the column property
-  exactly `"renderer":"this.renderChunk"` and `"renderchunktpl":"<inline template>"` (note the key
-  is `renderchunktpl`, not `rendchunktpl`). The inline template gets the row fields as placeholders
-  and **executes snippets**, so you can resolve a stored id to its title, e.g.
-  ``"renderchunktpl":"[[pdoField? &id=`[[+resource]]` &field=`pagetitle`]] (#[[+resource]])"``.
-  The client-side `this.renderChunk` JS just returns the already-server-rendered value. Common
-  mistakes that make the cell show `Array(...)`: wrong key (`rendchunktpl`) or passing a chunk
-  *name* expecting client-side resolution.
-- **CRITICAL: a `renderChunk` column must use a VIRTUAL `dataIndex`, not a real stored field.**
-  `checkRenderOptions` does `$row[dataIndex] = renderChunk(...)`, overwriting that field for display.
-  If `dataIndex` equals a stored form field (e.g. `resource`), the rendered text gets persisted back
-  into the TV on the next resource save, and each save/render nests it again — data corrupts
-  recursively (`resource: " (#Новости (#6))"` …). Instead give the display column an invented
-  `dataIndex` (e.g. `resourcetitle`) and reference the real field inside the template
-  (`[[+resource]]`); keep a separate plain column with `dataIndex:"resource"` (no renderer) if you
-  also want the raw id. The real stored field then stays untouched and the frontend keeps getting
-  clean values.
+A gallery TV (each row = an image + a caption). `formtabs` and `columns` are **JSON strings**
+inside `input_properties`; `configs` stays empty for inline mode:
 
-Enable the **migx** capability group if these tools are missing.
+```
+{"action":"create_element","type":"tv","data":{
+  "name":"gallery","caption":"Gallery","field_type":"migx","templates":[1],
+  "input_properties":{
+    "configs":"",
+    "formtabs":"[{\"caption\":\"Item\",\"fields\":[{\"field\":\"image\",\"caption\":\"Image\",\"inputTVtype\":\"image\",\"pos\":1},{\"field\":\"title\",\"caption\":\"Title\",\"inputTVtype\":\"text\",\"pos\":2}]}]",
+    "columns":"[{\"header\":\"Image\",\"dataIndex\":\"image\",\"width\":120},{\"header\":\"Title\",\"dataIndex\":\"title\",\"width\":200}]"
+  }
+}}
+```
+
+That's a complete, working MIGX TV. Attach it to the resource's template (`templates`), clear
+cache, and the grid + add/edit form appear on those resources.
+
+## Fields (`formtabs`)
+
+`formtabs` = array of tabs; each tab has `caption` + `fields[]`. Each field:
+- `field` — the stored key (use in columns/templates as `[[+field]]`).
+- `caption` — label in the add/edit form.
+- `inputTVtype` — the widget: `text`, `textarea`, `richtext`, `image`, `listbox`, `checkbox`,
+  `colorpicker` (if installed), … (same family as TV input types).
+- `inputOptionValues` — options for listbox/checkbox: `"Red==red||Blue==blue"`, or a DB binding
+  `"@SELECT \`pagetitle\`,\`id\` FROM \`[[+PREFIX]]site_content\` WHERE \`deleted\`=0"`.
+- `default`, `pos` (order).
+
+## Columns (`columns`)
+
+`columns` = array of grid columns: `header`, `dataIndex` (which field to show), `width`. For a
+plain field, `dataIndex` = the field key. To render a column with a chunk/snippet, see below.
+
+## Gotchas (verified on MODX 2.8.8 + MIGX 3.0.x)
+
+- **`renderChunk` columns render SERVER-side** (`migx.class.php` → `checkRenderOptions` →
+  `renderChunk` → `parseChunk` + `processElementTags`), so snippets execute. Set on the column:
+  `"renderer":"this.renderChunk"` and `"renderchunktpl":"<inline template>"` — the key is
+  **`renderchunktpl`** (not `rendchunktpl`). The template gets row fields as `[[+field]]` and runs
+  snippets, e.g. resolve a stored id to a title:
+  `"renderchunktpl":"[[pdoField? &id=\`[[+resource]]\` &field=\`pagetitle\`]]"`. Wrong key or
+  passing a chunk *name* makes the cell show `Array(...)`.
+- **CRITICAL — a `renderChunk` column MUST use a VIRTUAL `dataIndex`, not a real field.**
+  `checkRenderOptions` does `$row[dataIndex] = renderChunk(...)`, overwriting that field for
+  display. If `dataIndex` is a stored field (e.g. `resource`), the rendered text is saved back
+  into the TV on the next resource save and nests recursively → data corruption. Give the display
+  column an invented `dataIndex` (e.g. `resourcetitle`) and reference the real field inside the
+  template (`[[+resource]]`); keep a separate plain column `{"dataIndex":"resource"}` if you also
+  want the raw value. (Real working example on this pattern: the demo `home_list` TV.)
+
+## Named (reusable) configs
+
+For a config shared across TVs: create it with `modx_migx_create_config` (needs the **migx**
+capability group enabled), then reference it via `input_properties:{"configs":"MyConfig"}`.
+Caveat on MODX/MIGX here: an xPDO-created config may render the default "Title" column with empty
+rows until it's opened+saved once in **Components → MIGX** (that fills MIGX's relational
+form-tab tables). The inline path above avoids this entirely — prefer it unless you truly need a
+shared config. The `migx_*` tools (list/get/create/update/delete config) are in the **migx** group.
