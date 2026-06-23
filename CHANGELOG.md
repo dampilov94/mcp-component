@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.8.18 (2026-06-23)
+
+- MIGX guide expanded (verified against the MIGX 3.0.2 source): documents `inputTV` — reuse an
+  existing TV as a MIGX field's input (for resource pickers limited by parent/template, richtext,
+  media, or nested MIGX) instead of hand-writing `@SELECT` — with the required `ForMigx` naming
+  convention for those helper TVs (e.g. `listNewsForMigx`). Also clarifies that inline
+  `input_properties` (formtabs/columns + optional contextmenus/actionbuttons/columnbuttons/
+  filters/extended) is as capable as a named config for TV-stored MIGX, so the inline-only,
+  all-JSON workflow is the recommended path (named configs only for cross-TV reuse / MIGXdb).
+
 ## 1.8.17 (2026-06-23)
 
 - `suggest_tv_type` — describe a field need (English or Russian) and get ranked candidate TV
