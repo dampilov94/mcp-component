@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.8.20 (2026-06-25)
+
+- Fix: `edit_element_lines` and `replace_across` now fire the core save events
+  (`OnBefore/On{Type}FormSave`) like a normal element update, so **VersionX (and any other
+  save-event plugin) creates a version on a line/replace edit** — previously these saved the
+  content directly (`$el->save()` / file write) and bypassed the events, so no version was made
+  (create and full `update_element` did version, line edits didn't). They now save the full
+  field set through the element update processor (content field overridden), and still write the
+  static file first for static elements (so the event sees the new content). Token efficiency is
+  unchanged — the model still sends only the delta; the server reconstructs and saves properly.
+
 ## 1.8.19 (2026-06-23)
 
 - Docs/steering: `getting_started` rewritten around a numbered **recommended workflow**

@@ -4,7 +4,7 @@ if (!class_exists("ModxMCPClientException")) {
     class ModxMCPClientException extends Exception {}
 }
 class modxMCP {
-    const VERSION = '1.8.19';
+    const VERSION = '1.8.20';
     public $modx;
     public $config =[];
     private $actionSpecsCache = null;
@@ -1384,10 +1384,10 @@ class modxMCP {
 
     private function lineEditMap() {
         return array(
-            'chunk'    => array('class' => 'modChunk',    'field' => 'snippet'),
-            'snippet'  => array('class' => 'modSnippet',  'field' => 'snippet'),
-            'template' => array('class' => 'modTemplate', 'field' => 'content'),
-            'plugin'   => array('class' => 'modPlugin',   'field' => 'plugincode'),
+            'chunk'    => array('class' => 'modChunk',    'field' => 'snippet',    'proc' => 'element/chunk/'),
+            'snippet'  => array('class' => 'modSnippet',  'field' => 'snippet',    'proc' => 'element/snippet/'),
+            'template' => array('class' => 'modTemplate', 'field' => 'content',    'proc' => 'element/template/'),
+            'plugin'   => array('class' => 'modPlugin',   'field' => 'plugincode', 'proc' => 'element/plugin/'),
         );
     }
 
@@ -1431,6 +1431,8 @@ class modxMCP {
 
     /** Write content back where it came from: static file first (source of truth), then DB field. */
     private function writeEffectiveContent($el, $m, $isStatic, $staticAbs, $content) {
+        // For a static element the file is the source of truth — write it FIRST so that when the
+        // save event fires below, getContent() (which VersionX reads) already sees the new content.
         if ($isStatic && $staticAbs !== null) {
             $dir = dirname($staticAbs);
             if (!is_dir($dir) && !@mkdir($dir, 0755, true)) {
@@ -1440,9 +1442,17 @@ class modxMCP {
                 throw new ModxMCPClientException("cannot write static file {$staticAbs}");
             }
         }
-        $el->set($m['field'], $content);
-        if (!$el->save()) {
-            throw new ModxMCPClientException('element save failed.');
+        // Save through the core update processor (not a bare $el->save()) so the On{Type}FormSave
+        // events fire — VersionX and any other save-event plugins must run, making a line/replace
+        // edit equivalent to a normal element update. Send the element's FULL current fields with
+        // the content field overridden (the processor validates required fields like `name`).
+        $type = trim(str_replace('element/', '', $m['proc']), '/'); // chunk|snippet|template|plugin
+        $data = $el->toArray();
+        $data[$m['field']] = $content;
+        $data = $this->filterProcessorData($type, $data);
+        $resp = $this->modx->runProcessor($m['proc'] . 'update', $data);
+        if (!$resp || $resp->isError()) {
+            throw new ModxMCPClientException('element save failed: ' . ($resp ? $this->formatProcessorErrors($resp) : 'no response.'));
         }
     }
 
