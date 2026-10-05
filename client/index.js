@@ -8,7 +8,9 @@ const {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } = require("@modelcontextprotocol/sdk/types.js");
-const axios = require("axios");
+const { randomUUID } = require("node:crypto");
+const { AjvJsonSchemaValidator } = require("@modelcontextprotocol/sdk/validation/ajv");
+const { ModxApiClient, ModxApiError } = require("./api.js");
 const fs = require("fs");
 const path = require("path");
 
@@ -87,23 +89,14 @@ function noteCaps(caps) {
   }
 }
 
-async function modxApiRequest(payload) {
-  try {
-    const response = await axios.post(MODX_SITE_URL, payload, {
-      headers: {
-        "X-MCP-Token": API_TOKEN,
-        "Content-Type": "application/json; charset=utf-8",
-      },
-    });
-    if (response.data && typeof response.data === "object") noteCaps(response.data.caps);
-    return response.data;
-  } catch (error) {
-    if (error.response) {
-      if (error.response.data && typeof error.response.data === "object") noteCaps(error.response.data.caps);
-      throw new Error(`MODX Error: ${JSON.stringify(error.response.data)}`);
-    }
-    throw new Error(`Network Error: ${error.message}`);
-  }
+const modxApi = new ModxApiClient(MODX_SITE_URL, API_TOKEN, noteCaps);
+async function modxApiRequest(payload, context = {}) {
+  return modxApi.post(payload, context);
+}
+
+function isReadOnlyTool(name) {
+  return /^modx_(?:(?:ms2|migx|versionx|virtualpage)_)?(?:get|list|read|view|search|find|check|describe|suggest)_/.test(name)
+    || ["modx_help", "modx_dependency_graph", "modx_project_overview", "modx_system_info", "modx_virtualpage_resolve_route"].includes(name);
 }
 
 const ELEMENT_TYPES = [
@@ -130,6 +123,11 @@ const VIRTUALPAGE_HANDLER_TYPES = [
 ];
 
 const toolDefinitions = [
+  {
+    name: "modx_get_request_status",
+    description: "Inspect a request_id after a timeout/cancellation/connection loss without executing the action again. States: not_found, in_progress, unknown, completed, expired. include_result:true returns the recorded API response when retained. If retrying a completed call, reuse its ID as _request_id with exactly the same arguments; never start an uncertain write with a new ID without checking the site.",
+    inputSchema: { type: "object", properties: { request_id: { type: "string", pattern: "^[A-Za-z0-9_-]{16,128}$" }, include_result: { type: "boolean", description: "Return the recorded response (default false)." } }, required: ["request_id"] },
+  },
   {
     name: "modx_list_elements",
     description: "List MODX elements of a type (id + name). Supports an optional name filter and pagination.",
@@ -1746,24 +1744,39 @@ const toolDefinitions = [
   },
 ];
 
-async function fetchCapabilities() {
-  try {
-    const r = await modxApiRequest({ action: "get_capabilities", data: {} });
-    if (r && r.data && Array.isArray(r.data.disabled_actions)) {
-      return r.data;
-    }
-  } catch (e) {
-    // Server too old or unreachable — advertise everything.
+// Keep request identity outside business arguments and advertise it only for write tools.
+for (const tool of toolDefinitions) {
+  if (!isReadOnlyTool(tool.name)) {
+    tool.inputSchema.properties = {
+      ...tool.inputSchema.properties,
+      _request_id: { type: "string", pattern: "^[A-Za-z0-9_-]{16,128}$", description: "Optional request ID for retrying exactly the same call. Omit for a new operation; reuse the ID reported after a timeout. A new ID may execute the action again." },
+    };
   }
-  return null;
+}
+const toolsByName = new Map(toolDefinitions.map((tool) => [tool.name, tool]));
+const schemaProvider = new AjvJsonSchemaValidator();
+const argumentValidators = new Map();
+
+async function fetchCapabilities(context = {}) {
+  try {
+    const r = await modxApiRequest({ action: "get_capabilities", data: {} }, context);
+    if (!r.data || !Array.isArray(r.data.disabled_actions) || !r.data.disabled_actions.every((action) => typeof action === "string")) {
+      throw new ModxApiError("Endpoint returned invalid capability data.", undefined, "invalid_response");
+    }
+    return r.data;
+  } catch (error) {
+    // Fallback is only for old endpoints that genuinely lack this action.
+    if (!(error instanceof ModxApiError) || error.httpStatus !== 400 || !/Unknown action|Invalid element type/i.test(error.message)) throw error;
+    return null;
+  }
 }
 
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => {
   // Hide tools whose capability group is disabled on the server (modxmcp.disabled_groups) —
   // disabled groups never reach the model's tool list, which is what saves tokens. The live
   // refresh is driven by noteCaps() (called inside modxApiRequest on every response), so no
   // polling is needed.
-  const caps = await fetchCapabilities();
+  const caps = await fetchCapabilities({ signal: extra.signal });
   const disabled = new Set(caps && Array.isArray(caps.disabled_actions) ? caps.disabled_actions : []);
   const tools = disabled.size
     ? toolDefinitions.filter((t) => !disabled.has(t.name.replace(/^modx_/, "")))
@@ -1775,74 +1788,37 @@ function formatCodeFromResult(resultData) {
   return resultData.snippet || resultData.plugincode || resultData.content || "";
 }
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
-
+server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   try {
-    if (name === "modx_list_elements") {
-      const result = await modxApiRequest({
-        action: "list_elements",
-        type: args.type,
-        data: args,
-      });
-      return {
-        content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }],
-      };
+    const { name } = request.params;
+    const tool = toolsByName.get(name);
+    if (!tool) throw new Error(`Tool ${name} not found`);
+    const supplied = request.params.arguments ?? {};
+    if (!supplied || typeof supplied !== "object" || Array.isArray(supplied)) throw new Error("Tool arguments must be an object.");
+    let validate = argumentValidators.get(name);
+    if (!validate) {
+      validate = schemaProvider.getValidator(tool.inputSchema);
+      argumentValidators.set(name, validate);
     }
-
-    if (name === "modx_get_element") {
-      const result = await modxApiRequest({
-        action: "get_element",
-        type: args.type,
-        data: args,
-      });
-      return {
-        content: [
-          {
-            type: "text",
-            text: `=== PARAMETERS ===\n${JSON.stringify(
-              result.data,
-              null,
-              2,
-            )}\n\n=== CODE ===\n${formatCodeFromResult(result.data)}`,
-          },
-        ],
-      };
-    }
-
-    if (
-      name === "modx_update_element" ||
-      name === "modx_create_element" ||
-      name === "modx_delete_element"
-    ) {
-      const action = name.replace("modx_", "");
-      const result = await modxApiRequest({
-        action,
-        type: args.type,
-        data: args,
-      });
-      return {
-        content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }],
-      };
-    }
-
-    if (name.startsWith("modx_")) {
-      const action = name.replace("modx_", "");
-      const result = await modxApiRequest({
-        action,
-        data: args,
-      });
-      return {
-        content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }],
-      };
-    }
-
-    throw new Error(`Tool ${name} not found`);
-  } catch (error) {
+    const validation = validate(supplied);
+    if (!validation.valid) throw new Error(`Invalid arguments: ${validation.errorMessage}`);
+    const args = { ...supplied };
+    const write = !isReadOnlyTool(name);
+    const requestId = write ? (args._request_id || randomUUID()) : undefined;
+    if (write) delete args._request_id;
+    const payload = { action: name.slice("modx_".length), data: args };
+    if (["modx_list_elements", "modx_get_element", "modx_update_element", "modx_create_element", "modx_delete_element"].includes(name)) payload.type = args.type;
+    if (requestId) payload.request_id = requestId;
+    const result = await modxApiRequest(payload, { signal: extra.signal });
+    const text = name === "modx_get_element"
+      ? `=== PARAMETERS ===\n${JSON.stringify(result.data, null, 2)}\n\n=== CODE ===\n${formatCodeFromResult(result.data)}`
+      : JSON.stringify(result.data, null, 2);
     return {
-      content: [{ type: "text", text: `Error: ${error.message}` }],
-      isError: true,
+      content: [{ type: "text", text }],
+      ...(requestId ? { _meta: { request_id: requestId, idempotency_supported: result.request_id === requestId } } : {}),
     };
+  } catch (error) {
+    return { content: [{ type: "text", text: `Error: ${error.message || "Tool request failed."}` }], isError: true };
   }
 });
 
@@ -1850,8 +1826,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 // servers return 405 for GET, which is ignored.
 async function checkServerSkew() {
   try {
-    const r = await axios.get(MODX_SITE_URL, { timeout: 5000 });
-    const serverVersion = r.data && r.data.version;
+    const health = await modxApi.health();
+    const serverVersion = health.version;
     if (serverVersion && serverVersion !== "unknown" && serverVersion !== pkgInfo.version) {
       console.error(
         `modxMCP: version skew — client v${pkgInfo.version}, server v${serverVersion}. ` +

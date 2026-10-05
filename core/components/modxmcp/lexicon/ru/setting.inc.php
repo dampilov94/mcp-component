@@ -37,3 +37,9 @@ $_lang['setting_modxmcp.auto_static_desc'] = 'Если включено, соз�
 
 $_lang['setting_modxmcp.allow_run_processor'] = 'Разрешить run_processor';
 $_lang['setting_modxmcp.allow_run_processor_desc'] = 'Если включено, действие run_processor может выполнить ЛЮБОЙ процессор MODX напрямую. Мощный универсальный механизм — по умолчанию выключен. Предпочитайте специализированные действия, если они есть.';
+
+$_lang['setting_modxmcp.max_response_bytes'] = 'Максимальный размер ответа';
+$_lang['setting_modxmcp.max_response_bytes_desc'] = 'Лимит JSON-ответа в байтах (по умолчанию 4194304, минимум 1024). Превышение возвращает ошибку; действие к этому моменту могло выполниться. Проверьте статус запроса перед повтором.';
+
+$_lang['setting_modxmcp.request_retention_seconds'] = 'Хранение результатов запросов';
+$_lang['setting_modxmcp.request_retention_seconds_desc'] = 'Сколько секунд хранить ответы для повторов с тем же ID (по умолчанию 86400, минимум 60). После истечения срока ID остаётся занятым, чтобы повтор не выполнил действие снова. Журнал хранится в core/modxmcp-data/requests вне кеша и пакета компонента.';

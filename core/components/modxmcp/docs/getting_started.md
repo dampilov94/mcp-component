@@ -76,6 +76,28 @@ success envelope is stripped). Errors come back with a clear message — read it
   folder deletion through MCP; avoid concurrent FTP or other writes during removal.
   Deletion includes hidden files and has no rollback. A filesystem error can leave a partially
   deleted tree; errors say so, and success is returned only after the selected folder is gone.
+- **HTTP failures and request IDs.** Write tools generate a request ID; `_request_id` can
+  supply one explicitly for a retry with identical arguments. On a timeout, cancellation,
+  invalid response or broken connection, PHP may have completed the action. Call
+  `modx_get_request_status {request_id:"the ID from the error"}` before doing anything again.
+  `include_result:true` includes a retained original API response. `completed` means an API
+  response was recorded (check its success/error), not that every side effect succeeded.
+  `in_progress` means the request lock is held; `unknown` means a pending request ended without
+  a recorded response and is blocked from re-execution; `not_found` means no record exists.
+  Retrying with the same ID and arguments replays a completed response; different arguments
+  with the same ID are rejected. Do not give an uncertain write a fresh ID without checking
+  the site. Read tools do not get automatic IDs. Older clients omitting request_id still work,
+  but have no replay protection; older PHP endpoints cannot provide this protection.
+- **Request retention and limits.** Responses are kept for modxmcp.request_retention_seconds
+  (default 86400, minimum 60). Expired IDs remain blocked; only response bodies are purged.
+  Records survive clear_cache and token rotation under core/modxmcp-data/requests, outside
+  component package files, with private directory/file permissions and guarded PHP data files
+  that return 404 on direct HTTP access. Response bodies are base64 inside those files (not
+  encrypted). Cleanup runs on later
+  requests, not as a scheduled job. Server max_response_bytes defaults to 4 MiB (minimum 1 KiB).
+  Client env: MODX_MCP_TIMEOUT_MS (60000), MODX_MCP_MAX_REQUEST_BYTES (1 MiB),
+  MODX_MCP_MAX_RESPONSE_BYTES (4 MiB). Limits must be positive integers. No automatic retry
+  is performed; redirects are refused. Cancellation stops the HTTP wait, not PHP execution.
 - **Study an add-on.** `modx_get_component_files` + `modx_read_component_file` read installed
   component source; see the `study_component` topic.
 

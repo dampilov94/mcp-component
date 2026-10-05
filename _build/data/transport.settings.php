@@ -23,6 +23,8 @@ $defs = array(
     array('modxmcp.disabled_groups', 'versionx,virtualpage,minishop2,migx,access,property_sets,contexts,package_management,namespaces,lexicon', 'textfield', 'modxmcp:main'),
     array('modxmcp.allow_run_processor', 0, 'combo-boolean', 'modxmcp:security'),
     array('modxmcp.max_payload_bytes', 1048576, 'textfield', 'modxmcp:limits'),
+    array('modxmcp.max_response_bytes', 4194304, 'textfield', 'modxmcp:limits'),
+    array('modxmcp.request_retention_seconds', 86400, 'textfield', 'modxmcp:limits'),
     array('modxmcp.max_read_bytes', 262144, 'textfield', 'modxmcp:limits'),
     array('modxmcp.allow_root_filesystem_read', 0, 'combo-boolean', 'modxmcp:security'),
     array('modxmcp.require_https', 0, 'combo-boolean', 'modxmcp:security'),

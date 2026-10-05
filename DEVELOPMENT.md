@@ -151,6 +151,18 @@ and rollback path, and build the new transport package after the agreed batch is
 - **Quick iteration on an installed site:** upload the changed files under
   `core/components/modxmcp/` and `assets/components/modxmcp/` via FTP, then call the
   `virtualpage_clear_cache` action (or clear MODX cache) and exercise the endpoint.
+- **HTTP contract:** POST application/json with an object containing action, optional type,
+  and object-valued data. Optional top-level request_id enables replay protection; the Node
+  client supplies IDs for write tools and accepts _request_id for exact retries. After uncertain
+  writes, inspect get_request_status; never automatically retry with a new ID. Persistent state
+  is core/modxmcp-data/requests, outside the shipped component and MODX cache. Keep this directory
+  private and include it in site backups; deleting it removes the history that prevents replay.
+  Runtime state/response files have PHP exit guards, and response bodies are base64-encoded
+  to keep arbitrary returned code outside the PHP parser. This is not encryption.
+  New actions should be classified conservatively by isReadOnlyTool in client/index.js so an
+  action with side effects receives an ID. Server/client limits and error behavior are documented
+  in the getting_started help and README. Runtime state is not a release artifact.
+
 - **Full package rebuild:** bump `PKG_VERSION` in `_build/build.config.php` **and** `version` in
   `package.json`, add a `CHANGELOG.md` entry, upload `_build/` + `core/` + `assets/` to a MODX
   docroot, open `_build/build.transport.php` in a browser (or run via CLI). The zip lands in

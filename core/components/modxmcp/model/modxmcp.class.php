@@ -448,6 +448,7 @@ class modxMCP {
             'ops' => array(
                 'list_actions'     => array('m' => 'listSupportedActions', 'call' => 'bare'),
                 'get_capabilities' => array('m' => 'getCapabilities', 'call' => 'bare'),
+                'get_request_status' => 'getRequestStatus',
                 'help'             => 'getHelp',
                 'run_processor'    => 'runProcessorPassthrough',
                 'clear_cache'      => 'clearCacheAction',
@@ -3359,6 +3360,22 @@ class modxMCP {
      * Read back the modxMCP audit trail (last N entries, newest last), optionally
      * filtered to one action.
      */
+    /** Inspect request state without re-executing the original action. */
+    private function getRequestStatus($data) {
+        require_once $this->config['corePath'] . 'model/requeststore.class.php';
+        if (!isset($data['request_id']) || !ModxMCPRequestStore::validId($data['request_id'])) {
+            throw new ModxMCPClientException('A valid request_id is required.');
+        }
+        if (array_key_exists('include_result', $data) && !is_bool($data['include_result'])) {
+            throw new ModxMCPClientException('include_result must be a JSON boolean.');
+        }
+        $directory = rtrim($this->modx->getOption('core_path'), '/\\') . '/modxmcp-data/requests';
+        $store = new ModxMCPRequestStore($directory,
+            $this->modx->getOption('modxmcp.request_retention_seconds', null, 86400),
+            $this->modx->getOption('modxmcp.max_response_bytes', null, 4194304));
+        return $store->status($data['request_id'], !empty($data['include_result']));
+    }
+
     private function readAuditLog($data) {
         $path = $this->auditLogPath();
         if (!file_exists($path)) { return array('total' => 0, 'entries' => array()); }

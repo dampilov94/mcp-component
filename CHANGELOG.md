@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Harden the Node/PHP HTTP contract: validate tool arguments, request objects and JSON/UTF-8
+  envelopes; catch PHP Throwable; buffer unsolicited PHP output; bound request/response sizes;
+  add configurable client timeout and MCP cancellation, refuse redirects, and report errors
+  as tool failures even when HTTP status is 200. Keep server details behind debug/error IDs.
+- Add optional request_id and automatic IDs for write tools. Retained responses replay without
+  executing the action again; mismatched arguments, pending/unknown results and expired IDs
+  cannot run again. get_request_status inspects state/results; _request_id supplies a retry ID.
+  Persistent private state lives outside cache/component files, with configurable response
+  retention and expired-ID tombstones. Existing clients without IDs remain supported.
 - Harden `delete_media_folder`: canonical local Media Source roots, strict descendant paths,
   no traversal/absolute/stream paths, no symlinks in ancestors or the inspected tree. Add
   dry-run counts/entry previews and optional expected_revision for reviewed tree metadata.
