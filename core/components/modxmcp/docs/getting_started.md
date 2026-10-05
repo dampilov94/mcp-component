@@ -98,6 +98,16 @@ success envelope is stripped). Errors come back with a clear message — read it
   Client env: MODX_MCP_TIMEOUT_MS (60000), MODX_MCP_MAX_REQUEST_BYTES (1 MiB),
   MODX_MCP_MAX_RESPONSE_BYTES (4 MiB). Limits must be positive integers. No automatic retry
   is performed; redirects are refused. Cancellation stops the HTTP wait, not PHP execution.
+- **HTTPS behind a proxy.** With modxmcp.require_https enabled, direct HTTPS must be reported
+  by the server HTTPS flag. SERVER_PORT=443 alone is not proof. X-Forwarded-Proto is accepted
+  only when REMOTE_ADDR matches modxmcp.trusted_proxies (CSV IPs/CIDRs, IPv4/IPv6); its default
+  empty list trusts no forwarded header. Only a single https value is accepted, not a chain.
+  For a configured proxy peer, its reported original protocol is authoritative: encrypted
+  backend traffic cannot override a forwarded http value or a missing/ambiguous header.
+  The proxy must overwrite incoming client headers; REMOTE_ADDR must be the actual proxy peer,
+  not a client IP substituted by forwarded-header rewriting. Configure this before upgrading
+  an HTTPS-required site that terminates TLS upstream. allowed_ips uses the same strict IP/CIDR
+  matcher and REMOTE_ADDR only; empty allows all, malformed rules never become permissive CIDRs.
 - **Study an add-on.** `modx_get_component_files` + `modx_read_component_file` read installed
   component source; see the `study_component` topic.
 

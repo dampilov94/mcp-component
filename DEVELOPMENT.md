@@ -167,6 +167,13 @@ and rollback path, and build the new transport package after the agreed batch is
   `package.json`, add a `CHANGELOG.md` entry, upload `_build/` + `core/` + `assets/` to a MODX
   docroot, open `_build/build.transport.php` in a browser (or run via CLI). The zip lands in
   `core/packages/`. Install it from the manager (Package Management).
+- **Development installer:** _build/install.transport.php accepts CLI only (even PHP's
+  built-in HTTP server is rejected before bootstrap). Run php _build/install.transport.php
+  --sig=modxmcp-VERSION-RELEASE --action=install, or --action=uninstall; --help shows usage.
+  Default signature follows build.config.php. Copy the archive to core/packages first.
+  It reports token presence, not the secret, and preserves the enabled setting. Package
+  management through the normal MODX manager and the token-gated web builder remain available.
+
 - **Test the endpoint directly:**
   ```
   curl -s -X POST "$SITE/assets/components/modxmcp/api.php" \
@@ -185,6 +192,11 @@ Test environments for this project: **fordev** = clean MODX (good for install/AC
 - Runs as `modxmcp.service_user_id` (admin) — treat as a high-privilege admin API. Works over
   plain HTTP too, but the token then travels in cleartext, so prefer HTTPS (or a trusted network).
 - Root filesystem read off by default; component-file reads limited to `modxmcp.component_code_roots`.
+- require_https trusts the server HTTPS flag or a single forwarded https value from an
+  explicit trusted_proxies socket peer. Configure upstream TLS before enabling/enforcing it;
+  keep REMOTE_ADDR as the actual peer and replace client-supplied forwarded headers at the proxy.
+  IP/CIDR matching supports IPv4/IPv6 and fails closed for malformed rules; no X-Forwarded-For
+  authorization and no reliance on port 443 as proof of encryption.
 - Never commit/hardcode the token. Keep `_reference/` (vendor code) out of the package and out of git.
 
 ## 10. Versioning

@@ -107,45 +107,26 @@ try {
         exit;
     }
 
-    // Optional HTTPS enforcement (modxmcp.require_https, off by default). Honours a
-    // reverse-proxy X-Forwarded-Proto header in addition to direct HTTPS / port 443.
+    $corePath = $modx->getOption('modxmcp.core_path', null, $modx->getOption('core_path') . 'components/modxmcp/');
+    require_once $corePath . 'model/security.class.php';
+
+    // Direct HTTPS must be reported by the web server. Forwarded protocol is trusted only
+    // from a configured socket peer; a port number or an untrusted header proves nothing.
     if ((bool) $modx->getOption('modxmcp.require_https', null, false)) {
-        $isHttps = (!empty($_SERVER['HTTPS']) && strtolower($_SERVER['HTTPS']) !== 'off')
-            || (isset($_SERVER['SERVER_PORT']) && (int) $_SERVER['SERVER_PORT'] === 443)
-            || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower($_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https');
-        if (!$isHttps) {
+        $trustedProxies = (string) $modx->getOption('modxmcp.trusted_proxies', null, '');
+        if (!ModxMCPSecurity::isHttps($_SERVER, $trustedProxies)) {
             http_response_code(403);
-            modxmcpReplyJson(['success' => false, 'error' => 'HTTPS required (modxmcp.require_https).'], JSON_UNESCAPED_UNICODE);
-            exit;
+            modxmcpReplyJson(array('success' => false, 'error' => 'HTTPS required (modxmcp.require_https).', 'error_code' => 'https_required'));
         }
     }
 
-    // Optional client-IP allowlist (modxmcp.allowed_ips). Empty = allow all. CSV of exact
-    // IPs and/or IPv4 CIDR ranges (e.g. "203.0.113.4, 10.0.0.0/8"). Matched against REMOTE_ADDR
-    // (the real socket peer) РІР‚вЂќ X-Forwarded-For is intentionally NOT trusted (spoofable).
+    // Match REMOTE_ADDR only. X-Forwarded-For is not an authorization source.
     $allowedIps = trim((string) $modx->getOption('modxmcp.allowed_ips', null, ''));
     if ($allowedIps !== '') {
-        $clientIp = isset($_SERVER['REMOTE_ADDR']) ? (string) $_SERVER['REMOTE_ADDR'] : '';
-        $ipAllowed = false;
-        foreach (explode(',', $allowedIps) as $rule) {
-            $rule = trim($rule);
-            if ($rule === '') { continue; }
-            if (strpos($rule, '/') === false) {
-                if ($clientIp !== '' && $clientIp === $rule) { $ipAllowed = true; break; }
-                continue;
-            }
-            list($subnet, $bits) = array_pad(explode('/', $rule, 2), 2, '');
-            $bits = (int) $bits;
-            $ipLong = ip2long($clientIp);
-            $subLong = ip2long($subnet);
-            if ($ipLong === false || $subLong === false || $bits < 0 || $bits > 32) { continue; }
-            $mask = ($bits === 0) ? 0 : (~0 << (32 - $bits));
-            if (($ipLong & $mask) === ($subLong & $mask)) { $ipAllowed = true; break; }
-        }
-        if (!$ipAllowed) {
+        $peer = isset($_SERVER['REMOTE_ADDR']) ? (string) $_SERVER['REMOTE_ADDR'] : '';
+        if (!ModxMCPSecurity::matchesIpList($peer, $allowedIps)) {
             http_response_code(403);
-            modxmcpReplyJson(['success' => false, 'error' => 'Forbidden: client IP is not allowed (modxmcp.allowed_ips).'], JSON_UNESCAPED_UNICODE);
-            exit;
+            modxmcpReplyJson(array('success' => false, 'error' => 'Forbidden: client IP is not allowed (modxmcp.allowed_ips).', 'error_code' => 'ip_not_allowed'));
         }
     }
 

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Restrict the development install.transport.php helper to CLI before MODX bootstrap.
+  Add CLI signature/action options, derive the default signature from build.config.php,
+  report failure exit codes, preserve enabled state and stop printing the full API token.
+- HTTPS enforcement accepts forwarded protocol only from explicit trusted_proxies peers.
+  Add strict shared IPv4/IPv6 IP/CIDR matching for proxy trust and allowed_ips; reject malformed
+  masks and ambiguous protocol chains, and stop treating port 443 alone as TLS evidence.
 - Harden the Node/PHP HTTP contract: validate tool arguments, request objects and JSON/UTF-8
   envelopes; catch PHP Throwable; buffer unsolicited PHP output; bound request/response sizes;
   add configurable client timeout and MCP cancellation, refuse redirects, and report errors

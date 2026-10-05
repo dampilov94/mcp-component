@@ -43,3 +43,12 @@ $_lang['setting_modxmcp.max_response_bytes_desc'] = 'JSON response limit in byte
 
 $_lang['setting_modxmcp.request_retention_seconds'] = 'Request result retention';
 $_lang['setting_modxmcp.request_retention_seconds_desc'] = 'Seconds to retain responses for replay by request ID (default 86400, minimum 60). Expired IDs remain reserved so the action cannot execute again. State lives under core/modxmcp-data/requests outside MODX cache and the component package.';
+
+$_lang['setting_modxmcp.trusted_proxies'] = 'Trusted proxies';
+$_lang['setting_modxmcp.trusted_proxies_desc'] = 'Comma-separated trusted proxy IPs or CIDR ranges (IPv4/IPv6). Only these REMOTE_ADDR peers may assert a single X-Forwarded-Proto: https when require_https is enabled. Empty means no header trust. Proxies must replace client headers, and REMOTE_ADDR must identify the proxy itself.';
+
+$_lang['setting_modxmcp.require_https'] = 'Require HTTPS';
+$_lang['setting_modxmcp.require_https_desc'] = 'Reject POST requests without server-reported HTTPS or X-Forwarded-Proto from a trusted proxy. Configure trusted_proxies before upgrading an installation that terminates TLS upstream. Disabled by default.';
+
+$_lang['setting_modxmcp.allowed_ips'] = 'Allowed client IPs';
+$_lang['setting_modxmcp.allowed_ips_desc'] = 'Comma-separated IPs or CIDR ranges (IPv4/IPv6), matched against REMOTE_ADDR. Empty allows all peers. X-Forwarded-For is not an authorization source; invalid rules are ignored.';

@@ -43,3 +43,12 @@ $_lang['setting_modxmcp.max_response_bytes_desc'] = 'Лимит JSON-ответ�
 
 $_lang['setting_modxmcp.request_retention_seconds'] = 'Хранение результатов запросов';
 $_lang['setting_modxmcp.request_retention_seconds_desc'] = 'Сколько секунд хранить ответы для повторов с тем же ID (по умолчанию 86400, минимум 60). После истечения срока ID остаётся занятым, чтобы повтор не выполнил действие снова. Журнал хранится в core/modxmcp-data/requests вне кеша и пакета компонента.';
+
+$_lang['setting_modxmcp.trusted_proxies'] = 'Доверенные прокси';
+$_lang['setting_modxmcp.trusted_proxies_desc'] = 'IP-адреса или диапазоны CIDR доверенных прокси через запятую (IPv4/IPv6). Только от этих адресов REMOTE_ADDR принимается одиночный X-Forwarded-Proto: https при включённом require_https. Пустой список — не доверять заголовку. Прокси должен заменять заголовок клиента, а REMOTE_ADDR должен содержать адрес самого прокси.';
+
+$_lang['setting_modxmcp.require_https'] = 'Требовать HTTPS';
+$_lang['setting_modxmcp.require_https_desc'] = 'Отклонять POST-запросы без HTTPS. Проверяется серверный признак HTTPS либо заголовок X-Forwarded-Proto от доверенного прокси. Для завершения TLS на прокси предварительно настройте trusted_proxies. По умолчанию выключено.';
+
+$_lang['setting_modxmcp.allowed_ips'] = 'Разрешённые IP-адреса';
+$_lang['setting_modxmcp.allowed_ips_desc'] = 'IP-адреса или диапазоны CIDR через запятую (IPv4/IPv6), проверяемые по REMOTE_ADDR. Пустой список разрешает все адреса. X-Forwarded-For не используется для авторизации, неверные правила игнорируются.';
