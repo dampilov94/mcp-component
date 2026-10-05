@@ -14,6 +14,9 @@
   "engines": {
     "node": ">=18"
   },
+  "scripts": {
+    "check": "node scripts/check.cjs"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "axios": "^1.15.2"

@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+- Harden `delete_media_folder`: canonical local Media Source roots, strict descendant paths,
+  no traversal/absolute/stream paths, no symlinks in ancestors or the inspected tree. Add
+  dry-run counts/entry previews and optional expected_revision for reviewed tree metadata.
+  Use core directory removal with explicit full-folder options, verify actual completion,
+  report partial failures, and preserve the successful manager event/action and MCP audit.
+- `make_static` / auto-static now leave existing static elements and their Media Source,
+  paths and files intact. New files use the configured core_path, portable core-path tags,
+  native source=0 and names including the element ID. Reserve filenames exclusively and add
+  a suffix for occupied names instead of overwriting; attach storage metadata only after the
+  new file is ready, checking the element did not change. Create responses include final storage.
+- `edit_element_lines` / `replace_across`: stage static-file writes with a recovery copy,
+  restore the file on failed saves/transactions, catch PHP errors during save, and move MCP
+  cache refresh/success audit after commit. Resolve the actual static source through MODX.
+- `view_element` returns a full-content `revision`; line edits accept `expected_revision`.
+  Replacement previews return `revisions`, accepted as `expected_revisions` to limit the
+  apply step to reviewed IDs. Recheck under per-element/file locks and a database row lock;
+  reject non-transactional element tables instead of promising a rollback they cannot perform.
+- Replacement batches preflight revisions, report previously committed IDs on failure and
+  refresh cache after partial saves. Static code search no longer calls `getContent()`, which
+  could synchronise source files into the DB during a read/preview.
+- Require the MODX `settings` permission for both modxMCP manager pages and menu entries,
+  matching the existing AJAX processors. Restricted manager users cannot open the token
+  dashboard or dependency graph through a direct manager URL.
+
 ## 1.9.0 (2026-08-10)
 
 - **`dependency_graph`** — a structural map of how the site's elements wire together: which

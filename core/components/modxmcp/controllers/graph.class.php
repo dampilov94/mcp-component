@@ -10,6 +10,11 @@
  */
 class ModxmcpGraphManagerController extends modExtraManagerController {
 
+    /** The component exposes administrative tools and the API token. */
+    public function checkPermissions() {
+        return $this->modx->hasPermission('settings');
+    }
+
     public function getPageTitle() {
         // getPageTitle() runs before getLanguageTopics() is applied, so load the topic ourselves
         // or the raw lexicon key ends up in the browser title.

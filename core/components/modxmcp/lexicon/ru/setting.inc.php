@@ -32,7 +32,7 @@ $_lang['area_modxmcp:security'] = 'modxMCP: Безопасность';
 $_lang['area_modxmcp:paths'] = 'modxMCP: Пути';
 
 $_lang['setting_modxmcp.auto_static'] = 'Авто-статика элементов';
-$_lang['setting_modxmcp.auto_static_desc'] = 'Если включено, создание/обновление чанка/сниппета/шаблона/плагина через MCP автоматически переводит его в статический файл в core/elements/ (источник — Filesystem). Дальше правьте эти файлы напрямую.';
+$_lang['setting_modxmcp.auto_static_desc'] = 'Если включено, создание/обновление через MCP переводит элементы из БД в файлы с уникальными именами внутри настроенного core_path/elements/ (штатное статическое хранение MODX, source=0). Уже статические элементы сохраняют свой путь и Media Source.';
 
 
 $_lang['setting_modxmcp.allow_run_processor'] = 'Разрешить run_processor';

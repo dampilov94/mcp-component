@@ -51,12 +51,10 @@ _reference/                             vendor sources (MIGX, miniShop2) for STU
 
 Every capability is an **action**. Adding one is three steps:
 
-1. **Model dispatch** — add a `case` in the *first* `switch ($action)` in `processRequest()`
-   (the block before the `$elementType` validation, so it runs for non-element actions):
+1. **Model dispatch** — add an entry to the appropriate group in `actionRegistry()`:
 
    ```php
-   case 'my_action':
-       return $this->myAction($data);
+   'my_action' => 'myAction',
    ```
 
 2. **Model method** — implement it on the `modxMCP` class. Return any JSON-serialisable value
@@ -74,7 +72,7 @@ Every capability is an **action**. Adding one is three steps:
 
    **No per-tool handler is needed.** The client has a generic fallback: any tool named
    `modx_<x>` is sent as `{ action: "<x>", data: <args> }`. So the tool name minus `modx_`
-   must equal the model `case`.
+   must equal the registry action key.
 
 That's the whole loop. `api.php` passes `data` through verbatim (it also copies top-level
 `name`/`content`/`id` into `data`, and reads `type` into the `$elementType` argument — avoid a
@@ -122,16 +120,33 @@ but you lose the processor's validation — validate inputs yourself.
 - **Server files are CRLF.** When patching the model with a script, preserve the existing EOL
   (the `/tmp/*.js` patch scripts detect `\r\n` and keep it). Never re-upload a whole file that's
   been converted to LF.
-- After editing the client, run `node --check client/index.js`.
-- After editing the model, sanity-check brace balance:
-  `node -e "const s=require('fs').readFileSync('<model>','utf8');console.log(s.split('{').length-1, s.split('}').length-1)"`.
-  There's a **baseline −1** (one `}` lives inside a string literal in the original file), so a
-  balanced edit keeps the delta at exactly −1. There is no local PHP runtime — lint on the server.
+- Run `npm run check` after changes. It checks JavaScript syntax, PHP syntax, release-version
+  consistency and the current CHANGELOG entry. It performs no live-site writes.
+- The checker uses `PHP_BIN` when set, otherwise portable runtimes under `.local/tools/php-*/`
+  (`php.exe` on Windows, `bin/php` elsewhere), otherwise `php` on PATH. The prepared Windows
+  workspace has PHP 7.4 and 8.4. These syntax checks do not prove MODX runtime compatibility.
 - Match the surrounding code style (it mixes `array()` and `[]`; new code uses `array()`).
 
 ## 8. Build / deploy / test
 
-There's **no local PHP** — build and test only on a running MODX, over FTP + HTTP.
+Install Node dependencies with `npm ci --ignore-scripts`. Run local checks before uploading.
+Target MODX 2.8.x and PHP 7.4; keep code compatible with PHP 8.x where possible. By the owner's
+decision, this batch does not require a separate PHP 8 integration stand. Local PHP 8 syntax
+checks alone must not be described as verified runtime compatibility.
+
+For this review batch, the owner performs functional checks on the test site. Do not create
+test accounts or add unnecessary test suites. Run syntax checks on changed files before upload.
+The component is an administrator/developer API; separate restricted API profiles are out of
+scope. Its manager pages, menus and AJAX processors require the core `settings` permission.
+
+Keep credentials in ignored `.env` / `.mcp.json`, and local runtimes, backups and diagnostic
+artifacts in ignored `.local/`. For development, configure the MCP server to execute
+`node <absolute-path-to-repo>/client/index.js` so it uses the working copy. The published
+README connection example remains suitable for released builds.
+
+Before uploading a changed component file, save its current server copy and compare it with
+the local baseline. Use FTPS where available. Test one review item at a time, record the checks
+and rollback path, and build the new transport package after the agreed batch is complete.
 
 - **Quick iteration on an installed site:** upload the changed files under
   `core/components/modxmcp/` and `assets/components/modxmcp/` via FTP, then call the
@@ -162,8 +177,9 @@ Test environments for this project: **fordev** = clean MODX (good for install/AC
 
 ## 10. Versioning
 
-`_build/build.config.php` `PKG_VERSION` + `package.json` `version` + a `CHANGELOG.md` entry move
-together. Each feature batch so far bumped a minor version.
+`_build/build.config.php` `PKG_VERSION`, `modxMCP::VERSION`, `package.json`, both root versions
+in `package-lock.json`, and the release entry in `CHANGELOG.md` move together. During this
+review batch, retain 1.9.0 until the fixes are complete and the next release is prepared.
 
 ## 11. Current action surface (high level)
 
@@ -174,5 +190,5 @@ miniShop2 product **links** (msLink / msProductLink); MIGX **configs** (migxConf
 Access Control (groups/roles/policies/resource-groups/context+resourcegroup access);
 `list_tv_input_types`; `check_integrations`; `install_package`; `regenerate_token`; CMP dashboard.
 
-To enumerate exactly, read the `case` labels in `processRequest()` and the `toolDefinitions`
+To enumerate exactly, read `actionRegistry()` and the `toolDefinitions`
 array — they are the source of truth.

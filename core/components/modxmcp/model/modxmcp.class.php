@@ -8,6 +8,7 @@ class modxMCP {
     public $modx;
     public $config =[];
     private $actionSpecsCache = null;
+    private $transactionalContentTables = array();
     private $allowedElementTypes = ['chunk', 'snippet', 'template', 'resource', 'tv', 'category', 'plugin'];
     private $versionXTypes = [
         'resource' => ['class' => 'vxResource', 'processor' => 'resources', 'label' => 'title', 'content_class' => 'modResource'],
@@ -192,7 +193,12 @@ class modxMCP {
                     
                     if ($elementType === 'tv' && !empty($newObj['id'])) $this->handleTvRelations($newObj['id'], $data);
                     if ($elementType === 'plugin' && !empty($newObj['id'])) $this->handlePluginEvents($newObj['id'], $data);
-                    if (!empty($newObj['id']) && $this->shouldAutoStatic($elementType)) { $this->makeElementStatic($elementType, (int) $newObj['id']); }
+                    if (!empty($newObj['id']) && $this->shouldAutoStatic($elementType)) {
+                        $staticInfo = $this->makeElementStatic($elementType, (int) $newObj['id']);
+                        $newObj['static'] = 1;
+                        $newObj['static_file'] = $staticInfo['static_file'];
+                        $newObj['source'] = $staticInfo['source'];
+                    }
                     
                     $this->modx->cacheManager->refresh();
                     $this->logAudit('create_element', $elementType, ['id' => isset($newObj['id']) ? $newObj['id'] : null]);
@@ -674,7 +680,7 @@ class modxMCP {
                 $needle = $caseSensitive ? $query : strtolower($query);
                 foreach ($this->modx->getCollection($m['class'], $sc) as $o) {
                     if (count($results) >= $limit) { break; }
-                    $content = (string) $o->getContent();
+                    $content = (string) $o->getFileContent();
                     $name = (string) $o->get($m['name']);
                     $hay = $caseSensitive ? ($content . "\n" . $name) : strtolower($content . "\n" . $name);
                     if (strpos($hay, $needle) !== false) {
@@ -1617,17 +1623,163 @@ class modxMCP {
         return array('created' => true, 'parent' => $parent, 'name' => $name);
     }
 
+    /** Resolve only a real, non-root descendant of a local filesystem Media Source. */
+    private function resolveMediaFolderDeletion($source, $relative) {
+        if (!($source instanceof modFileMediaSource) || !($source->fileHandler instanceof modFileHandler)) {
+            throw new ModxMCPClientException('delete_media_folder supports local filesystem Media Sources only.');
+        }
+        clearstatcache(true);
+        $base = $source->getBasePath();
+        if (!is_string($base) || $base === '' || strpos($base, '://') !== false) {
+            throw new ModxMCPClientException('Media Source does not have a local filesystem root.');
+        }
+        $root = realpath($base);
+        if ($root === false || !is_dir($root)) { throw new ModxMCPClientException('Media Source root does not exist.'); }
+        $candidate = $this->joinMediaSourcePath($root, $relative);
+        // Check every component before realpath can hide a symlink in an ancestor.
+        $cursor = rtrim($root, '/\\');
+        foreach (explode('/', $relative) as $part) {
+            $cursor .= DIRECTORY_SEPARATOR . $part;
+            clearstatcache(true, $cursor);
+            if (is_link($cursor)) { throw new ModxMCPClientException('Deleting through a symbolic link is not allowed.'); }
+        }
+        $path = realpath($candidate);
+        if ($path === false || !is_dir($path)) { throw new ModxMCPClientException('Folder not found inside the Media Source.'); }
+        if ($path === $root || !$this->pathStartsWith($path, $root)) {
+            throw new ModxMCPClientException('Refusing to delete the Media Source root or a folder outside it.');
+        }
+        // The core handler rewrites separators and trailing dots. Refuse any rewrite that
+        // would make its removal path differ from the validated physical directory.
+        $sanitized = $source->fileHandler->sanitizePath($source->fileHandler->postfixSlash($path));
+        if (realpath($sanitized) !== $path) {
+            throw new ModxMCPClientException('MODX would rewrite this folder path. Deletion refused.');
+        }
+        $stat = lstat($path);
+        if ($stat === false) { throw new ModxMCPClientException('Cannot inspect the selected folder.'); }
+        return array('root' => $root, 'path' => $path, 'device' => $stat['dev'], 'inode' => $stat['ino']);
+    }
+
+    /** Inspect the entire tree, while returning a bounded preview. Never follow links. */
+    private function inspectMediaFolderDeletion(array $target, $relative, $limit) {
+        $stack = array(array($target['path'], $relative));
+        $entries = array();
+        $files = 0;
+        $directories = 0;
+        $bytes = 0;
+        $hash = hash_init('sha256');
+        hash_update($hash, $target['root'] . "\0" . $target['path'] . "\n");
+        while ($stack) {
+            list($path, $rel) = array_pop($stack);
+            if (preg_match('//u', $rel) !== 1) { throw new ModxMCPClientException('Folder contains a filename that is not valid UTF-8. Rename it before using this tool.'); }
+            clearstatcache(true, $path);
+            $stat = @lstat($path);
+            if ($stat === false) { throw new ModxMCPClientException('Folder contents changed or cannot be inspected; retry the preview.'); }
+            $kind = $stat['mode'] & 0170000;
+            if ($kind === 0120000) { throw new ModxMCPClientException('Folder contains a symbolic link; recursive deletion refused: ' . $rel); }
+            if ($kind !== 0040000 && $kind !== 0100000) {
+                throw new ModxMCPClientException('Folder contains a special filesystem entry; deletion refused: ' . $rel);
+            }
+            $real = realpath($path);
+            if ($real === false || !$this->pathStartsWith($real, $target['root']) || !$this->pathStartsWith($real, $target['path'])) {
+                throw new ModxMCPClientException('Folder contents resolve outside the selected folder or Media Source.');
+            }
+            $directory = $kind === 0040000;
+            if ($directory) {
+                if (!is_readable($path) || !is_writable($path)) {
+                    throw new ModxMCPClientException('Folder is not readable/writable for recursive deletion: ' . $rel);
+                }
+                $names = @scandir($path);
+                if ($names === false) { throw new ModxMCPClientException('Cannot read folder contents: ' . $rel); }
+                // Reverse pushes produce deterministic ascending traversal/fingerprints.
+                foreach (array_reverse($names) as $name) {
+                    if ($name === '.' || $name === '..') { continue; }
+                    $stack[] = array($path . DIRECTORY_SEPARATOR . $name, $rel . '/' . $name);
+                }
+                $directories++;
+            } else {
+                $files++;
+                $bytes += $stat['size'];
+            }
+            hash_update($hash, serialize(array($rel, $kind, $stat['dev'], $stat['ino'], $stat['size'], $stat['mtime'], $stat['ctime'])) . "\n");
+            if (count($entries) < $limit) {
+                $entries[] = array('path' => $rel, 'type' => $directory ? 'directory' : 'file', 'bytes' => $directory ? 0 : $stat['size']);
+            }
+        }
+        return array('files' => $files, 'directories' => $directories, 'bytes' => $bytes,
+            'entries' => $entries, 'truncated' => $files + $directories > count($entries),
+            'revision' => hash_final($hash));
+    }
+
     private function deleteMediaFolder($data) {
+        if (!isset($data['path']) || !is_string($data['path'])) {
+            throw new ModxMCPClientException('delete_media_folder: a relative folder path is required.');
+        }
+        if (strpos($data['path'], "\0") !== false || trim($data['path']) !== $data['path']) {
+            throw new ModxMCPClientException('Folder path must not contain null bytes or leading/trailing whitespace.');
+        }
+        $raw = str_replace('\\', '/', $data['path']);
+        if (strpos($raw, "\0") !== false || strpos($raw, ':') !== false || $this->isAbsolutePath($raw)) {
+            throw new ModxMCPClientException('Use a relative path inside the Media Source; absolute paths and stream URLs are not allowed.');
+        }
+        $relative = $this->normalizeRelativePath($raw);
+        if ($relative === '') { throw new ModxMCPClientException('Refusing to delete the Media Source root.'); }
+        if (isset($data['dry_run']) && !is_bool($data['dry_run'])) {
+            throw new ModxMCPClientException('dry_run must be a JSON boolean.');
+        }
+        $dry = !empty($data['dry_run']);
+        $limit = isset($data['limit']) ? min(500, max(1, (int) $data['limit'])) : 200;
         $source = $this->initMediaSource($data);
-        $rel = isset($data['path']) ? trim((string) $data['path'], '/') : '';
-        if ($rel === '') { throw new ModxMCPClientException('delete_media_folder: "path" is required (refusing to remove the source root).'); }
-        // MODX 2.x removeContainer() takes an ABSOLUTE path (unlike createContainer/removeObject).
-        $path = rtrim($this->getMediaSourceRootPath($source), '/\\') . '/' . $rel;
-        $res = $source->removeContainer($path);
-        if ($res === false) { throw new ModxMCPClientException('delete_media_folder failed: ' . $this->mediaSourceError($source, 'unknown error')); }
-        if ($this->modx->getCacheManager()) { $this->modx->getCacheManager()->refresh(); }
-        $this->logAudit('delete_media_folder', 'source', array('source' => (int) $source->get('id'), 'path' => $path));
-        return array('deleted' => true, 'path' => $path);
+        $target = $this->resolveMediaFolderDeletion($source, $relative);
+        $lock = $dry ? null : $this->acquireContentLock('media-folder:' . $target['root']);
+        try {
+            $preview = $this->inspectMediaFolderDeletion($target, $relative, $limit);
+            if (array_key_exists('expected_revision', $data)) {
+                $expected = $data['expected_revision'];
+                if (!is_string($expected) || !preg_match('/^[a-f0-9]{64}$/D', $expected) || !hash_equals($preview['revision'], $expected)) {
+                    throw new ModxMCPClientException('Folder differs from the reviewed preview. Run dry_run again before deleting.');
+                }
+            }
+            $result = array_merge(array('source' => (int) $source->get('id'), 'path' => $target['path'],
+                'relative_path' => $relative, 'dry_run' => $dry, 'deleted' => false), $preview);
+            if ($dry) { return $result; }
+            $current = $this->resolveMediaFolderDeletion($source, $relative);
+            if ($current !== $target) { throw new ModxMCPClientException('Folder location changed during inspection; preview again.'); }
+            $directory = $source->fileHandler->make($target['path']);
+            if (!($directory instanceof modDirectory) || !$directory->isReadable() || !$directory->isWritable() || !is_writable(dirname($target['path']))) {
+                throw new ModxMCPClientException('Selected folder cannot be removed with the current filesystem permissions.');
+            }
+            $cacheRefreshed = false;
+            try {
+                // Use the underlying core operation, but do not apply cache-cleanup exclusions
+                // (e.g. .svn) to an explicitly selected media folder. Verify actual completion.
+                $directory->remove(array('deleteTop' => true, 'skipDirs' => false, 'extensions' => array(),
+                    'delete_exclude_items' => array('.', '..'), 'delete_exclude_patterns' => array()));
+                clearstatcache(true, $target['path']);
+                if (file_exists($target['path']) || is_link($target['path'])) {
+                    throw new ModxMCPClientException('Folder removal is incomplete; some contents may already be deleted. Inspect the folder before retrying.');
+                }
+            } catch (Throwable $e) {
+                $this->logContentSave('delete_media_folder_failed', 'source', array('source' => (int) $source->get('id'), 'path' => $target['path'], 'partial_deletion_possible' => true));
+                if ($e instanceof ModxMCPClientException) { throw $e; }
+                $this->modx->log(modX::LOG_LEVEL_ERROR, '[modxmcp] Media folder deletion failed: ' . $e->getMessage());
+                throw new ModxMCPClientException('Folder deletion failed; some contents may already be deleted. Inspect the folder and MODX error log before retrying.', 0, $e);
+            } finally {
+                $cacheRefreshed = $this->refreshContentCache();
+            }
+            // Preserve the core manager event/action on successful removal.
+            try {
+                $this->modx->invokeEvent('OnFileManagerDirRemove', array('directory' => $source->fileHandler->postfixSlash($target['path']), 'source' => &$source));
+                $this->modx->logManagerAction('directory_remove', '', $directory->getPath());
+            } catch (Throwable $e) {
+                $this->modx->log(modX::LOG_LEVEL_ERROR, '[modxmcp] Folder removed, but post-delete notification failed: ' . $e->getMessage());
+            }
+            $this->logContentSave('delete_media_folder', 'source', array('source' => (int) $source->get('id'), 'path' => $target['path'], 'files' => $preview['files'], 'directories' => $preview['directories']));
+            $result['deleted'] = true;
+            $result['cache_refreshed'] = $cacheRefreshed;
+            return $result;
+        } finally {
+            if (is_resource($lock)) { flock($lock, LOCK_UN); fclose($lock); }
+        }
     }
 
     // --- Trash / duplicate / reorder (core resource & element processors) ---
@@ -1927,36 +2079,111 @@ class modxMCP {
     }
 
     /**
-     * Convert one element to a static file: write its current DB content to
-     * core/elements/<dir>/<slug>.<ext> and set static=1, static_file, source=1 (Filesystem).
+     * Convert DB-only code once. Existing static elements keep their exact path/source.
+     * New files live under the configured core path and use MODX's native source=0.
      */
     private function makeElementStatic($type, $id) {
         $map = $this->staticElementMap();
-        if (!isset($map[$type])) { throw new ModxMCPClientException("make_static: unsupported type '{$type}'."); }
-        $m = $map[$type];
-        $el = $this->modx->getObject($m['class'], (int) $id);
-        if (!$el) { throw new ModxMCPClientException("make_static: {$type} {$id} not found."); }
-        $nameField = ($type === 'template') ? 'templatename' : 'name';
-        $name = (string) $el->get($nameField);
-        $slug = preg_replace('/[^A-Za-z0-9._-]+/', '-', $name);
-        $slug = trim($slug, '-._');
-        if (strlen(preg_replace('/[^A-Za-z0-9]/', '', $slug)) < 3) { $slug = $type . '-' . $id; }
-        $rel = 'core/elements/' . $m['dir'] . '/' . $slug . '.' . $m['ext'];
-        $base = rtrim($this->modx->getOption('base_path'), '/') . '/';
-        $abs = $base . $rel;
-        if (file_exists($abs) && !(bool) $el->get('static')) {
-            $rel = 'core/elements/' . $m['dir'] . '/' . $slug . '-' . $id . '.' . $m['ext'];
-            $abs = $base . $rel;
+        $id = (int) $id;
+        if (!isset($map[$type]) || $id < 1) {
+            throw new ModxMCPClientException('make_static: supported type and positive element ID are required.');
         }
-        $content = (string) $el->get($m['field']);
-        $dir = dirname($abs);
-        if (!is_dir($dir) && !@mkdir($dir, 0755, true)) { throw new ModxMCPClientException("make_static: cannot create directory {$dir}"); }
-        if (@file_put_contents($abs, $content) === false) { throw new ModxMCPClientException("make_static: cannot write {$abs}"); }
-        $el->set('static', true);
-        $el->set('static_file', $rel);
-        $el->set('source', 1);
-        if (!$el->save()) { throw new ModxMCPClientException("make_static: save failed for {$type} {$id}"); }
-        return array('type' => $type, 'id' => (int) $id, 'name' => $name, 'static_file' => $rel);
+        $m = $map[$type];
+        $existing = $this->modx->getObject($m['class'], $id, false);
+        if (!$existing) { throw new ModxMCPClientException("make_static: {$type} {$id} not found."); }
+        if ((bool) $existing->get('static')) {
+            return array('type' => $type, 'id' => $id,
+                'name' => $existing->get($type === 'template' ? 'templatename' : 'name'),
+                'static_file' => $existing->get('static_file'), 'source' => (int) $existing->get('source'),
+                'status' => 'already_static');
+        }
+        $lock = $this->acquireContentLock($m['class'] . ':' . $id);
+        $reserved = null;
+        $staged = null;
+        $abs = null;
+        $rel = null;
+        $converted = false;
+        try {
+            $el = $this->modx->getObject($m['class'], $id, false);
+            if (!$el) { throw new ModxMCPClientException("make_static: {$type} {$id} not found."); }
+            $nameField = ($type === 'template') ? 'templatename' : 'name';
+            $name = (string) $el->get($nameField);
+            if ((bool) $el->get('static')) {
+                // Do not re-export a stale DB copy, relocate files or replace a custom source.
+                return array('type' => $type, 'id' => $id, 'name' => $name,
+                    'static_file' => $el->get('static_file'), 'source' => (int) $el->get('source'),
+                    'status' => 'already_static');
+            }
+            $content = (string) $el->get($m['field']);
+            $slug = trim(substr(preg_replace('/[^A-Za-z0-9._-]+/', '-', $name), 0, 120), '-._');
+            if ($slug === '') { $slug = $type; }
+            $corePath = rtrim($this->modx->getOption('core_path'), '/\\') . '/';
+            $dir = $corePath . 'elements/' . $m['dir'];
+            if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
+                throw new ModxMCPClientException('make_static: cannot create the static element directory.');
+            }
+            // Reserve exclusively, including when a pre-existing file has the same ID/name.
+            // An extra suffix resolves collisions without modifying the occupied file.
+            for ($attempt = 0; $attempt < 1000; $attempt++) {
+                $filename = $slug . '-' . $id . ($attempt ? '-' . $attempt : '') . '.' . $m['ext'];
+                $candidate = $dir . '/' . $filename;
+                $reserved = @fopen($candidate, 'x+b');
+                if ($reserved) {
+                    $abs = $candidate;
+                    $rel = '[[++core_path]]elements/' . $m['dir'] . '/' . $filename;
+                    break;
+                }
+                clearstatcache(true, $candidate);
+                if (!file_exists($candidate) && !is_link($candidate)) {
+                    throw new ModxMCPClientException('make_static: cannot reserve a new static file. Check directory permissions.');
+                }
+            }
+            if (!$reserved) { throw new ModxMCPClientException('make_static: no unused filename could be reserved.'); }
+            $stat = fstat($reserved);
+            if ($stat === false) { throw new Exception('make_static: cannot inspect the reserved file.'); }
+            $staged = $this->stageContentFile($abs, $content, $stat['mode'] & 0777);
+            fclose($reserved);
+            $reserved = null;
+            if (!@rename($staged, $abs)) { throw new Exception('make_static: cannot finish the new static file.'); }
+            $staged = null;
+
+            // Only attach the new file. modElement::save() can rewrite/delete static files,
+            // and considers a zero-byte file write a false result. The core create/update
+            // processor already saved/validated the content before auto-static runs.
+            $sql = 'UPDATE ' . $this->modx->getTableName($m['class'])
+                . ' SET static = 1, static_file = :path, source = 0'
+                . ' WHERE id = :id AND static = 0 AND BINARY COALESCE(' . $this->modx->escape($m['field']) . ", '') = BINARY :content"
+                . " AND COALESCE(static_file, '') = :old_path AND COALESCE(source, 0) = :old_source";
+            $stmt = $this->modx->prepare($sql);
+            $props = array(':path' => $rel, ':id' => $id, ':content' => $content,
+                ':old_path' => (string) $el->get('static_file'), ':old_source' => (int) $el->get('source'));
+            if (!$stmt || !$stmt->execute($props)) { throw new Exception('make_static: cannot save the static file reference.'); }
+            if ($stmt->rowCount() !== 1) {
+                throw new ModxMCPClientException('make_static: element changed during conversion. Read it again before retrying.');
+            }
+            $converted = true;
+            return array('type' => $type, 'id' => $id, 'name' => $name,
+                'static_file' => $rel, 'source' => 0, 'status' => 'converted');
+        } catch (Throwable $e) {
+            if (!($e instanceof Exception)) { throw new Exception('make_static: conversion failed.', 0, $e); }
+            throw $e;
+        } finally {
+            if (is_resource($reserved)) { fclose($reserved); }
+            if ($staged !== null) { @unlink($staged); }
+            if ($abs !== null && !$converted) {
+                // If a DB connection failed after UPDATE, keep a file that may be referenced.
+                try {
+                    $saved = $this->modx->getObject($m['class'], $id, false);
+                    if (!$saved || !(bool) $saved->get('static') || (string) $saved->get('static_file') !== $rel || (int) $saved->get('source') !== 0) {
+                        @unlink($abs);
+                    }
+                } catch (Throwable $cleanupError) {
+                    $this->modx->log(modX::LOG_LEVEL_ERROR, '[modxmcp] Could not confirm failed static conversion cleanup; retained file: ' . $abs);
+                }
+            }
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
     }
 
     /**
@@ -2010,50 +2237,204 @@ class modxMCP {
         return array($el, $type, $id, $map[$type]);
     }
 
-    /** Read the element's EFFECTIVE content: from the static file if static, else the DB field.
-     *  Returns [content, isStatic, staticAbsPath|null]. */
+    /** Read without synchronising the file back into the database. */
     private function readEffectiveContent($el, $m) {
-        $isStatic = (bool) $el->get('static');
-        $staticAbs = null;
-        if ($isStatic) {
-            $rel = (string) $el->get('static_file');
-            if ($rel !== '') {
-                $rel = $this->resolveModxPathPlaceholders($rel);
-                $staticAbs = $this->isAbsolutePath($rel)
-                    ? $rel
-                    : rtrim($this->modx->getOption('base_path'), '/\\') . '/' . ltrim($rel, '/\\');
-            }
-            if ($staticAbs !== null && is_file($staticAbs)) {
-                return array((string) file_get_contents($staticAbs), $isStatic, $staticAbs);
-            }
+        if (!(bool) $el->get('static')) {
+            return array((string) $el->get($m['field']), false, null);
         }
-        return array((string) $el->get($m['field']), $isStatic, $staticAbs);
+        // Use the same Media Source resolution as the core update processor.
+        $path = $el->getSourceFile();
+        if (!$path || strpos($path, '://') !== false) {
+            throw new ModxMCPClientException('Line edits require a local static file.');
+        }
+        $absolute = realpath($path);
+        if ($absolute === false || !is_file($absolute)) {
+            throw new ModxMCPClientException('Static file is missing. Restore it before editing this element.');
+        }
+        $content = @file_get_contents($absolute);
+        if ($content === false) {
+            throw new ModxMCPClientException('Cannot read the static file.');
+        }
+        return array($content, true, $absolute);
     }
 
-    /** Write content back where it came from: static file first (source of truth), then DB field. */
-    private function writeEffectiveContent($el, $m, $isStatic, $staticAbs, $content) {
-        // For a static element the file is the source of truth — write it FIRST so that when the
-        // save event fires below, getContent() (which VersionX reads) already sees the new content.
-        if ($isStatic && $staticAbs !== null) {
-            $dir = dirname($staticAbs);
-            if (!is_dir($dir) && !@mkdir($dir, 0755, true)) {
-                throw new ModxMCPClientException("cannot create directory {$dir}");
+    private function contentRevision($content) {
+        return hash('sha256', $content);
+    }
+
+    private function assertContentRevision($content, $expected) {
+        if (!is_string($expected) || !preg_match('/^[a-f0-9]{64}$/D', $expected)) {
+            throw new ModxMCPClientException('expected_revision must be the revision returned by view_element or replace_across dry_run.');
+        }
+        if (!hash_equals($expected, $this->contentRevision($content))) {
+            throw new ModxMCPClientException('Element content has changed. Read it again and retry with the new revision.');
+        }
+    }
+
+    /** Separate lock files survive atomic renames and cache refreshes. Do not unlink them. */
+    private function acquireContentLock($key) {
+        $dir = rtrim($this->config['corePath'], '/\\') . '/locks';
+        if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) {
+            throw new ModxMCPClientException('Cannot create the element lock directory.');
+        }
+        $lock = @fopen($dir . '/' . hash('sha256', $key) . '.lock', 'c');
+        if (!$lock) { throw new ModxMCPClientException('Cannot open the element lock.'); }
+        if (!flock($lock, LOCK_EX | LOCK_NB)) {
+            fclose($lock);
+            throw new ModxMCPClientException('Element is being edited by another MCP request. Read it again and retry.');
+        }
+        return $lock;
+    }
+
+    /** PDO can begin a transaction even when a MyISAM table cannot roll back. */
+    private function assertTransactionalContentTable($class) {
+        if (isset($this->transactionalContentTables[$class])) { return; }
+        $table = trim($this->modx->getTableName($class), '`');
+        $sql = 'SELECT e.TRANSACTIONS FROM information_schema.TABLES t '
+            . 'JOIN information_schema.ENGINES e ON e.ENGINE = t.ENGINE '
+            . 'WHERE t.TABLE_SCHEMA = DATABASE() AND t.TABLE_NAME = :table';
+        $stmt = $this->modx->prepare($sql);
+        if (!$stmt || !$stmt->execute(array(':table' => $table)) || $stmt->fetchColumn() !== 'YES') {
+            throw new ModxMCPClientException('Safe content edits require a transactional element table (for example InnoDB). No files were changed.');
+        }
+        $this->transactionalContentTables[$class] = true;
+    }
+
+    /** Stage in the same directory so rename replaces the target on the same filesystem. */
+    private function stageContentFile($target, $content, $mode) {
+        $temp = dirname($target) . '/.modxmcp-' . bin2hex(random_bytes(16)) . '.tmp';
+        $handle = @fopen($temp, 'x+b');
+        if (!$handle) { throw new ModxMCPClientException('Cannot stage the static file. Check directory permissions and free space.'); }
+        try {
+            if (!@chmod($temp, 0600)) { throw new Exception('Cannot protect the staged file.'); }
+            $length = strlen($content);
+            for ($offset = 0; $offset < $length; $offset += $written) {
+                $written = fwrite($handle, substr($content, $offset));
+                if ($written === false || $written === 0) { throw new Exception('Cannot write the complete staged file.'); }
             }
-            if (@file_put_contents($staticAbs, $content) === false) {
-                throw new ModxMCPClientException("cannot write static file {$staticAbs}");
+            if (!fflush($handle) || !@chmod($temp, $mode)) { throw new Exception('Cannot finish staging the static file.'); }
+        } catch (Throwable $e) {
+            fclose($handle);
+            @unlink($temp);
+            throw $e;
+        }
+        fclose($handle);
+        return $temp;
+    }
+
+    /**
+     * Save one line-edit/replace result. The file is visible to save-event plugins before
+     * the processor runs, but a failed processor/transaction restores its original bytes.
+     * File locks coordinate these MCP writers; arbitrary FTP writers do not take the lock.
+     */
+    private function writeEffectiveContent($el, $m, $isStatic, $staticAbs, $content, $expectedRevision) {
+        $locks = array();
+        $activeTransaction = false;
+        $backup = null;
+        $staged = null;
+        $replaced = false;
+        $keepBackup = false;
+        try {
+            $id = (int) $el->get('id');
+            $locks[] = $this->acquireContentLock($m['class'] . ':' . $id);
+            if (!$this->modx->beginTransaction()) { throw new Exception('Cannot start the element transaction.'); }
+            $activeTransaction = true;
+            $this->assertTransactionalContentTable($m['class']);
+            // Keep ordinary database updates from changing the element while we save it.
+            $stmt = $this->modx->prepare('SELECT id FROM ' . $this->modx->getTableName($m['class']) . ' WHERE id = ' . $id . ' FOR UPDATE');
+            if (!$stmt || !$stmt->execute() || $stmt->fetchColumn() === false) {
+                throw new ModxMCPClientException('Cannot lock the element row; it may have been deleted.');
+            }
+            $current = $this->modx->getObject($m['class'], $id, false);
+            if (!$current) { throw new ModxMCPClientException('Element no longer exists.'); }
+            foreach (array('static', 'static_file', 'source') as $field) {
+                if ((string) $current->get($field) !== (string) $el->get($field)) {
+                    throw new ModxMCPClientException('Element storage has changed. Read the element again before editing.');
+                }
+            }
+            list($before, $currentStatic, $currentPath) = $this->readEffectiveContent($current, $m);
+            if ($currentStatic !== $isStatic || $currentPath !== $staticAbs) {
+                throw new ModxMCPClientException('Static file location has changed. Read the element again before editing.');
+            }
+            if ($isStatic) {
+                $locks[] = $this->acquireContentLock('file:' . $staticAbs);
+                list($before) = $this->readEffectiveContent($current, $m);
+            }
+            $this->assertContentRevision($before, $expectedRevision);
+            if ($isStatic) {
+                $mode = @fileperms($staticAbs);
+                if ($mode === false || !is_writable($staticAbs)) {
+                    throw new ModxMCPClientException('Static file is not writable.');
+                }
+                $backup = $this->stageContentFile($staticAbs, $before, $mode & 0777);
+                $staged = $this->stageContentFile($staticAbs, $content, $mode & 0777);
+                // Detect external changes during staging before replacing the file.
+                list($latest) = $this->readEffectiveContent($current, $m);
+                $this->assertContentRevision($latest, $expectedRevision);
+                if (!@rename($staged, $staticAbs)) { throw new Exception('Cannot atomically replace the static file.'); }
+                $staged = null;
+                $replaced = true;
+                clearstatcache(true, $staticAbs);
+            }
+            $type = trim(str_replace('element/', '', $m['proc']), '/');
+            $data = $current->toArray();
+            $data[$m['field']] = $content;
+            $resp = $this->modx->runProcessor($m['proc'] . 'update', $this->filterProcessorData($type, $data));
+            if (!$resp || $resp->isError()) {
+                throw new ModxMCPClientException('Element save failed: ' . ($resp ? $this->formatProcessorErrors($resp) : 'no response.'));
+            }
+            $saved = $this->modx->getObject($m['class'], $id, false);
+            if (!$saved) { throw new Exception('Saved element cannot be read.'); }
+            list($savedContent) = $this->readEffectiveContent($saved, $m);
+            $revision = $this->contentRevision($savedContent);
+            if (!$this->modx->commit()) { throw new Exception('Cannot commit the element transaction.'); }
+            $activeTransaction = false;
+            return $revision;
+        } catch (Throwable $e) {
+            if ($activeTransaction) {
+                try {
+                    if (!$this->modx->rollback()) { throw new Exception('Database rollback failed.'); }
+                } catch (Throwable $rollbackError) {
+                    $keepBackup = true;
+                    throw new Exception('Element transaction rollback failed. Recovery copy: ' . ($backup ?: 'none (database element)'), 0, $e);
+                }
+            }
+            if ($replaced) {
+                if (!@rename($backup, $staticAbs)) {
+                    $keepBackup = true;
+                    throw new Exception('Cannot restore the static file. Recovery copy retained at ' . $backup, 0, $e);
+                }
+                $backup = null;
+                clearstatcache(true, $staticAbs);
+                $this->refreshContentCache();
+            }
+            // Keep PHP errors within the existing endpoint's Exception error handling.
+            if (!($e instanceof Exception)) { throw new Exception('Element save failed.', 0, $e); }
+            throw $e;
+        } finally {
+            if ($staged !== null) { @unlink($staged); }
+            if ($backup !== null && !$keepBackup) { @unlink($backup); }
+            foreach (array_reverse($locks) as $lock) {
+                flock($lock, LOCK_UN);
+                fclose($lock);
             }
         }
-        // Save through the core update processor (not a bare $el->save()) so the On{Type}FormSave
-        // events fire — VersionX and any other save-event plugins must run, making a line/replace
-        // edit equivalent to a normal element update. Send the element's FULL current fields with
-        // the content field overridden (the processor validates required fields like `name`).
-        $type = trim(str_replace('element/', '', $m['proc']), '/'); // chunk|snippet|template|plugin
-        $data = $el->toArray();
-        $data[$m['field']] = $content;
-        $data = $this->filterProcessorData($type, $data);
-        $resp = $this->modx->runProcessor($m['proc'] . 'update', $data);
-        if (!$resp || $resp->isError()) {
-            throw new ModxMCPClientException('element save failed: ' . ($resp ? $this->formatProcessorErrors($resp) : 'no response.'));
+    }
+
+    private function logContentSave($action, $type, array $payload) {
+        try {
+            $this->logAudit($action, $type, $payload);
+        } catch (Throwable $e) {
+            $this->modx->log(modX::LOG_LEVEL_ERROR, '[modxmcp] Content committed, but audit logging failed.');
+        }
+    }
+
+    private function refreshContentCache() {
+        try {
+            return (bool) $this->modx->getCacheManager()->refresh();
+        } catch (Throwable $e) {
+            $this->modx->log(modX::LOG_LEVEL_ERROR, '[modxmcp] Content saved/restored, but cache refresh failed.');
+            return false;
         }
     }
 
@@ -2087,6 +2468,7 @@ class modxMCP {
             'id' => $id,
             'name' => $el->get($type === 'template' ? 'templatename' : 'name'),
             'static' => $isStatic,
+            'revision' => $this->contentRevision($content),
             'total_lines' => $total,
             'start_line' => $start,
             'end_line' => min($end, $total),
@@ -2126,13 +2508,13 @@ class modxMCP {
     /**
      * Apply line-based edits to a chunk/snippet/template/plugin. Only the changed lines travel —
      * no need to resend the whole element. data:
-     *   type, id|name,
+     *   type, id|name, expected_revision? (from view_element),
      *   edits: [ { start_line, end_line?, replacement?, expect? }, ... ]
      * Semantics (1-based, inclusive): replace [start_line..end_line] with `replacement`
      * (multi-line ok; "" = delete the lines). Insert = empty range (end_line = start_line - 1),
      * inserting `replacement` before start_line. `expect` (current text of the lines) is an
      * optional safety anchor — verified/relocated before applying; mismatch aborts the WHOLE
-     * call (atomic). Writes back to the static file if static, else the DB; preserves EOL.
+     * call. Saves one element with DB rollback and static-file recovery; preserves EOL.
      */
     private function editElementLines($data) {
         list($el, $type, $id, $m) = $this->resolveLineEditElement($data);
@@ -2141,6 +2523,7 @@ class modxMCP {
             throw new ModxMCPClientException('edit_element_lines: a non-empty "edits" array is required.');
         }
         list($content, $isStatic, $staticAbs) = $this->readEffectiveContent($el, $m);
+        if (array_key_exists('expected_revision', $data)) { $this->assertContentRevision($content, $data['expected_revision']); }
         $eol = "\n";
         $lines = $this->splitLines($content, $eol);
         $total = count($lines);
@@ -2195,19 +2578,18 @@ class modxMCP {
         $newContent = implode($eol, $lines);
         $totalAfter = count($lines);
 
-        return $this->runWithTransaction(function () use ($el, $m, $isStatic, $staticAbs, $newContent, $type, $id, $edits, $total, $totalAfter) {
-            $this->writeEffectiveContent($el, $m, $isStatic, $staticAbs, $newContent);
-            $this->modx->cacheManager->refresh();
-            $this->logAudit('edit_element_lines', $type, array('id' => $id, 'edits' => count($edits)));
-            return array(
-                'type' => $type,
-                'id' => $id,
-                'static' => $isStatic,
-                'edits_applied' => count($edits),
-                'total_lines_before' => $total,
-                'total_lines_after' => $totalAfter,
-            );
-        });
+        $revision = $this->writeEffectiveContent($el, $m, $isStatic, $staticAbs, $newContent, $this->contentRevision($content));
+        $this->logContentSave('edit_element_lines', $type, array('id' => $id, 'edits' => count($edits), 'revision' => $revision));
+        return array(
+            'type' => $type,
+            'id' => $id,
+            'static' => $isStatic,
+            'revision' => $revision,
+            'edits_applied' => count($edits),
+            'total_lines_before' => $total,
+            'total_lines_after' => $totalAfter,
+            'cache_refreshed' => $this->refreshContentCache(),
+        );
     }
 
     /**
@@ -2220,72 +2602,103 @@ class modxMCP {
     private function replaceAcross($data) {
         $find = isset($data['find']) ? (string) $data['find'] : '';
         if ($find === '') { throw new ModxMCPClientException('replace_across: "find" is required.'); }
-        if (!array_key_exists('replacement', $data)) { throw new ModxMCPClientException('replace_across: "replacement" is required (use "" to delete the string).'); }
+        if (!array_key_exists('replacement', $data)) { throw new ModxMCPClientException('replace_across: "replacement" is required.'); }
         $replacement = (string) $data['replacement'];
-        // Default to case-SENSITIVE here (unlike search_code): a replacement is usually exact,
-        // and a loose match across the whole site is a footgun.
         $cs = array_key_exists('case_sensitive', $data) ? !empty($data['case_sensitive']) : true;
         $dry = !empty($data['dry_run']);
         $allowed = $this->lineEditMap();
         $types = (isset($data['types']) && is_array($data['types']) && $data['types'])
-            ? array_values(array_filter($data['types'], function ($t) use ($allowed) { return isset($allowed[$t]); }))
+            ? array_values(array_unique(array_filter($data['types'], function ($t) use ($allowed) { return isset($allowed[$t]); })))
             : array('chunk', 'snippet', 'template', 'plugin');
         if (!$types) { throw new ModxMCPClientException('replace_across: types must be among chunk, snippet, template, plugin.'); }
-        $limit = isset($data['limit']) ? max(1, (int) $data['limit']) : 200;
+        $limit = isset($data['limit']) ? min(200, max(1, (int) $data['limit'])) : 200;
+        $hasExpected = array_key_exists('expected_revisions', $data);
+        $expected = $hasExpected ? $data['expected_revisions'] : array();
+        if (!is_array($expected) || count($expected) > $limit) {
+            throw new ModxMCPClientException('expected_revisions must be a map of type:id to revision, within limit (max 200).');
+        }
+        if ($hasExpected) {
+            // Apply exactly the reviewed selection; do not silently include new matches.
+            $hits = array('results' => array());
+            foreach ($expected as $key => $revision) {
+                if (!preg_match('/^(chunk|snippet|template|plugin):([1-9][0-9]*)$/D', $key, $match) || !in_array($match[1], $types, true)) {
+                    throw new ModxMCPClientException('Invalid element key in expected_revisions. Use the revisions map from dry_run.');
+                }
+                $hits['results'][] = array('type' => $match[1], 'id' => (int) $match[2]);
+            }
+        } else {
+            $hits = $this->searchCode(array('query' => $find, 'types' => $types, 'limit' => $limit, 'case_sensitive' => $cs));
+        }
 
-        // Reuse the tested search (incl. static-file scanning) to locate candidate elements.
-        $hits = $this->searchCode(array('query' => $find, 'types' => $types, 'limit' => $limit, 'case_sensitive' => $cs));
-
-        $results = array();
-        $totalOcc = 0;
+        // Preflight all revisions before the first write. Each save checks again under lock.
+        $plans = array();
         foreach ($hits['results'] as $h) {
             $type = $h['type'];
             if (!isset($allowed[$type])) { continue; }
             $m = $allowed[$type];
-            $el = $this->modx->getObject($m['class'], (int) $h['id']);
-            if (!$el) { continue; }
+            $id = (int) $h['id'];
+            $key = $type . ':' . $id;
+            $el = $this->modx->getObject($m['class'], $id, false);
+            if (!$el) { throw new ModxMCPClientException('Element no longer exists: ' . $key); }
             list($content, $isStatic, $staticAbs) = $this->readEffectiveContent($el, $m);
+            if ($hasExpected) { $this->assertContentRevision($content, $expected[$key]); }
             $count = $cs ? substr_count($content, $find) : substr_count(strtolower($content), strtolower($find));
-            if ($count === 0) { continue; } // name-only match — nothing to replace in content
-            if (!$dry) {
-                $new = $cs ? str_replace($find, $replacement, $content) : str_ireplace($find, $replacement, $content);
-                $this->runWithTransaction(function () use ($el, $m, $isStatic, $staticAbs, $new) {
-                    $this->writeEffectiveContent($el, $m, $isStatic, $staticAbs, $new);
-                    return true;
-                });
-                $this->logAudit('replace_across', $type, array('id' => (int) $h['id'], 'occurrences' => $count));
-            }
-            $row = array('type' => $type, 'id' => (int) $h['id'], 'name' => $h['name'], 'occurrences' => $count, 'static' => $isStatic);
-            if ($dry) {
-                // Show the actual lines that would change (substring match — 'foo' also hits
-                // 'footer'), so the preview is reviewable, not just a count.
-                $eol = "\n";
-                $ls = $this->splitLines($content, $eol);
-                $needle = $cs ? $find : strtolower($find);
-                $preview = array();
-                foreach ($ls as $li => $lt) {
-                    $hay = $cs ? $lt : strtolower($lt);
-                    if (strpos($hay, $needle) !== false) {
-                        $preview[] = array('line' => $li + 1, 'line_text' => $lt);
-                        if (count($preview) >= 5) { break; }
-                    }
-                }
-                $row['preview'] = $preview;
-            }
-            $results[] = $row;
-            $totalOcc += $count;
+            if ($count === 0) { continue; }
+            $name = $el->get($type === 'template' ? 'templatename' : 'name');
+            $plans[] = array('el' => $el, 'm' => $m, 'type' => $type, 'id' => $id, 'key' => $key,
+                'name' => $name, 'content' => $content, 'static' => $isStatic, 'path' => $staticAbs,
+                'revision' => $this->contentRevision($content), 'count' => $count);
         }
-        if (!$dry && $results) { $this->modx->cacheManager->refresh(); }
-        return array(
-            'find' => $find,
-            'replacement' => $replacement,
-            'case_sensitive' => $cs,
-            'dry_run' => $dry,
-            'elements' => count($results),
-            'total_occurrences' => $totalOcc,
-            'capped_at' => $limit,
-            'results' => $results,
-        );
+
+        $results = array();
+        $revisions = array();
+        $totalOcc = 0;
+        $committed = array();
+        $cacheRefreshed = null;
+        try {
+            foreach ($plans as $plan) {
+                $revision = $plan['revision'];
+                if (!$dry) {
+                    $new = $cs ? str_replace($find, $replacement, $plan['content']) : str_ireplace($find, $replacement, $plan['content']);
+                    try {
+                        $revision = $this->writeEffectiveContent($plan['el'], $plan['m'], $plan['static'], $plan['path'], $new, $revision);
+                    } catch (Exception $e) {
+                        $message = 'replace_across stopped at ' . $plan['key'] . '. Already committed: ' . ($committed ? implode(', ', $committed) : 'none') . '. ';
+                        if ($e instanceof ModxMCPClientException) { throw new ModxMCPClientException($message . $e->getMessage(), 0, $e); }
+                        $errorId = uniqid('modxmcp_save_', true);
+                        $this->modx->log(modX::LOG_LEVEL_ERROR, '[' . $errorId . '] ' . $message . $e->getMessage());
+                        throw new ModxMCPClientException($message . 'Internal save error; see MODX error log: ' . $errorId, 0, $e);
+                    }
+                    $committed[] = $plan['key'];
+                    $this->logContentSave('replace_across', $plan['type'], array('id' => $plan['id'], 'occurrences' => $plan['count'], 'revision' => $revision));
+                }
+                $row = array('type' => $plan['type'], 'id' => $plan['id'], 'name' => $plan['name'], 'occurrences' => $plan['count'], 'static' => $plan['static'], 'revision' => $revision);
+                if ($dry) {
+                    $eol = "\n";
+                    $ls = $this->splitLines($plan['content'], $eol);
+                    $needle = $cs ? $find : strtolower($find);
+                    $preview = array();
+                    foreach ($ls as $li => $lt) {
+                        $hay = $cs ? $lt : strtolower($lt);
+                        if (strpos($hay, $needle) !== false) {
+                            $preview[] = array('line' => $li + 1, 'line_text' => $lt);
+                            if (count($preview) >= 5) { break; }
+                        }
+                    }
+                    $row['preview'] = $preview;
+                }
+                $results[] = $row;
+                $revisions[$plan['key']] = $revision;
+                $totalOcc += $plan['count'];
+            }
+        } finally {
+            // Also clear after a partial batch; committed items must not retain stale cache.
+            if ($committed) { $cacheRefreshed = $this->refreshContentCache(); }
+        }
+        return array('find' => $find, 'replacement' => $replacement, 'case_sensitive' => $cs,
+            'dry_run' => $dry, 'elements' => count($results), 'total_occurrences' => $totalOcc,
+            'capped_at' => $limit, 'results' => $results, 'revisions' => (object) $revisions,
+            'cache_refreshed' => $cacheRefreshed);
     }
 
     /**

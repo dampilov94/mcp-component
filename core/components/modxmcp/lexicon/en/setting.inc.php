@@ -32,7 +32,7 @@ $_lang['area_modxmcp:security'] = 'modxMCP: Security';
 $_lang['area_modxmcp:paths'] = 'modxMCP: Paths';
 
 $_lang['setting_modxmcp.auto_static'] = 'Auto static elements';
-$_lang['setting_modxmcp.auto_static_desc'] = 'When enabled, MCP create/update of a chunk/snippet/template/plugin automatically converts it to a static file under core/elements/ (source = Filesystem). Edit those files directly afterwards.';
+$_lang['setting_modxmcp.auto_static_desc'] = 'When enabled, MCP create/update converts DB-only chunks/snippets/templates/plugins to uniquely named files under the configured core_path/elements/ using native MODX static storage (source=0). Existing static elements keep their file path and Media Source.';
 
 
 $_lang['setting_modxmcp.allow_run_processor'] = 'Allow run_processor';

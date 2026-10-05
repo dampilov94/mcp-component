@@ -147,7 +147,7 @@ const toolDefinitions = [
   {
     name: "modx_make_static",
     description:
-      "Convert a chunk/snippet/template/plugin to a static file under core/elements/ (writes the file, sets static=1 + source=Filesystem). One element via {type,id}, or a batch via {items:[{type,id}]}. Edit the resulting files directly afterwards. (See also the modxmcp.auto_static setting to do this automatically on every create/update.)",
+      "Convert a DB-only chunk/snippet/template/plugin to a unique file under the configured core_path/elements/. Names include the element ID; occupied files are preserved. Existing static elements keep their path, Media Source and file contents (status: already_static). New files use native MODX static storage, source=0, with a portable [[++core_path]] path. One element via {type,id}, or a batch via {items:[{type,id}]}. See modxmcp.auto_static to convert DB-only elements on create/update.",
     inputSchema: {
       type: "object",
       properties: {
@@ -287,7 +287,7 @@ const toolDefinitions = [
   {
     name: "modx_view_element",
     description:
-      "View a chunk/snippet/template/plugin as NUMBERED lines (like `cat -n`), optionally windowed by start_line/end_line. Use this to find the exact line numbers to edit with modx_edit_element_lines — cheaper than pulling the whole element. Returns total_lines and the numbered window.",
+      "View a chunk/snippet/template/plugin as NUMBERED lines (like `cat -n`), optionally windowed by start_line/end_line. Use this to find the exact line numbers to edit with modx_edit_element_lines — cheaper than pulling the whole element. Returns total_lines, the numbered window and revision (SHA-256 of the full content). Pass revision as expected_revision when editing.",
     inputSchema: {
       type: "object",
       properties: {
@@ -303,13 +303,14 @@ const toolDefinitions = [
   {
     name: "modx_edit_element_lines",
     description:
-      "Edit a chunk/snippet/template/plugin BY LINE, sending only the changed lines (no need to resend the whole element). Each edit replaces the inclusive range [start_line..end_line] with `replacement`. Conventions: delete = replacement \"\"; insert before a line = set end_line to start_line-1. Strongly recommended: pass `expect` (the current text of those lines) as a safety anchor — it is verified, and relocated to its unique match if the line numbers drifted; any mismatch aborts the WHOLE call (atomic, nothing is written). MULTI-EDIT RULES: all line numbers refer to the file exactly as you last saw it in modx_view_element (the original) — do NOT adjust them for the effect of your other edits; the server applies edits together (bottom-up) so earlier inserts/deletes never shift later ones. Ranges must not overlap. So to change several spots in one big file, send them all in ONE call with original line numbers. Read first with modx_view_element to get line numbers.",
+      "Edit a chunk/snippet/template/plugin BY LINE, sending only the changed lines (no need to resend the whole element). Each edit replaces the inclusive range [start_line..end_line] with `replacement`. Conventions: delete = replacement \"\"; insert before a line = set end_line to start_line-1. Strongly recommended: pass `expect` (the current text of those lines) as a safety anchor — it is verified, and relocated to its unique match if the line numbers drifted; any mismatch aborts the WHOLE call (atomic, nothing is written). MULTI-EDIT RULES: all line numbers refer to the file exactly as you last saw it in modx_view_element (the original) — do NOT adjust them for the effect of your other edits; the server applies edits together (bottom-up) so earlier inserts/deletes never shift later ones. Ranges must not overlap. So to change several spots in one big file, send them all in ONE call with original line numbers. Read first with modx_view_element to get line numbers and revision; pass expected_revision to reject changes since that read. On save failure the original static file is restored.",
     inputSchema: {
       type: "object",
       properties: {
         type: { type: "string", enum: ["chunk", "snippet", "template", "plugin"] },
         id: { type: "number" },
         name: { type: "string" },
+        expected_revision: { type: "string", pattern: "^[a-f0-9]{64}$", description: "revision from modx_view_element. If the full content has changed, the edit is rejected. Recommended with every edit." },
         edits: {
           type: "array",
           description: "List of line edits applied atomically.",
@@ -949,9 +950,10 @@ const toolDefinitions = [
         find: { type: "string", description: "Exact substring to find in element content." },
         replacement: { type: "string", description: "Replacement (\"\" removes the substring)." },
         types: { type: "array", items: { type: "string", enum: ["chunk", "snippet", "template", "plugin"] }, description: "Element types to scan. Default: all four." },
-        case_sensitive: { type: "boolean", description: "Case-sensitive match (default false)." },
+        case_sensitive: { type: "boolean", description: "Case-sensitive match (default true)." },
         dry_run: { type: "boolean", description: "Preview only — report matches without writing (default false). Do this first." },
-        limit: { type: "number", description: "Max elements to touch (default 200)." },
+        limit: { type: "number", description: "Max elements to touch (default and maximum 200)." },
+        expected_revisions: { type: "object", propertyNames: { pattern: "^(chunk|snippet|template|plugin):[1-9][0-9]*$" }, additionalProperties: { type: "string", pattern: "^[a-f0-9]{64}$" }, description: "Copy the revisions map from dry_run. Only these elements are considered; all revisions are checked before the first write and again before each save." },
       },
       required: ["find", "replacement"],
     },
@@ -1034,8 +1036,18 @@ const toolDefinitions = [
   },
   {
     name: "modx_delete_media_folder",
-    description: "Delete a folder (and its contents) inside a media source. `source` = id/name, `path` = folder path within the source.",
-    inputSchema: { type: "object", properties: { source: { type: "string" }, path: { type: "string" } }, required: ["source", "path"] },
+    description: "Recursively delete a folder inside a local filesystem Media Source. Use a relative path such as images/archive. Source-root deletion, traversal, absolute paths, streams and symbolic links in the path/tree are refused. First use dry_run:true to inspect the folder, counts and a bounded entry list; pass its revision as expected_revision when deleting to reject changed tree metadata. Deletion is irreversible and may be partial on a filesystem error; inspect before retrying.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        source: { type: "string", description: "Local filesystem Media Source id or name." },
+        path: { type: "string", description: "Relative folder path inside the source, e.g. images/archive. The source root is forbidden." },
+        dry_run: { type: "boolean", description: "Inspect the full tree without deleting (default false). Recommended before deletion." },
+        expected_revision: { type: "string", pattern: "^[a-f0-9]{64}$", description: "revision from dry_run; compares tree paths and metadata before deletion." },
+        limit: { type: "integer", minimum: 1, maximum: 500, description: "Maximum entries returned in the preview (default 200). The entire tree is still inspected." },
+      },
+      required: ["source", "path"],
+    },
   },
   {
     name: "modx_duplicate_resource",

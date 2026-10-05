@@ -3,6 +3,8 @@ core/packages/
 _packages/
 *.transport.zip
 .env
+.mcp.json
+.local/
 .DS_Store
 
 # Vendor component sources for study only — never packaged or committed

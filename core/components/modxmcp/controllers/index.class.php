@@ -10,6 +10,11 @@
  */
 class ModxmcpIndexManagerController extends modExtraManagerController {
 
+    /** The component exposes administrative tools and the API token. */
+    public function checkPermissions() {
+        return $this->modx->hasPermission('settings');
+    }
+
     public function getPageTitle() {
         return $this->modx->lexicon('modxmcp');
     }

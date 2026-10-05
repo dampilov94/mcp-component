@@ -102,6 +102,7 @@ $menu->fromArray(array(
     'handler'     => '',
     'action'      => 'index',
     'namespace'   => PKG_NAMESPACE,
+    'permissions' => 'settings',
 ), '', true, true);
 $menuVehicle = $builder->createVehicle($menu, array(
     xPDOTransport::PRESERVE_KEYS => true,
@@ -124,6 +125,7 @@ $menuGraph->fromArray(array(
     'handler'     => '',
     'action'      => 'graph',
     'namespace'   => PKG_NAMESPACE,
+    'permissions' => 'settings',
 ), '', true, true);
 $menuGraphVehicle = $builder->createVehicle($menuGraph, array(
     xPDOTransport::PRESERVE_KEYS => true,
