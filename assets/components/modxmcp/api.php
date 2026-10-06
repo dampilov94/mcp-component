@@ -232,7 +232,7 @@ try {
             if ($modx->getOption('modxmcp.debug', null, false)) { $body['details'] = $e->getMessage(); }
         }
         try {
-            $body['caps'] = $mcp instanceof modxMCP ? $mcp->capabilitiesFingerprint(true) : (string) $modx->getOption('modxmcp.disabled_groups', null, '');
+            $body['caps'] = $mcp instanceof modxMCP ? $mcp->capabilitiesFingerprint($action !== 'get_capabilities') : (string) $modx->getOption('modxmcp.disabled_groups', null, '');
         } catch (Throwable $e) {
             // A notification failure must not turn a completed action into an unknown outcome.
             $body['caps'] = (string) $modx->getOption('modxmcp.disabled_groups', null, '');

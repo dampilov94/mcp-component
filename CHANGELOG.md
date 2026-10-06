@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Split the PHP model into a small facade plus 16 operation traits, preserving existing
+  method signatures and private shared scope. Move log reading to a dedicated reverse reader.
+- Defer component cache refresh to the end of resource/reorder/static batches, including partial
+  outcomes; use native resource cache flags inside batches while retaining validation/save events.
+- Replace per-template/root/context overview counts with constrained grouped queries, reuse
+  template/context data and join only visible TV attachments. Bound the root overview at 500 nodes.
+- Read error/audit tails backwards with returned-byte/line limits, action filtering and explicit
+  truncation metadata rather than materialising entire logs. Combine integration namespace probes
+  into one query and avoid duplicate fingerprint probes for get_capabilities.
 - Advertise MCP effect annotations and output schemas for every tool. Return structured
   results under result alongside compatible JSON text, validate successful output, and keep
   write request IDs in output-schema errors. Processor-specific payloads remain flexible.

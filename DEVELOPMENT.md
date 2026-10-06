@@ -17,8 +17,8 @@ AI client ⇄ (stdio)  modx-mcp (Node, client/index.js)  ⇄ (HTTPS + X-MCP-Toke
 - **`assets/components/modxmcp/api.php`** — the token-protected HTTP endpoint. Parses the JSON
   body and calls the model.
 - **`core/components/modxmcp/model/modxmcp.class.php`** — the brain. One class `modxMCP` with a
-  big `processRequest($action, $elementType, $data)` dispatcher. **This is where almost all work
-  happens.**
+  big `processRequest($action, $elementType, $data)` dispatcher. Operations and shared helpers live
+  in `model/traits/*.trait.php`; the facade composes them into the same class.
 
 The repo also builds a **MODX transport package** (`_build/`) so the component installs on any
 MODX 2.x site like a normal add-on.
@@ -32,7 +32,9 @@ assets/components/modxmcp/
   connector.php                         manager (CMP) AJAX connector
   js/home.js                            CMP dashboard JS
 core/components/modxmcp/
-  model/modxmcp.class.php               the modxMCP class (all actions live here)
+  model/modxmcp.class.php               facade + shared state + element CRUD dispatch
+  model/traits/*.trait.php              action registry and operation modules
+  model/logreader.class.php             bounded reverse log reader
   controllers/index.class.php           CMP controller (Components > modxMCP)
   templates/home.tpl                    CMP dashboard template
   processors/mgr/*.class.php            manager processors (getstatus, regeneratetoken)
@@ -57,7 +59,7 @@ Every capability is an **action**. Adding one is three steps:
    'my_action' => 'myAction',
    ```
 
-2. **Model method** — implement it on the `modxMCP` class. Return any JSON-serialisable value
+2. **Model method** — implement it in the relevant trait composed by `modxMCP`. Return any JSON-serialisable value
    (array/string). Throw `Exception` on error — the endpoint turns it into a clean error.
 
 3. **Client tool** — add one entry to the `toolDefinitions` array in `client/index.js`:
@@ -193,6 +195,18 @@ to configured group toggles. Integration availability probes require the namespa
 model code at its configured path; do not initialise services just to advertise tools. Refresh
 the fingerprint after an action that might install/remove integrations. Annotations are hints;
 server auth, group gates and processor checks remain the authority.
+
+Operation modules are PHP traits composed by the same modxMCP facade, not independent
+permission scopes. Shared helper/state access remains private. Registry, graph, elements,
+resources, files, diagnostics, capabilities, administration, packages, search, TV inputs,
+MIGX, miniShop2, VersionX and VirtualPage have separate modules; runtime holds cross-cutting
+helpers. New trait dependencies must be uploaded before replacing the facade. The package
+already copies the component model recursively. Preserve CRLF and method signatures.
+
+Batch cache deferral uses a depth/pending flag and a finally flush after partial batches.
+Only component refresh calls/native resource flags are controlled; no cache-manager proxy
+or suppression of save events. Overview aggregates constrain counts to selected IDs/contexts;
+reverse log reading keeps byte/line budgets and explicitly reports truncation.
 
 ## 9. Security model (don't regress these)
 

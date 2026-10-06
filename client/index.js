@@ -1076,7 +1076,7 @@ const toolDefinitions = [
   {
     name: "modx_read_error_log",
     description: "Read the tail of the MODX error log (core/cache/logs/error.log) for diagnostics. Optional `limit` (lines, default 100).",
-    inputSchema: { type: "object", properties: { limit: { type: "number" } } },
+    inputSchema: { type: "object", properties: { limit: { type: "integer", minimum: 1, maximum: 1000 } } },
   },
   {
     name: "modx_refresh_uris",
@@ -1366,7 +1366,7 @@ const toolDefinitions = [
   {
     name: "modx_read_audit_log",
     description: "Read the modxMCP write-audit trail (newest last). Optionally filter to one action.",
-    inputSchema: { type: "object", properties: { action: { type: "string", description: "Filter to this action name." }, limit: { type: "number", description: "Max entries (default 100)." } } },
+    inputSchema: { type: "object", properties: { action: { type: "string", description: "Filter to this action name." }, limit: { type: "integer", minimum: 1, maximum: 1000, description: "Max entries (default 100)." } } },
   },
   {
     name: "modx_run_processor",

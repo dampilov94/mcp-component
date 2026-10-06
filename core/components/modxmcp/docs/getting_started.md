@@ -130,6 +130,20 @@ Errors come back with a clear message — read it and fix the call.
   Group, integration-code and processor-gate changes update the capability fingerprint on the
   next ordinary response; no periodic polling is added. Namespace/code probes are lightweight,
   not a guarantee that every database migration or third-party processor is healthy.
+- **Batch cache work.** bulk_resources, reorder_resources and batch make_static defer
+  component cache refresh until the outer batch exits, including partial failures. Resource
+  processors still run validation/save events, with their syncsite/clearCache refresh disabled
+  only inside these batches. Standalone native save behavior is retained. Plugin-owned cache
+  operations are not intercepted; do not expect another request to see every intermediate
+  batch step before the final refresh.
+- **Overview and log budgets.** project_overview reuses grouped counts for visible templates,
+  root child counts and real contexts; max_tree_nodes is capped at 500. Template TV queries
+  only inspect the selected templates. Error/audit logs are read backwards in chunks; limit
+  defaults to 100 and is capped at 1000, with a returned-byte budget from max_read_bytes
+  (default 256 KiB, minimum 1 KiB). Results stay oldest-to-newest within the tail. Audit action
+  filtering scans older chunks as needed instead of loading the whole file. has_more refers
+  to older unread log data, not guaranteed additional filter matches. truncated and
+  skipped_long_lines expose limits/oversized skipped entries; total is the returned count.
 - **Study an add-on.** `modx_get_component_files` + `modx_read_component_file` read installed
   component source; see the `study_component` topic.
 
