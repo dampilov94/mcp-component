@@ -8,7 +8,7 @@
  *   CLI:  php _build/build.transport.php
  *   web:  place the repo under the docroot and open _build/build.transport.php
  *
- * Produces _packages/modxmcp-<version>-<release>.transport.zip
+ * Produces core/packages/modxmcp-<version>-<release>.transport.zip on the build site
  */
 set_time_limit(0);
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_STRICT);

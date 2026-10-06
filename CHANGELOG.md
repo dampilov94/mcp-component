@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.10.0 (2026-10-07)
 
 - Split the PHP model into a small facade plus 16 operation traits, preserving existing
   method signatures and private shared scope. Move log reading to a dedicated reverse reader.

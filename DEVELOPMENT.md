@@ -225,8 +225,8 @@ reverse log reading keeps byte/line budgets and explicitly reports truncation.
 ## 10. Versioning
 
 `_build/build.config.php` `PKG_VERSION`, `modxMCP::VERSION`, `package.json`, both root versions
-in `package-lock.json`, and the release entry in `CHANGELOG.md` move together. During this
-review batch, retain 1.9.0 until the fixes are complete and the next release is prepared.
+in `package-lock.json`, and the release entry in `CHANGELOG.md` move together. Keep these
+versions aligned when preparing a release; the completed review batch is released as 1.10.0.
 
 ## 11. Current action surface (high level)
 
