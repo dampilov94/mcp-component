@@ -1,7 +1,8 @@
 # Getting started
 
-Everything is an *action* called via a `modx_*` tool. Responses are the data directly (the
-success envelope is stripped). Errors come back with a clear message — read it and fix the call.
+Everything is an *action* called via a `modx_*` tool. Legacy text is the data directly (the
+HTTP success envelope is stripped); structured MCP data is in `structuredContent.result`.
+Errors come back with a clear message — read it and fix the call.
 
 ## Recommended workflow (follow this order)
 
@@ -108,6 +109,27 @@ success envelope is stripped). Errors come back with a clear message — read it
   not a client IP substituted by forwarded-header rewriting. Configure this before upgrading
   an HTTPS-required site that terminates TLS upstream. allowed_ips uses the same strict IP/CIDR
   matcher and REMOTE_ADDR only; empty allows all, malformed rules never become permissive CIDRs.
+- **Tool metadata.** Every tool advertises readOnlyHint, destructiveHint, idempotentHint and
+  openWorldHint plus an outputSchema. These are advisory descriptions of the main operation,
+  not permission checks. Read tools are idempotent; write tools remain non-idempotent because
+  saves can append versions/events or create more objects. A supplied request ID protects one
+  operation and does not change that classification. Generic processor outputs retain flexible
+  payload schemas; stable core tools describe their fields. Modern clients validate the object
+  wrapper `structuredContent.result`. Legacy text stays the original JSON payload. Errors use
+  isError and do not pretend to satisfy success schemas. After a write output-shape error, inspect
+  the reported request ID before retrying; the PHP action may already have completed.
+- **Element code.** get_element returns effective local static-file code without re-saving it,
+  plus revision for chunks/snippets/templates/plugins. Text includes code only in its canonical
+  field (snippet/plugincode/content), without another CODE block. Modern structured and legacy
+  text channels represent the same result; clients should consume one representation.
+- **Available tools.** Discovery filters supported/available actions reported by PHP. Disabled
+  groups stay disabled; missing integration namespaces/model code hide their dedicated tools.
+  run_processor is hidden while its setting is off. get_capabilities explains disabled and
+  unavailable actions/reasons, and check_integrations retains installation/version information
+  with an availability flag. Installing an integration does not automatically enable its group.
+  Group, integration-code and processor-gate changes update the capability fingerprint on the
+  next ordinary response; no periodic polling is added. Namespace/code probes are lightweight,
+  not a guarantee that every database migration or third-party processor is healthy.
 - **Study an add-on.** `modx_get_component_files` + `modx_read_component_file` read installed
   component source; see the `study_component` topic.
 

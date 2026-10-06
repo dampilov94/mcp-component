@@ -213,6 +213,7 @@ try {
     $fingerprint = hash('sha256', json_encode($normalized, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
     $execute = function () use ($modx, $corePath, $action, $type, $data, $requestId, $maxResponse) {
         $status = 200;
+        $mcp = null;
         try {
             $mcp = new modxMCP($modx);
             $result = $mcp->processRequest($action, $type, $data);
@@ -230,7 +231,13 @@ try {
             $body = array('success' => false, 'error' => 'Internal Server Error', 'error_code' => 'internal_error', 'error_id' => $errorId);
             if ($modx->getOption('modxmcp.debug', null, false)) { $body['details'] = $e->getMessage(); }
         }
-        $body['caps'] = (string) $modx->getOption('modxmcp.disabled_groups', null, '');
+        try {
+            $body['caps'] = $mcp instanceof modxMCP ? $mcp->capabilitiesFingerprint(true) : (string) $modx->getOption('modxmcp.disabled_groups', null, '');
+        } catch (Throwable $e) {
+            // A notification failure must not turn a completed action into an unknown outcome.
+            $body['caps'] = (string) $modx->getOption('modxmcp.disabled_groups', null, '');
+            modxmcpLogHttpError($modx, '[modxmcp] Capability fingerprint refresh failed.');
+        }
         if ($requestId !== null) { $body['request_id'] = $requestId; }
         return modxmcpBuildFrame($modx, $status, $body, $maxResponse);
     };

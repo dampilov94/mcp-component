@@ -159,8 +159,11 @@ and rollback path, and build the new transport package after the agreed batch is
   private and include it in site backups; deleting it removes the history that prevents replay.
   Runtime state/response files have PHP exit guards, and response bodies are base64-encoded
   to keep arbitrary returned code outside the PHP parser. This is not encryption.
-  New actions should be classified conservatively by isReadOnlyTool in client/index.js so an
-  action with side effects receives an ID. Server/client limits and error behavior are documented
+  New actions should be classified conservatively by isReadOnlyTool/annotationsFor in
+  client/contracts.js so an action with side effects receives an ID. outputSchemaFor describes
+  structuredContent.result; stable outputs get field schemas, version-specific processor results
+  remain flexible. Compile schemas before sending calls and validate successful output at runtime.
+  Legacy text deliberately preserves the unwrapped JSON payload for older clients. Server/client limits and error behavior are documented
   in the getting_started help and README. Runtime state is not a release artifact.
 
 - **Full package rebuild:** bump `PKG_VERSION` in `_build/build.config.php` **and** `version` in
@@ -184,6 +187,12 @@ and rollback path, and build the new transport package after the agreed batch is
 
 Test environments for this project: **fordev** = clean MODX (good for install/ACL/core tests);
 **buyguns** = has miniShop2 + MIGX + rich content (use it for ms2/MIGX/search tests).
+
+Tool discovery now uses supported_actions/available_actions in get_capabilities in addition
+to configured group toggles. Integration availability probes require the namespace and relevant
+model code at its configured path; do not initialise services just to advertise tools. Refresh
+the fingerprint after an action that might install/remove integrations. Annotations are hints;
+server auth, group gates and processor checks remain the authority.
 
 ## 9. Security model (don't regress these)
 

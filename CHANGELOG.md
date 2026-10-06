@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Advertise MCP effect annotations and output schemas for every tool. Return structured
+  results under result alongside compatible JSON text, validate successful output, and keep
+  write request IDs in output-schema errors. Processor-specific payloads remain flexible.
+- Remove the repeated CODE block from get_element; read effective local static files without
+  DB synchronisation, return revisions and drop redundant code aliases only when identical.
+- Add get_capabilities as a diagnostic MCP tool and filter discovery by supported/available
+  actions, disabled groups, missing integration code/namespaces and the run_processor gate.
+  Capability fingerprints detect installation/gate changes; report availability without loading
+  add-on services. Installation alone never enables an explicitly disabled group.
 - Restrict the development install.transport.php helper to CLI before MODX bootstrap.
   Add CLI signature/action options, derive the default signature from build.config.php,
   report failure exit codes, preserve enabled state and stop printing the full API token.

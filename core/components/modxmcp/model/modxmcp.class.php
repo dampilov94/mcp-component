@@ -9,6 +9,7 @@ class modxMCP {
     public $config =[];
     private $actionSpecsCache = null;
     private $transactionalContentTables = array();
+    private $integrationAvailabilityCache = null;
     private $allowedElementTypes = ['chunk', 'snippet', 'template', 'resource', 'tv', 'category', 'plugin'];
     private $versionXTypes = [
         'resource' => ['class' => 'vxResource', 'processor' => 'resources', 'label' => 'title', 'content_class' => 'modResource'],
@@ -144,6 +145,20 @@ class modxMCP {
                 if ($response->isError()) throw new ModxMCPClientException($this->formatProcessorErrors($response));
                 
                 $objData = $response->getObject();
+                $codeMap = $this->lineEditMap();
+                if (isset($codeMap[$elementType])) {
+                    $el = $this->modx->getObject($codeMap[$elementType]['class'], (int) $data['id'], false);
+                    if (!$el) { throw new ModxMCPClientException('Element no longer exists.'); }
+                    list($effective) = $this->readEffectiveContent($el, $codeMap[$elementType]);
+                    $field = $codeMap[$elementType]['field'];
+                    $oldCode = isset($objData[$field]) ? $objData[$field] : null;
+                    $objData[$field] = $effective;
+                    $objData['revision'] = $this->contentRevision($effective);
+                    // Keep one canonical code field if the processor also exposes its alias.
+                    if ($field !== 'content' && array_key_exists('content', $objData)
+                        && ($objData['content'] === $oldCode || $objData['content'] === $effective)) { unset($objData['content']); }
+                }
+
                 
                 if ($elementType === 'tv') {
                     $objData['templates'] = $this->getTvTemplates($data['id']);
@@ -3053,6 +3068,7 @@ class modxMCP {
      */
     public function getIntegrationsReport() {
         $out = array();
+        $availability = $this->integrationAvailability();
         foreach ($this->knownIntegrations() as $def) {
             $installed = (bool) $this->modx->getObject('modNamespace', array('name' => $def['ns']));
             if (!$installed && !empty($def['snippet'])) {
@@ -3073,6 +3089,8 @@ class modxMCP {
                 'key'       => $def['ns'],
                 'label'     => $def['label'],
                 'installed' => $installed,
+                'available' => $availability[$def['ns']]['available'],
+                'unavailable_reason' => $availability[$def['ns']]['reason'],
                 'version'   => $version,
                 'note'      => $def['note'],
             );
@@ -3589,6 +3607,12 @@ class modxMCP {
         if (isset($disabled[$map[$action]])) {
             throw new ModxMCPClientException("Возможность '{$map[$action]}' выключена в modxMCP — включите её в админке: Дополнения → modxMCP. (Capability '{$map[$action]}' is disabled; enable it in Components > modxMCP.)");
         }
+        if (in_array($map[$action], array('minishop2', 'migx', 'versionx', 'virtualpage'), true)) {
+            $availability = $this->integrationAvailability();
+            if (!$availability[$map[$action]]['available']) {
+                throw new ModxMCPClientException('Integration ' . $map[$action] . ' is unavailable (' . $availability[$map[$action]]['reason'] . '). Install or repair it before using its tools.');
+            }
+        }
     }
 
     /**
@@ -3616,27 +3640,83 @@ class modxMCP {
         return array('topic' => $topic, 'content' => (string) @file_get_contents($file));
     }
 
+    /** Cheap installation probes; do not initialise add-on services merely to list tools. */
+    private function integrationAvailability() {
+        if ($this->integrationAvailabilityCache !== null) { return $this->integrationAvailabilityCache; }
+        $probes = array(
+            'minishop2' => array('minishop2.core_path', 'model/minishop2/minishop2.class.php'),
+            'migx' => array('migx.core_path', 'model/migx/migxconfig.class.php'),
+            'versionx' => array('versionx.core_path', 'model/versionx.class.php'),
+            'virtualpage' => array('virtualpage_core_path', 'model/virtualpage/virtualpage.class.php'),
+        );
+        $out = array();
+        foreach ($probes as $key => $probe) {
+            $namespace = $this->modx->getObject('modNamespace', array('name' => $key), false);
+            $path = $this->modx->getOption($probe[0], null, $this->modx->getOption('core_path') . 'components/' . $key . '/');
+            $file = rtrim($this->resolveModxPathPlaceholders((string) $path), '/\\') . '/' . $probe[1];
+            clearstatcache(true, $file);
+            $present = $namespace !== null && $namespace !== false;
+            $code = $present && is_file($file);
+            $out[$key] = array('installed' => $present, 'available' => $code,
+                'reason' => !$present ? 'not_installed' : (!$code ? 'code_missing' : null));
+        }
+        $this->integrationAvailabilityCache = $out;
+        return $out;
+    }
+
     public function getCapabilities() {
         $groups = $this->listSupportedActions();
         $toggle = $this->toggleableGroupKeys();
         $disabled = $this->disabledGroups();
+        $availability = $this->integrationAvailability();
+        $supported = array();
         $disabledActions = array();
-        foreach ($toggle as $g) {
-            if (isset($disabled[$g]) && isset($groups[$g])) {
-                foreach ($groups[$g] as $a) { $disabledActions[] = $a; }
+        $unavailableActions = array();
+        $unavailableGroups = array();
+        $reasons = array();
+        $integrations = array();
+        foreach ($availability as $key => $status) {
+            $integrations[$key] = $status['available'];
+            if (!$status['available']) { $unavailableGroups[] = $key; $reasons[$key] = $status['reason']; }
+        }
+        foreach ($groups as $group => $actions) {
+            $supported = array_merge($supported, $actions);
+            if (in_array($group, $toggle, true) && isset($disabled[$group])) {
+                $disabledActions = array_merge($disabledActions, $actions);
             }
+            if (isset($availability[$group]) && !$availability[$group]['available']) {
+                $unavailableActions = array_merge($unavailableActions, $actions);
+            }
+        }
+        if (!$this->modx->getOption('modxmcp.allow_run_processor', null, false)) {
+            $unavailableActions[] = 'run_processor';
+            $reasons['run_processor'] = 'disabled_by_setting';
         }
         return array(
             'toggleable_groups' => $toggle,
-            'disabled_groups'   => array_keys($disabled),
-            'disabled_actions'  => $disabledActions,
-            'fingerprint'       => $this->capabilitiesFingerprint(),
+            'disabled_groups' => array_keys($disabled),
+            'disabled_actions' => array_values(array_unique($disabledActions)),
+            'supported_actions' => array_values(array_unique($supported)),
+            'available_actions' => array_values(array_diff($supported, $disabledActions, $unavailableActions)),
+            'unavailable_groups' => $unavailableGroups,
+            'unavailable_actions' => array_values(array_unique($unavailableActions)),
+            'unavailable_reasons' => (object) $reasons,
+            'integrations' => (object) $integrations,
+            'fingerprint' => $this->capabilitiesFingerprint(),
         );
     }
 
-    /** Short fingerprint of the capability config; the client watches it on every response. */
-    public function capabilitiesFingerprint() {
-        return (string) $this->modx->getOption('modxmcp.disabled_groups', null, '');
+    /** Detect group, installation and gated-processor changes on ordinary API responses. */
+    public function capabilitiesFingerprint($refresh = false) {
+        if ($refresh) { $this->integrationAvailabilityCache = null; }
+        $integrations = array();
+        foreach ($this->integrationAvailability() as $key => $status) { $integrations[$key] = $status['available']; }
+        return hash('sha256', json_encode(array(
+            'groups' => (string) $this->modx->getOption('modxmcp.disabled_groups', null, ''),
+            'integrations' => $integrations,
+            'run_processor' => (bool) $this->modx->getOption('modxmcp.allow_run_processor', null, false),
+            'actions' => $this->listSupportedActions(),
+        ), JSON_UNESCAPED_UNICODE));
     }
 
     // --- Property sets (modPropertySet + modElementPropertySet), direct xPDO ---

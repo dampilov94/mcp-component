@@ -11,6 +11,7 @@ const {
 const { randomUUID } = require("node:crypto");
 const { AjvJsonSchemaValidator } = require("@modelcontextprotocol/sdk/validation/ajv");
 const { ModxApiClient, ModxApiError } = require("./api.js");
+const { isReadOnlyTool, annotationsFor, outputSchemaFor } = require("./contracts.js");
 const fs = require("fs");
 const path = require("path");
 
@@ -94,11 +95,6 @@ async function modxApiRequest(payload, context = {}) {
   return modxApi.post(payload, context);
 }
 
-function isReadOnlyTool(name) {
-  return /^modx_(?:(?:ms2|migx|versionx|virtualpage)_)?(?:get|list|read|view|search|find|check|describe|suggest)_/.test(name)
-    || ["modx_help", "modx_dependency_graph", "modx_project_overview", "modx_system_info", "modx_virtualpage_resolve_route"].includes(name);
-}
-
 const ELEMENT_TYPES = [
   "chunk",
   "snippet",
@@ -123,6 +119,11 @@ const VIRTUALPAGE_HANDLER_TYPES = [
 ];
 
 const toolDefinitions = [
+  {
+    name: "modx_get_capabilities",
+    description: "Inspect supported/available actions, disabled groups, unavailable integrations and gated settings. Tool discovery hides disabled/unavailable actions; this explains why and helps decide what to install or enable.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
   {
     name: "modx_get_request_status",
     description: "Inspect a request_id after a timeout/cancellation/connection loss without executing the action again. States: not_found, in_progress, unknown, completed, expired. include_result:true returns the recorded API response when retained. If retrying a completed call, reuse its ID as _request_id with exactly the same arguments; never start an uncertain write with a new ID without checking the site.",
@@ -1746,6 +1747,8 @@ const toolDefinitions = [
 
 // Keep request identity outside business arguments and advertise it only for write tools.
 for (const tool of toolDefinitions) {
+  tool.annotations = annotationsFor(tool.name);
+  tool.outputSchema = outputSchemaFor(tool.name);
   if (!isReadOnlyTool(tool.name)) {
     tool.inputSchema.properties = {
       ...tool.inputSchema.properties,
@@ -1756,12 +1759,18 @@ for (const tool of toolDefinitions) {
 const toolsByName = new Map(toolDefinitions.map((tool) => [tool.name, tool]));
 const schemaProvider = new AjvJsonSchemaValidator();
 const argumentValidators = new Map();
+const outputValidators = new Map();
 
 async function fetchCapabilities(context = {}) {
   try {
     const r = await modxApiRequest({ action: "get_capabilities", data: {} }, context);
     if (!r.data || !Array.isArray(r.data.disabled_actions) || !r.data.disabled_actions.every((action) => typeof action === "string")) {
       throw new ModxApiError("Endpoint returned invalid capability data.", undefined, "invalid_response");
+    }
+    for (const field of ["supported_actions", "available_actions", "unavailable_actions"]) {
+      if (r.data[field] !== undefined && (!Array.isArray(r.data[field]) || !r.data[field].every((action) => typeof action === "string"))) {
+        throw new ModxApiError(`Endpoint returned invalid ${field} capability data.`, undefined, "invalid_response");
+      }
     }
     return r.data;
   } catch (error) {
@@ -1777,18 +1786,18 @@ server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => {
   // refresh is driven by noteCaps() (called inside modxApiRequest on every response), so no
   // polling is needed.
   const caps = await fetchCapabilities({ signal: extra.signal });
-  const disabled = new Set(caps && Array.isArray(caps.disabled_actions) ? caps.disabled_actions : []);
-  const tools = disabled.size
-    ? toolDefinitions.filter((t) => !disabled.has(t.name.replace(/^modx_/, "")))
-    : toolDefinitions;
+  const hidden = new Set([...(caps?.disabled_actions || []), ...(caps?.unavailable_actions || [])]);
+  const available = Array.isArray(caps?.available_actions) ? new Set(caps.available_actions) : null;
+  const supported = Array.isArray(caps?.supported_actions) ? new Set(caps.supported_actions) : null;
+  const tools = toolDefinitions.filter((tool) => {
+    const action = tool.name.slice("modx_".length);
+    return !hidden.has(action) && (!available || available.has(action)) && (!supported || supported.has(action));
+  });
   return { tools };
 });
 
-function formatCodeFromResult(resultData) {
-  return resultData.snippet || resultData.plugincode || resultData.content || "";
-}
-
 server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+  let requestId;
   try {
     const { name } = request.params;
     const tool = toolsByName.get(name);
@@ -1804,21 +1813,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     if (!validation.valid) throw new Error(`Invalid arguments: ${validation.errorMessage}`);
     const args = { ...supplied };
     const write = !isReadOnlyTool(name);
-    const requestId = write ? (args._request_id || randomUUID()) : undefined;
+    requestId = write ? (args._request_id || randomUUID()) : undefined;
     if (write) delete args._request_id;
+    let validateOutput = outputValidators.get(name);
+    if (!validateOutput) {
+      validateOutput = schemaProvider.getValidator(tool.outputSchema);
+      outputValidators.set(name, validateOutput);
+    }
     const payload = { action: name.slice("modx_".length), data: args };
     if (["modx_list_elements", "modx_get_element", "modx_update_element", "modx_create_element", "modx_delete_element"].includes(name)) payload.type = args.type;
     if (requestId) payload.request_id = requestId;
     const result = await modxApiRequest(payload, { signal: extra.signal });
-    const text = name === "modx_get_element"
-      ? `=== PARAMETERS ===\n${JSON.stringify(result.data, null, 2)}\n\n=== CODE ===\n${formatCodeFromResult(result.data)}`
-      : JSON.stringify(result.data, null, 2);
+    const structured = { result: result.data };
+    const output = validateOutput(structured);
+    if (!output.valid) {
+      const hint = requestId ? ` The action may have completed; check modx_get_request_status for request_id=${requestId}.` : "";
+      throw new Error(`Unexpected tool result: ${output.errorMessage}.${hint}`);
+    }
     return {
-      content: [{ type: "text", text }],
+      // Preserve legacy JSON text; code appears only in its canonical field, not another CODE block.
+      content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }],
+      structuredContent: structured,
       ...(requestId ? { _meta: { request_id: requestId, idempotency_supported: result.request_id === requestId } } : {}),
     };
   } catch (error) {
-    return { content: [{ type: "text", text: `Error: ${error.message || "Tool request failed."}` }], isError: true };
+    return { content: [{ type: "text", text: `Error: ${error.message || "Tool request failed."}` }], isError: true, ...(requestId ? { _meta: { request_id: requestId } } : {}) };
   }
 });
 
