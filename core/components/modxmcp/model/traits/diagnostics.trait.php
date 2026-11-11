@@ -229,9 +229,6 @@ trait ModxMCPDiagnosticsTrait {
         return $out;
     }
 
-    /**
-     * Generate a fresh modxmcp.api_token, save it, and return it once.
-     */
     private function flushPermissions() {
         $cm = $this->modx->getCacheManager();
         $ok = $cm ? $cm->flushPermissions() : false;
@@ -357,10 +354,6 @@ trait ModxMCPDiagnosticsTrait {
         return is_array($decoded) ? $decoded : $this->normalizeProcessorResponse($response);
     }
 
-    /**
-     * Reports which capability groups exist, which are off, and the flat list of disabled
-     * action names — the client uses this to hide disabled tools from its tool list.
-     */
     /**
      * Built-in documentation (RAG-lite): returns a help topic's markdown on demand. No topic
      * (or 'index') returns the topic list. Docs live in core/components/modxmcp/docs/.

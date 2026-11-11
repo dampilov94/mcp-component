@@ -11,7 +11,7 @@ _packages/
 # Vendor component sources for study only — never packaged or committed
 _reference/
 
-# Local-only AI working notes (dev brief + roadmap; internal, not part of the package)
+# Exclude private local AI notes if recreated
 AI_HANDOFF.md
 AI_ROADMAP.md
 

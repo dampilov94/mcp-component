@@ -1,6 +1,9 @@
 <?php
 /** administration operations for the modxMCP facade; shared private helpers remain in the same class scope. */
 trait ModxMCPAdministrationTrait {
+    /**
+     * Generate a fresh modxmcp.api_token, save it, and return it once.
+     */
     private function regenerateToken() {
         try {
             $token = bin2hex(random_bytes(32));

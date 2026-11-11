@@ -117,6 +117,9 @@ trait ModxMCPCapabilitiesTrait {
         return $out;
     }
 
+    /**
+     * Report supported/available actions and disabled or unavailable groups for tool discovery.
+     */
     public function getCapabilities() {
         $groups = $this->listSupportedActions();
         $toggle = $this->toggleableGroupKeys();
