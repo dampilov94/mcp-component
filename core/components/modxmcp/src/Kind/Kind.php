@@ -39,6 +39,19 @@ abstract class Kind {
         return 'name';
     }
 
+    public function uniqueNames() {
+        return true;
+    }
+
+    /** API field overrides for a copy; never share a static element's source file by default. */
+    public function duplicateOverrides($source) {
+        $fields = $this->fields();
+        if (isset($fields['static'], $fields['static_file']) && $this->value($source, 'static')) {
+            return array('static' => false, 'static_file' => '');
+        }
+        return array();
+    }
+
     public function group() {
         return 'elements';
     }
@@ -242,6 +255,11 @@ abstract class Kind {
             return self::datetime($object->get($this->column($field)));
         }
         return $object->get($this->column($field));
+    }
+
+    /** Stored relation values for copying, without filling in defaults. */
+    public function storedRelation(\modX $modx, $object, $name) {
+        return $this->presentRelation($modx, $object, $name);
     }
 
     /** Rows of one relation as the API shows them. */

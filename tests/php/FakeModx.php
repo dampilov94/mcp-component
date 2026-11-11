@@ -127,6 +127,8 @@ trait FakeResourceProcessors {
         unset($data['syncsite'], $data['clearCache']);
         if ($action === 'create') {
             $resource = $this->newObject('modResource');
+            // MODX generates an alias from the title when create receives an empty alias.
+            if (empty($data['alias'])) { $data['alias'] = strtolower(str_replace(' ', '-', $data['pagetitle'])); }
             $data += array(
                 'longtitle' => '', 'description' => '', 'introtext' => '', 'menutitle' => '', 'alias' => strtolower(str_replace(' ', '-', $data['pagetitle'])),
                 'uri_override' => 0, 'parent' => 0, 'context_key' => 'web', 'template' => 0, 'content' => '', 'published' => 0, 'deleted' => 0,

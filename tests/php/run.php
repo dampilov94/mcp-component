@@ -120,6 +120,10 @@ foreach ($tools as $tool) {
     check("manifest: {$tool['name']} is read-only", $tool['effect']['read_only'] === true && $tool['effect']['destructive'] === false);
 }
 $all = array_column(Manifest::tools($context('admin')), null, 'name');
+check('manifest: full tool count', count($all) === 24);
+check('manifest: duplicate is a reversible write after delete', $all['modx_duplicate']['effect']['read_only'] === false
+    && $all['modx_duplicate']['effect']['reversible'] === true && $all['modx_duplicate']['effect']['destructive'] === false
+    && array_search('modx_duplicate', array_keys($all), true) === array_search('modx_delete', array_keys($all), true) + 1);
 check('manifest: writes are marked', $all['modx_update']['effect']['read_only'] === false && $all['modx_delete']['effect']['destructive'] === true && $all['modx_update']['effect']['destructive'] === false);
 foreach ($all as $tool) {
     check("manifest: {$tool['name']} schemas are objects", $tool['inputSchema']['type'] === 'object' && $tool['outputSchema']['type'] === 'object');
@@ -480,6 +484,114 @@ $binned = $call($editor, 'bulk_resources', array('operation' => 'delete', 'ids' 
 $call($editor, 'bulk_resources', array('operation' => 'undelete', 'ids' => array($about['id'])));
 check('bulk delete/undelete', $site->row('modResource', $news['id'])['deleted'] === '1' && $site->row('modResource', $team['id'])['deleted'] === '0' && $binned['count'] === 3);
 throws('bulk: set_template needs a template', ApiException::class, function () use ($call, $editor, $news) { $call($editor, 'bulk_resources', array('operation' => 'set_template', 'ids' => array($news['id']))); });
+
+// Duplicate: one object through the normal create path, with writable relations only.
+$original = $call($dev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'duplicate source', 'content' => '<p>Copy me</p>', 'description' => 'Original description')));
+$copy = $call($dev, 'duplicate', array('kind' => 'chunk', 'id' => $original['id']));
+$copyGot = $call($dev, 'get', array('kind' => 'chunk', 'id' => $copy['id']));
+check('duplicate: chunk fields, identity and journal', $copy['id'] !== $original['id'] && $copy['source_id'] === $original['id']
+    && $copy['name'] === 'duplicate source copy' && $copyGot['fields']['name'] === $copy['name']
+    && $copyGot['fields']['content'] === '<p>Copy me</p>' && $copyGot['fields']['description'] === 'Original description'
+    && $copy['changeset_id'] !== null && $copy['revision'] === $copyGot['revision']);
+$secondCopy = $call($dev, 'duplicate', array('kind' => 'chunk', 'name' => 'duplicate source'));
+check('duplicate: source by name and automatic numbering', $secondCopy['name'] === 'duplicate source copy 2' && $secondCopy['source_id'] === $original['id']);
+$namedCopy = $call($dev, 'duplicate', array('kind' => 'chunk', 'id' => $original['id'], 'new_name' => 'Named copy'));
+check('duplicate: explicit copy name', $namedCopy['name'] === 'Named copy');
+$e = throws('duplicate: explicit name collision', ApiException::class, function () use ($call, $dev, $original) {
+    $call($dev, 'duplicate', array('kind' => 'chunk', 'id' => $original['id'], 'new_name' => 'Named copy'));
+});
+check('duplicate: explicit collision is validation_failed', $e && $e->errorCode === 'validation_failed');
+$overridden = $call($dev, 'duplicate', array('kind' => 'chunk', 'id' => $original['id'], 'new_name' => 'Before override',
+    'fields' => array('name' => 'After override', 'description' => 'Overridden', 'content' => 'new content')));
+$overriddenGot = $call($dev, 'get', array('kind' => 'chunk', 'id' => $overridden['id']));
+check('duplicate: fields win including the returned name', $overridden['name'] === 'After override'
+    && $overriddenGot['fields']['name'] === 'After override' && $overriddenGot['fields']['description'] === 'Overridden'
+    && $overriddenGot['fields']['content'] === 'new content');
+foreach (array(array('id' => 5), array('category' => 'bad'), array('unknown' => 'x')) as $invalidFields) {
+    $e = throws('duplicate: invalid field override', ApiException::class, function () use ($call, $dev, $original, $invalidFields) {
+        $call($dev, 'duplicate', array('kind' => 'chunk', 'id' => $original['id'], 'fields' => $invalidFields));
+    });
+    check('duplicate: invalid fields are validation_failed', $e && $e->errorCode === 'validation_failed');
+}
+for ($number = 3; $number <= 20; $number++) {
+    $call($dev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'duplicate source copy ' . $number)));
+}
+$chunkCount = $site->getCount('modChunk');
+$e = throws('duplicate: automatic names stop at 20', ApiException::class, function () use ($call, $dev, $original) {
+    $call($dev, 'duplicate', array('kind' => 'chunk', 'id' => $original['id']));
+});
+check('duplicate: exhausted names create nothing', $e && $e->errorCode === 'validation_failed' && $site->getCount('modChunk') === $chunkCount);
+
+$staticBefore = $call($dev, 'get', array('kind' => 'chunk', 'id' => 10));
+$fileBefore = file_get_contents($file);
+$staticCopy = $call($dev, 'duplicate', array('kind' => 'chunk', 'id' => 10));
+$staticGot = $call($dev, 'get', array('kind' => 'chunk', 'id' => $staticCopy['id']));
+check('duplicate: static copy uses effective content without sharing the file', $staticGot['fields']['static'] === false
+    && $staticGot['fields']['static_file'] === '' && $staticGot['fields']['content'] === $fileBefore
+    && file_get_contents($file) === $fileBefore && $call($dev, 'get', array('kind' => 'chunk', 'id' => 10))['revision'] === $staticBefore['revision']);
+
+$site->store('modElementPropertySet', array('element' => $plugin['id'], 'element_class' => 'modPlugin', 'property_set' => 7));
+$duplicateActor = $actor('develop');
+$pluginCopy = $call($duplicateActor, 'duplicate', array('kind' => 'plugin', 'id' => $plugin['id']));
+$pluginCopyGot = $call($dev, 'get', array('kind' => 'plugin', 'id' => $pluginCopy['id']));
+check('duplicate: plugin events are copied', $pluginCopyGot['relations']['events'] === $call($dev, 'get', array('kind' => 'plugin', 'id' => $plugin['id']))['relations']['events']);
+check('duplicate: non-writable relations are omitted with one warning', $pluginCopyGot['relations']['property_sets'] === array()
+    && $duplicateActor->warnings === array('Not copied: property_sets'));
+$site->store('modSnippet', array('id' => $site->nextId('modSnippet'), 'name' => 'Broken duplicate source', 'snippet' => 'return (;'));
+$snippetCount = $site->getCount('modSnippet');
+$e = throws('duplicate: broken PHP fails lint', ApiException::class, function () use ($call, $dev) {
+    $call($dev, 'duplicate', array('kind' => 'snippet', 'name' => 'Broken duplicate source'));
+});
+check('duplicate: lint failure creates nothing', $e && $e->errorCode === 'lint_failed' && $site->getCount('modSnippet') === $snippetCount);
+
+// One attached TV is stored, one has only a default, and one stored TV is no longer attached.
+$site->store('modTemplateVar', array('id' => 22, 'name' => 'default_only', 'default_text' => 'inherited'));
+$site->store('modTemplateVarTemplate', array('tmplvarid' => 22, 'templateid' => 2, 'rank' => 0));
+$site->store('modTemplateVarResource', array('tmplvarid' => 21, 'contentid' => $about['id'], 'value' => 'stale TV'));
+$call($editor, 'update', array('kind' => 'resource', 'id' => $about['id'], 'fields' => array('uri_override' => true, 'uri' => 'custom/about')));
+$resourceBefore = $call($editor, 'get', array('kind' => 'resource', 'id' => $about['id']));
+$childBefore = $call($editor, 'get', array('kind' => 'resource', 'id' => $team['id']))['revision'];
+$resourceCopy = $call($editor, 'duplicate', array('kind' => 'resource', 'id' => $about['id']));
+$resourceGot = $call($editor, 'get', array('kind' => 'resource', 'id' => $resourceCopy['id']));
+check('duplicate: resource copy is unpublished with a generated URL and same parent', $resourceGot['fields']['published'] === false
+    && $resourceGot['fields']['alias'] === 'about-us-copy' && $resourceGot['fields']['alias'] !== $resourceBefore['fields']['alias']
+    && $resourceGot['fields']['uri_override'] === false && $resourceGot['fields']['uri'] !== 'custom/about'
+    && $resourceGot['fields']['parent'] === $resourceBefore['fields']['parent']);
+check('duplicate: only stored TVs on the template are copied', $resourceGot['relations']['tvs'] == array('default_only' => 'inherited', 'subtitle' => 'Who we are')
+    && $site->getCount('modTemplateVarResource', array('contentid' => $resourceCopy['id'])) === 1
+    && $site->getCount('modTemplateVarResource', array('contentid' => $resourceCopy['id'], 'tmplvarid' => 20, 'value' => 'Who we are')) === 1);
+check('duplicate: resource has no children and source is unchanged', $site->getCount('modResource', array('parent' => $resourceCopy['id'])) === 0
+    && $call($editor, 'get', array('kind' => 'resource', 'id' => $about['id']))['revision'] === $resourceBefore['revision']
+    && $call($editor, 'get', array('kind' => 'resource', 'id' => $team['id']))['revision'] === $childBefore);
+$sameTitle = $call($editor, 'duplicate', array('kind' => 'resource', 'id' => $home['id'], 'new_name' => 'Home'));
+check('duplicate: resource names need not be unique and empty TV maps stay empty', $sameTitle['name'] === 'Home'
+    && $site->getCount('modTemplateVarResource', array('contentid' => $sameTitle['id'])) === 0);
+
+$resourceCount = $site->getCount('modResource');
+$journalBefore = $site->pdo->query('SELECT COUNT(*) FROM modx_modxmcp_changesets')->fetchColumn();
+$dryCopy = $call($editor, 'duplicate', array('kind' => 'resource', 'id' => $about['id'], 'dry_run' => true));
+$planCopy = $call($actor('content', array('plan_only' => true)), 'duplicate', array('kind' => 'resource', 'id' => $about['id']));
+check('duplicate: dry run and plan-only describe the copy without writes', $dryCopy['dry_run'] === true
+    && $dryCopy['kind'] === 'resource' && $dryCopy['source_id'] === $about['id'] && $dryCopy['would_create'] === array('name' => 'About us copy')
+    && $dryCopy['relations'] === array('tvs') && $planCopy['planned'] === true && $planCopy['dry_run'] === true
+    && $site->getCount('modResource') === $resourceCount && $site->pdo->query('SELECT COUNT(*) FROM modx_modxmcp_changesets')->fetchColumn() === $journalBefore);
+$site->store('modResource', array('pub_date' => (string) (time() + 86400), 'unpub_date' => (string) (time() + 172800)) + $site->row('modResource', $team['id']));
+$scheduledCopy = $call($editor, 'duplicate', array('kind' => 'resource', 'id' => $team['id']));
+$scheduledRow = $site->row('modResource', $scheduledCopy['id']);
+check('duplicate: the copy does not inherit a publish schedule', $scheduledRow['pub_date'] === '0' && $scheduledRow['unpub_date'] === '0' && $scheduledRow['published'] === '0');
+$byName = $call($dev, 'duplicate', array('kind' => 'chunk', 'name' => 'duplicate source', 'new_name' => 'Copy found by name'));
+check('duplicate: source by name, copy by new_name', $byName['name'] === 'Copy found by name' && $byName['source_id'] === $original['id']);
+foreach (array($actor('read'), $editor) as $deniedActor) {
+    $e = throws('duplicate: token cannot copy a chunk', ApiException::class, function () use ($call, $deniedActor, $original) {
+        $call($deniedActor, 'duplicate', array('kind' => 'chunk', 'id' => $original['id']));
+    });
+    check('duplicate: scope refusal is forbidden_scope', $e && $e->errorCode === 'forbidden_scope');
+}
+$call($dev, 'undo', array('changeset_id' => $copy['changeset_id'], 'confirm' => true));
+check('duplicate: undo removes the copy and keeps the source', $site->row('modChunk', $copy['id']) === null && $site->row('modChunk', $original['id']) !== null);
+$call($editor, 'undo', array('changeset_id' => $resourceCopy['changeset_id'], 'confirm' => true));
+check('duplicate: resource undo removes the copy and its stored TVs', $site->row('modResource', $resourceCopy['id']) === null
+    && $site->getCount('modTemplateVarResource', array('contentid' => $resourceCopy['id'])) === 0);
 
 $site->store('modResource', array('class_key' => 'msProduct') + $site->row('modResource', $news['id']));
 $warned = $actor('content');

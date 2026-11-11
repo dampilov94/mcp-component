@@ -79,6 +79,12 @@ Stage 3 — files:
   works on subjects (objects or files).
 - Kind `media_source` (read; writes need `admin`; source properties are not editable yet).
 
+After stage 3:
+
+- `modx_duplicate`: a generic copy of one object with its writable relations, created through
+  the normal create path (journaled, undoable). A resource copy is unpublished, unscheduled,
+  not a container and without children; a copy of a static element is not static.
+
 - Offline tests (`npm test`): pure PHP logic, the real kernel behind PHP's built-in server with
   stubbed MODX classes, and the Node bridge end to end. CI runs them.
 

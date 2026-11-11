@@ -20,6 +20,14 @@ final class ResourceKind extends Kind {
 
     public function nameField() { return 'pagetitle'; }
 
+    public function uniqueNames() { return false; }
+
+    public function duplicateOverrides($source) {
+        // A copied schedule would publish the copy by itself later. Children are not copied, so the copy is not a container either.
+        return array('published' => false, 'isfolder' => false, 'pub_date' => '', 'unpub_date' => '', 'alias' => '', 'uri' => '', 'uri_override' => false)
+            + parent::duplicateOverrides($source);
+    }
+
     public function processorPath() { return 'resource/'; }
 
     /** Resources are moved to the trash, not removed. */
@@ -137,6 +145,19 @@ final class ResourceKind extends Kind {
         foreach ($this->templateTvs($modx, $object) as $tvName => $tv) {
             $out[$tvName] = isset($stored[$tv[0]]) ? $stored[$tv[0]] : $tv[1];
         }
+        return $out ? $out : new \stdClass();
+    }
+
+    public function storedRelation(\modX $modx, $object, $name) {
+        if ($name !== 'tvs') { return parent::storedRelation($modx, $object, $name); }
+        $names = array();
+        foreach ($this->templateTvs($modx, $object) as $tvName => $tv) { $names[$tv[0]] = $tvName; }
+        $out = array();
+        foreach ($modx->getCollection('modTemplateVarResource', array('contentid' => $object->get('id'))) as $row) {
+            $tvId = (int) $row->get('tmplvarid');
+            if (isset($names[$tvId])) { $out[$names[$tvId]] = (string) $row->get('value'); }
+        }
+        ksort($out, SORT_STRING);
         return $out ? $out : new \stdClass();
     }
 

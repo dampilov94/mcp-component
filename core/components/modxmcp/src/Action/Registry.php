@@ -17,6 +17,7 @@ final class Registry {
         CreateAction::class,
         UpdateAction::class,
         DeleteAction::class,
+        DuplicateAction::class,
         ResourceTreeAction::class,
         BulkResourcesAction::class,
         ViewCodeAction::class,

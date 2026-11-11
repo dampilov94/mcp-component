@@ -37,7 +37,7 @@ below) or append a `## Review` section to the brief with numbered change request
 
 | # | Brief | Branch | Status |
 |---|---|---|---|
-| 01 | [modx_duplicate](01-duplicate.md) | `task/01-duplicate` | ready for the executor |
+| 01 | [modx_duplicate](01-duplicate.md) | `task/01-duplicate` | merged |
 | 02 | [Journal retention](02-journal-retention.md) | `task/02-journal-retention` | ready for the executor |
 | 03 | [modx_search](03-search.md) | `task/03-search` | ready for the executor |
 

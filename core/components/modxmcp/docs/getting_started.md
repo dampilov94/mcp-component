@@ -80,6 +80,8 @@ by lines.
   insert before line 2: `{start_line: 2, end_line: 1, replacement: "…"}`;
   append at the end: `{start_line: 11, end_line: 10, replacement: "…"}`.
 - `modx_delete {kind, id|name, expected_revision?}`
+- `modx_duplicate {kind, id|name, new_name?, fields?}` — a copy with its writable
+  relations. A page copy is unpublished and has no children.
 
 Rules that keep a live site safe:
 
