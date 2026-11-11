@@ -1,6 +1,8 @@
 <?php
+namespace ModxMCP\Auth;
+
 /** Shared matching for socket-peer allowlists and explicitly trusted proxies. */
-class ModxMCPSecurity {
+final class Security {
     public static function matchesIpList($ip, $rules) {
         $address = @inet_pton(trim((string) $ip));
         if ($address === false) { return false; }

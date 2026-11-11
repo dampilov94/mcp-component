@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.0.0 (unreleased)
+
+Full rework; not compatible with 1.x clients or tool names. Specification: `docs/spec-2.0.md`.
+Work is staged; until a stage lands, the 1.x operations it covers are not available over the API.
+
+Stage 1 — core:
+
+- New PHP core in `core/components/modxmcp/src/` (namespace `ModxMCP\`, autoloaded): one class per
+  action, each declaring its schema, effect, scope and group. The 1.x model and traits remain in
+  `model/` only as porting source and for the manager dependency graph.
+- Protocol 2: `{"v":2,"action","args","request_id","session_id"}` in, `{"ok","result","meta"}` or
+  `{"ok":false,"error":{"code","message"}}` out, with a fixed list of error codes. Server-side
+  argument validation against the advertised schema. Legacy top-level fields are gone.
+- The site serves a tool manifest per token; the Node client is a thin bridge with no tool
+  definitions (`client/contracts.js` removed). A manifest hash on every response refreshes the
+  client's tool list when rights, groups or integrations change. The built-in guide is also
+  offered as MCP resources.
+- API tokens replace the single `modxmcp.api_token` setting: several tokens with scopes
+  (`read`, `content`, `develop`, `admin`), plan-only flag, expiry and revocation, stored as
+  SHA-256 hashes and shown once. Managed in Components > modxMCP; the `regenerate_token` action is
+  removed. On upgrade the 1.x token is imported as an admin token and the setting is deleted.
+- Tools in this stage: `modx_capabilities`, `modx_site_info`, `modx_describe`, `modx_help`,
+  `modx_request_status`. Kind declarations for chunk, snippet, template, plugin, tv, category.
+- Carried over unchanged in behaviour: request-ID replay protection, HTTPS/proxy and IP checks,
+  payload/response limits, output buffering.
+- Offline tests (`npm test`): pure PHP logic, the real kernel behind PHP's built-in server with
+  stubbed MODX classes, and the Node bridge end to end. CI runs them.
+
 ## 1.10.0 (2026-10-07)
 
 - Split the PHP model into a small facade plus 16 operation traits, preserving existing

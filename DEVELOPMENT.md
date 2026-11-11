@@ -11,15 +11,25 @@ PHP 8 integration environment. Node.js requires version 18 or later.
 
 ## Where to work
 
-- `client/index.js`: MCP tool definitions, discovery and dispatch.
-- `client/api.js`: HTTP transport, request limits and error handling.
-- `client/contracts.js`: tool effect annotations and output schemas.
-- `assets/components/modxmcp/api.php`: authentication and HTTP endpoint.
-- `core/components/modxmcp/model/modxmcp.class.php`: facade and element dispatch.
-- `core/components/modxmcp/model/traits/registry.trait.php`: action registry; other
-  traits contain operations grouped by area. Traits share the facade's private scope.
-- `model/requeststore.class.php`, `model/security.class.php`, `model/logreader.class.php`:
-  replay protection, IP/HTTPS checks and bounded reverse log reading.
+Version 2.0 is being built in stages against `docs/spec-2.0.md`; `CHANGELOG.md` says which
+stages have landed. It is not compatible with 1.x clients or tool names.
+
+- `core/components/modxmcp/src/`: the 2.0 core, namespace `ModxMCP\`, loaded by
+  `src/autoload.php`. `Kernel.php` handles HTTP, authentication, validation and the response
+  envelope. `Action/` holds one class per action; `Action/Registry.php` lists them.
+  `Kind/` holds one class per object kind; `Kind/KindRegistry.php` lists them. `Auth/` has
+  the token store, scopes and IP/HTTPS checks; `Request/` the replay-protection store;
+  `Manifest.php` builds the per-token tool list; `Schema.php` is the schema subset and its
+  validator.
+- `client/index.js`: thin MCP bridge. It fetches the manifest from the site and exposes it as
+  MCP tools; it contains no tool definitions. `client/api.js`: HTTP transport and envelope.
+- `assets/components/modxmcp/api.php`: bootstraps MODX and calls the kernel.
+- `core/components/modxmcp/model/`: the 1.x facade and traits. The API no longer calls them.
+  They stay as porting source and because the manager dependency graph still uses the facade;
+  remove a part only when its replacement in `src/` has landed.
+- `tests/`: offline tests. `tests/php/run.php` covers pure logic; `tests/php/endpoint.php` runs
+  the real kernel with stubbed MODX classes and a SQLite token table; the `*.test.js` files
+  drive the bridge and that kernel.
 - `core/components/modxmcp/docs/`: documentation shipped with the component and served
   through `modx_help`. Manager controllers, processors, templates and lexicons are under
   the same component directory; public assets are in `assets/components/modxmcp/`.
@@ -31,24 +41,28 @@ Use the code as the source of truth. `README.md` is the installation and client 
 
 ## Changing a tool
 
-1. Find its definition in `client/index.js` and action in `actionRegistry()`. Inspect the
-   implementing method and relevant MODX or add-on processors before changing behavior.
-2. Update the server action, client input schema and `client/contracts.js` effects/output
-   schema as needed. Availability and group gates are handled by the capabilities trait.
-3. Update user-facing built-in help or settings/lexicons when behavior changes. Preserve
-   the existing file encoding and line endings, particularly for server PHP files.
+1. An action is one class in `src/Action/` extending `Action`. It declares its name,
+   description, input and output schema, scope, group and effect; the manifest, argument
+   validation, access checks and client annotations all derive from those methods. To add a
+   tool, add the class and list it in `Action/Registry.php`. Nothing changes in the client.
+2. Keep schemas inside the subset `Schema.php` validates, and make every action return a JSON
+   object. Empty maps must encode as `{}`, not `[]`.
+3. A new object kind is one class in `src/Kind/` listed in `Kind/KindRegistry.php`.
+4. Update built-in help or settings/lexicons when behavior changes. Preserve the existing
+   file encoding and line endings, particularly for server PHP files.
 
-Effect annotations are hints, not permissions. Read/write classification also affects
-request IDs; classify side effects conservatively. Successful calls return the legacy JSON
-text and `structuredContent.result`, representing the same data in two forms.
+`readOnly()` decides whether a call runs under request-ID replay protection; classify side
+effects conservatively. Scope and group checks are enforced by the kernel, not by the
+client. Successful calls return compact JSON text and the same object as `structuredContent`.
 
 ## Checks and development site
 
 Install dependencies with `npm ci --ignore-scripts` when necessary. Run `npm run check` for
 JavaScript and PHP syntax and release-version consistency. The checker uses `PHP_BIN` if
-set, otherwise portable PHP runtimes in `.local/tools/php-*/`, then `php` on PATH. These
-checks do not exercise MODX, prove PHP runtime compatibility or test site behavior. The
-1.8.20-to-1.10.0 upgrade was not integration-tested during the 1.10.0 release. Choose
+set, otherwise portable PHP runtimes in `.local/tools/php-*/`, then `php` on PATH. Run
+`npm test` for the offline tests; the kernel tests need PHP with `pdo_sqlite` and are skipped
+without it. Neither command exercises MODX, proves PHP runtime compatibility or tests site
+behavior: MODX classes are stubbed and the token table is SQLite, while a site uses MySQL. Choose
 additional verification appropriate to the change and report its limits. The owner prefers
 functional checks personally and does not want unnecessary tests or test accounts.
 
@@ -63,7 +77,11 @@ reconnection. For the general MODX cache, use `clear_cache` when appropriate.
 
 ## Important behavior
 
-- HTTP requests use a token. Request IDs protect writes from accidental re-execution;
+- HTTP requests use a token from the `modxmcp_tokens` table (hash only; created in the
+  manager). A token's scope and denied groups decide which actions it may call. The table is
+  created by the install resolver and, for file-only deployments, on the first request that
+  finds it missing; at that moment a 1.x `modxmcp.api_token` is imported as an admin token.
+  Request IDs protect writes from accidental re-execution;
   after an uncertain write, use `get_request_status` and reuse the same ID only for the
   same request. Request history is stored in `core/modxmcp-data/requests` on the site,
   outside the component and MODX cache. Protect and back it up; deleting it loses replay

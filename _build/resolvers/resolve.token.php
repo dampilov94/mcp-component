@@ -1,7 +1,8 @@
 <?php
 /**
- * Resolver: generate a random modxmcp.api_token on install/upgrade if it's empty.
- * Leaves an existing token untouched (so upgrades don't rotate it).
+ * Resolver: create the token table on install/upgrade and import the single 1.x token
+ * (modxmcp.api_token) as an admin-scope token so existing clients keep working.
+ * A fresh install has no tokens; the administrator creates one in Components > modxMCP.
  *
  * Works for both object and file vehicles: $modx is resolved defensively from
  * $transport / $object / globals (file-vehicle resolvers don't get an xPDOObject $object).
@@ -10,8 +11,6 @@
  * @var mixed $object
  * @var array $options
  */
-$success = true;
-
 $modx = null;
 foreach (array('modx', 'transport', 'object') as $__v) {
     if (isset($$__v) && is_object($$__v)) {
@@ -28,23 +27,25 @@ if (!$modx) {
 
 $action = isset($options[xPDOTransport::PACKAGE_ACTION]) ? $options[xPDOTransport::PACKAGE_ACTION] : '';
 if ($action === xPDOTransport::ACTION_INSTALL || $action === xPDOTransport::ACTION_UPGRADE) {
-    $setting = $modx->getObject('modSystemSetting', array('key' => 'modxmcp.api_token'));
-    if ($setting && trim((string) $setting->get('value')) === '') {
-        try {
-            $token = bin2hex(random_bytes(32));
-        } catch (Exception $e) {
-            $token = md5(uniqid('modxmcp', true)) . md5(uniqid('token', true));
+    $autoload = $modx->getOption('core_path') . 'components/modxmcp/src/autoload.php';
+    if (!file_exists($autoload)) {
+        $modx->log(modX::LOG_LEVEL_ERROR, '[modxMCP] Component files are missing; the token table was not created.');
+        return false;
+    }
+    require_once $autoload;
+    try {
+        $store = new \ModxMCP\Auth\TokenStore($modx);
+        $store->install();
+        if (!$store->all()) {
+            $modx->log(modX::LOG_LEVEL_INFO, '[modxMCP] No API tokens yet. Create one in Components > modxMCP and put it into your MCP client.');
         }
-        $setting->set('value', $token);
-        $setting->save();
-        $modx->log(
-            modX::LOG_LEVEL_INFO,
-            '[modxMCP] Generated modxmcp.api_token. The component is enabled; copy the token from System Settings (modxmcp) or Components > modxMCP into your MCP client.'
-        );
+    } catch (Exception $e) {
+        $modx->log(modX::LOG_LEVEL_ERROR, '[modxMCP] Could not prepare the token table: ' . $e->getMessage());
+        return false;
     }
     if ($modx->getCacheManager()) {
         $modx->getCacheManager()->refresh();
     }
 }
 
-return $success;
+return true;

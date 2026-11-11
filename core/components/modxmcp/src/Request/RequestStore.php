@@ -1,14 +1,11 @@
 <?php
-/** Persistent request IDs live outside MODX cache, so clear_cache cannot erase them. */
-class ModxMCPRequestStoreException extends Exception {
-    public $httpStatus;
-    public function __construct($message, $httpStatus = 503) {
-        parent::__construct($message);
-        $this->httpStatus = $httpStatus;
-    }
-}
+namespace ModxMCP\Request;
 
-class ModxMCPRequestStore {
+use DirectoryIterator;
+use Throwable;
+
+/** Persistent request IDs live outside MODX cache, so clearing the cache cannot erase them. */
+final class RequestStore {
     const FILE_GUARD = "<?php http_response_code(404); exit; ?>\n";
     private $dir;
     private $retention;
@@ -26,14 +23,14 @@ class ModxMCPRequestStore {
 
     private function ensureDirectory() {
         if (!is_dir($this->dir) && !@mkdir($this->dir, 0700, true) && !is_dir($this->dir)) {
-            throw new ModxMCPRequestStoreException('Cannot create request storage; no action was started.');
+            throw new RequestStoreException('Cannot create request storage; no action was started.');
         }
     }
 
     private function lock($key) {
         $this->ensureDirectory();
         $handle = @fopen($this->dir . '/' . $key . '.lock', 'c');
-        if (!$handle) { throw new ModxMCPRequestStoreException('Cannot open request lock; no action was started.'); }
+        if (!$handle) { throw new RequestStoreException('Cannot open request lock; no action was started.'); }
         @chmod($this->dir . '/' . $key . '.lock', 0600);
         if (!flock($handle, LOCK_EX | LOCK_NB)) { fclose($handle); return false; }
         return $handle;
@@ -44,17 +41,17 @@ class ModxMCPRequestStore {
         $temp = $path . '.' . bin2hex(random_bytes(12)) . '.tmp';
         try {
             $handle = @fopen($temp, 'x+b');
-            if (!$handle) { throw new ModxMCPRequestStoreException('Cannot stage request state.'); }
+            if (!$handle) { throw new RequestStoreException('Cannot stage request state.'); }
             try {
-                if (!@chmod($temp, 0600)) { throw new ModxMCPRequestStoreException('Cannot protect request state.'); }
+                if (!@chmod($temp, 0600)) { throw new RequestStoreException('Cannot protect request state.'); }
                 $length = strlen($bytes);
                 for ($offset = 0; $offset < $length; $offset += $written) {
                     $written = fwrite($handle, substr($bytes, $offset));
-                    if ($written === false || $written === 0) { throw new ModxMCPRequestStoreException('Cannot write complete request state.'); }
+                    if ($written === false || $written === 0) { throw new RequestStoreException('Cannot write complete request state.'); }
                 }
-                if (!fflush($handle)) { throw new ModxMCPRequestStoreException('Cannot flush request state.'); }
+                if (!fflush($handle)) { throw new RequestStoreException('Cannot flush request state.'); }
             } finally { fclose($handle); }
-            if (!@rename($temp, $path)) { throw new ModxMCPRequestStoreException('Cannot publish request state.'); }
+            if (!@rename($temp, $path)) { throw new RequestStoreException('Cannot publish request state.'); }
         } finally { if (file_exists($temp)) { @unlink($temp); } }
     }
 
@@ -76,7 +73,7 @@ class ModxMCPRequestStore {
                 && preg_match('/^[a-f0-9]{64}$/D', $record['response_hash']);
         }
         if (!$valid) {
-            throw new ModxMCPRequestStoreException('Request state is unreadable. This ID will not be executed again.');
+            throw new RequestStoreException('Request state is unreadable. This ID will not be executed again.');
         }
         return $record;
     }
@@ -120,29 +117,29 @@ class ModxMCPRequestStore {
         $body = $raw !== false && strlen($raw) <= $encodedLimit + $guardLength && substr($raw, 0, $guardLength) === self::FILE_GUARD
             ? base64_decode(substr($raw, $guardLength), true) : false;
         if ($body === false || strlen($body) > $this->maxResponse || !hash_equals($record['response_hash'], hash('sha256', $body))) {
-            throw new ModxMCPRequestStoreException('Stored response is missing, too large or corrupt. Check request status; this ID will not run again.');
+            throw new RequestStoreException('Stored response is missing, too large or corrupt. Check request status; this ID will not run again.');
         }
         return array('status' => $record['http_status'], 'body' => $body, 'replayed' => true);
     }
 
     public function execute($id, $fingerprint, callable $callback) {
-        if (!self::validId($id)) { throw new ModxMCPRequestStoreException('Invalid request_id.', 400); }
+        if (!self::validId($id)) { throw new RequestStoreException('Invalid request_id.', 400); }
         $key = hash('sha256', $id);
         $lock = $this->lock($key);
-        if (!$lock) { throw new ModxMCPRequestStoreException('Request is already in progress. Check get_request_status; do not start it with a new ID.', 409); }
+        if (!$lock) { throw new RequestStoreException('Request is already in progress. Check modx_request_status; do not start it with a new ID.', 409); }
         try {
             $record = $this->readRecord($key);
             if ($record !== null) {
-                if (!hash_equals($record['fingerprint'], $fingerprint)) { throw new ModxMCPRequestStoreException('request_id was already used for different arguments.', 409); }
+                if (!hash_equals($record['fingerprint'], $fingerprint)) { throw new RequestStoreException('request_id was already used for different arguments.', 409); }
                 $record = $this->expire($key, $record);
                 if ($record['state'] === 'completed') { return $this->response($key, $record); }
                 $message = $record['state'] === 'expired'
                     ? 'Stored response expired; this request_id cannot be reused. Check the site before starting a new operation.'
                     : 'Original request outcome is unknown. Check the site and request status; this ID will not be executed again.';
-                throw new ModxMCPRequestStoreException($message, 409);
+                throw new RequestStoreException($message, 409);
             }
             if (file_exists($this->dir . '/' . $key . '.response.php')) {
-                throw new ModxMCPRequestStoreException('Orphaned response found for this ID. Check the site; it will not be executed again.', 409);
+                throw new RequestStoreException('Orphaned response found for this ID. Check the site; it will not be executed again.', 409);
             }
             $record = array('state' => 'pending', 'fingerprint' => $fingerprint, 'started_at' => time());
             $this->write($this->dir . '/' . $key . '.state.php', json_encode($record, JSON_THROW_ON_ERROR));
@@ -157,7 +154,7 @@ class ModxMCPRequestStore {
                 $record['success'] = $frame['status'] >= 200 && $frame['status'] < 300;
                 $this->write($this->dir . '/' . $key . '.state.php', json_encode($record, JSON_THROW_ON_ERROR));
             } catch (Throwable $e) {
-                throw new ModxMCPRequestStoreException('Action finished, but its response could not be recorded. Check the site; do not retry with a new ID.');
+                throw new RequestStoreException('Action finished, but its response could not be recorded. Check the site; do not retry with a new ID.');
             }
             $frame['replayed'] = false;
             return $frame;
@@ -168,7 +165,7 @@ class ModxMCPRequestStore {
     }
 
     public function status($id, $includeResult = false) {
-        if (!self::validId($id)) { throw new ModxMCPRequestStoreException('Invalid request_id.', 400); }
+        if (!self::validId($id)) { throw new RequestStoreException('Invalid request_id.', 400); }
         $key = hash('sha256', $id);
         if (!is_dir($this->dir)) { return array('request_id' => $id, 'state' => 'not_found'); }
         $lock = $this->lock($key);

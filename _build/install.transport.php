@@ -103,14 +103,14 @@ $ns = $modx->getObject('modNamespace', array('name' => 'modxmcp'));
 echo 'namespace modxmcp: ' . ($ns ? 'yes' : 'NO') . "\n";
 echo 'modxmcp.* settings: ' . $modx->getCount('modSystemSetting', array('key:LIKE' => 'modxmcp.%')) . "\n";
 
-$token = $modx->getObject('modSystemSetting', array('key' => 'modxmcp.api_token'));
-$tv = $token ? (string) $token->get('value') : '';
-echo 'api_token: ' . ($tv !== '' ? ('set, ' . strlen($tv) . ' chars') : 'EMPTY') . "\n";
+$tokenTable = $modx->getOption('table_prefix') . 'modxmcp_tokens';
+$tokenCount = $modx->query('SELECT COUNT(*) FROM `' . $tokenTable . '` WHERE `revoked_at` IS NULL');
+echo 'active tokens: ' . ($tokenCount ? (int) $tokenCount->fetchColumn() : 'token table missing') . "\n";
 
 $en = $modx->getObject('modSystemSetting', array('key' => 'modxmcp.enabled'));
 echo 'enabled (default): ' . ($en ? var_export($en->get('value'), true) : '?') . "\n";
 
 echo 'file assets/.../api.php: ' . (file_exists(MODX_ASSETS_PATH . 'components/modxmcp/api.php') ? 'yes' : 'NO') . "\n";
-echo 'file core/.../modxmcp.class.php: ' . (file_exists(MODX_CORE_PATH . 'components/modxmcp/model/modxmcp.class.php') ? 'yes' : 'NO') . "\n";
+echo 'file core/.../src/Kernel.php: ' . (file_exists(MODX_CORE_PATH . 'components/modxmcp/src/Kernel.php') ? 'yes' : 'NO') . "\n";
 
-echo "Copy the API token from Components > modxMCP in the manager.\n";
+echo "Create an API token in Components > modxMCP in the manager.\n";

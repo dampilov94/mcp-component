@@ -2,7 +2,7 @@
 /**
  * modxMCP — manager CMP controller (Components > modxMCP).
  *
- * Read-only status dashboard plus a "regenerate token" button. The class name
+ * Status dashboard: API tokens, capability groups and integrations. The class name
  * MUST be Modxmcp + Index + ManagerController for MODX 2.3+ namespaced controller
  * autoloading (namespace "modxmcp", action "index").
  *
@@ -32,8 +32,6 @@ class ModxmcpIndexManagerController extends modExtraManagerController {
         );
         $cfg = json_encode(array(
             'connector_url'      => $assetsUrl . 'connector.php',
-            'confirm_regenerate' => $this->modx->lexicon('modxmcp_cmp_confirm_regenerate'),
-            'regenerate_failed'  => $this->modx->lexicon('modxmcp_cmp_regenerate_failed'),
         ), JSON_UNESCAPED_UNICODE);
         $this->addHtml('<script type="text/javascript">var Modxmcp = ' . $cfg . ';</script>');
         // Cache-bust home.js by its mtime so browsers always load the current version.
@@ -44,57 +42,60 @@ class ModxmcpIndexManagerController extends modExtraManagerController {
 
     public function process(array $scriptProperties = array()) {
         $this->modx->lexicon->load('modxmcp:default');
-        $token = (string) $this->modx->getOption('modxmcp.api_token');
         $siteUrl = rtrim((string) $this->modx->getOption('site_url'), '/');
+        $corePath = $this->modx->getOption('modxmcp.core_path', null, $this->modx->getOption('core_path') . 'components/modxmcp/');
+        require_once rtrim($corePath, '/\\') . '/src/autoload.php';
 
+        $tokens = array();
         $integrations = array();
-        $modelFile = $this->modx->getOption('core_path') . 'components/modxmcp/model/modxmcp.class.php';
-        if (file_exists($modelFile)) {
-            require_once $modelFile;
-            try {
-                $mcp = new modxMCP($this->modx);
-                $report = $mcp->getIntegrationsReport();
-                $integrations = isset($report['integrations']) ? $report['integrations'] : array();
-            } catch (Exception $e) {
-                $integrations = array();
-            }
-        }
-
-        // Capability groups the admin can toggle on/off, split into add-on components vs core MODX.
         $components = array();
         $features = array();
-        if (isset($mcp)) {
-            try {
-                $caps = $mcp->getCapabilities();
-                $disabled = array_flip(isset($caps['disabled_groups']) ? $caps['disabled_groups'] : array());
-                $meta = array(
-                    'versionx'           => array('VersionX (история / откат)', 'component'),
-                    'virtualpage'        => array('VirtualPage (роуты / события)', 'component'),
-                    'minishop2'          => array('miniShop2 (товары / опции / связи / категории / заказы)', 'component'),
-                    'migx'               => array('MIGX (конфигурации)', 'component'),
-                    'access'             => array('Контроль доступа (пользователи, группы, роли, политики)', 'feature'),
-                    'contexts'           => array('Контексты', 'feature'),
-                    'property_sets'      => array('Наборы свойств элементов', 'feature'),
-                    'namespaces'         => array('Пространства имён', 'feature'),
-                    'lexicon'            => array('Управление словарями', 'feature'),
-                    'package_management' => array('Менеджер пакетов (установка / провайдеры)', 'feature'),
+        try {
+            $date = function ($time) { return $time ? date('Y-m-d H:i', $time) : ''; };
+            foreach ((new \ModxMCP\Auth\TokenStore($this->modx))->all() as $token) {
+                $tokens[] = array(
+                    'id'        => $token['id'],
+                    'label'     => $token['label'] !== '' ? $token['label'] : '—',
+                    'prefix'    => $token['prefix'],
+                    'scope'     => $token['scope'],
+                    'plan_only' => $token['plan_only'] ? 1 : 0,
+                    'created'   => $date($token['created_at']),
+                    'last_used' => $date($token['last_used_at']),
+                    'expires'   => $date($token['expires_at']),
+                    'revoked'   => $token['revoked_at'] !== null ? 1 : 0,
+                    'expired'   => ($token['expires_at'] !== null && $token['expires_at'] <= time()) ? 1 : 0,
                 );
-                foreach (isset($caps['toggleable_groups']) ? $caps['toggleable_groups'] : array() as $g) {
-                    $label = isset($meta[$g]) ? $meta[$g][0] : $g;
-                    $kind = isset($meta[$g]) ? $meta[$g][1] : 'feature';
-                    $row = array('key' => $g, 'label' => $label, 'enabled' => isset($disabled[$g]) ? 0 : 1);
-                    if ($kind === 'component') { $components[] = $row; } else { $features[] = $row; }
-                }
-            } catch (Exception $e) {
-                $components = array();
-                $features = array();
             }
+
+            $capabilities = new \ModxMCP\Capabilities($this->modx);
+            $integrations = $capabilities->integrationsReport();
+
+            // Groups the admin can switch off for the whole site, split into add-ons vs core MODX.
+            $disabled = array_flip($capabilities->disabledGroups());
+            $meta = array(
+                'virtualpage'        => array('VirtualPage (роуты / события)', 'component'),
+                'minishop2'          => array('miniShop2 (товары / опции / связи / категории / заказы)', 'component'),
+                'migx'               => array('MIGX (конфигурации)', 'component'),
+                'access'             => array('Контроль доступа (пользователи, группы, роли, политики)', 'feature'),
+                'contexts'           => array('Контексты', 'feature'),
+                'property_sets'      => array('Наборы свойств элементов', 'feature'),
+                'namespaces'         => array('Пространства имён', 'feature'),
+                'lexicon'            => array('Управление словарями', 'feature'),
+                'package_management' => array('Менеджер пакетов (установка / провайдеры)', 'feature'),
+            );
+            foreach (\ModxMCP\Capabilities::TOGGLEABLE as $g) {
+                $label = isset($meta[$g]) ? $meta[$g][0] : $g;
+                $kind = isset($meta[$g]) ? $meta[$g][1] : 'feature';
+                $row = array('key' => $g, 'label' => $label, 'enabled' => isset($disabled[$g]) ? 0 : 1);
+                if ($kind === 'component') { $components[] = $row; } else { $features[] = $row; }
+            }
+        } catch (Throwable $e) {
+            $this->modx->log(modX::LOG_LEVEL_ERROR, '[modxmcp] Manager page: ' . $e->getMessage());
         }
 
         $labelKeys = array(
-            'intro', 'endpoint', 'enabled', 'yes', 'no', 'enable_hint', 'token', 'token_set',
-            'token_notset', 'auto_static', 'audit_log', 'package_install', 'on', 'off',
-            'regenerate', 'new_token', 'settings_hint', 'integrations', 'integrations_intro',
+            'intro', 'endpoint', 'enabled', 'yes', 'no', 'enable_hint', 'auto_static', 'audit_log',
+            'on', 'off', 'settings_hint', 'integrations', 'integrations_intro',
         );
         $l = array();
         foreach ($labelKeys as $k) {
@@ -104,11 +105,10 @@ class ModxmcpIndexManagerController extends modExtraManagerController {
         $this->setPlaceholders(array(
             'l'               => $l,
             'enabled'         => $this->modx->getOption('modxmcp.enabled') ? 1 : 0,
-            'token_set'       => $token !== '' ? 1 : 0,
-            'token_full'      => $token !== '' ? $token : '—',
             'auto_static'     => $this->modx->getOption('modxmcp.auto_static') ? 1 : 0,
             'audit_log'       => $this->modx->getOption('modxmcp.audit_log') ? 1 : 0,
             'endpoint'        => $siteUrl . '/assets/components/modxmcp/api.php',
+            'tokens'          => $tokens,
             'integrations'    => $integrations,
             'components'      => $components,
             'features'        => $features,

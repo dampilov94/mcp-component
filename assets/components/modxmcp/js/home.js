@@ -4,23 +4,25 @@ Ext.onReady(function () {
     }
     var cfg = (typeof Modxmcp !== 'undefined') ? Modxmcp : {};
 
-    var btn = document.getElementById('modxmcp-regenerate');
-    if (btn) {
-        btn.addEventListener('click', function () {
-            var msg = cfg.confirm_regenerate || 'Regenerate the modxMCP API token?';
-            if (!confirm(msg)) {
-                return;
-            }
-            btn.disabled = true;
+    var createBtn = document.getElementById('modxmcp-create-token');
+    if (createBtn) {
+        createBtn.addEventListener('click', function () {
+            createBtn.disabled = true;
             MODx.Ajax.request({
                 url: cfg.connector_url,
-                params: { action: 'mgr/regeneratetoken' },
+                params: {
+                    action: 'mgr/createtoken',
+                    label: document.getElementById('modxmcp-token-label').value,
+                    scope: document.getElementById('modxmcp-token-scope').value,
+                    plan_only: document.getElementById('modxmcp-token-plan').checked ? '1' : '0'
+                },
                 listeners: {
                     success: {
                         fn: function (r) {
-                            btn.disabled = false;
+                            createBtn.disabled = false;
                             var token = (r && r.object && r.object.token) ? r.object.token : '';
                             if (token) {
+                                // The table is refreshed on the next page load; the token itself is shown only now.
                                 document.getElementById('modxmcp-token-value').textContent = token;
                                 document.getElementById('modxmcp-token-result').style.display = 'block';
                             }
@@ -28,14 +30,36 @@ Ext.onReady(function () {
                     },
                     failure: {
                         fn: function () {
-                            btn.disabled = false;
-                            alert(cfg.regenerate_failed || 'Failed to regenerate the token.');
+                            createBtn.disabled = false;
+                            alert('Не удалось создать токен. См. журнал ошибок менеджера.');
                         }
                     }
                 }
             });
         });
     }
+
+    Array.prototype.slice.call(document.querySelectorAll('.modxmcp-revoke')).forEach(function (button) {
+        button.addEventListener('click', function () {
+            if (!confirm('Отозвать токен? Клиенты с этим токеном сразу перестанут работать. Отменить отзыв нельзя.')) {
+                return;
+            }
+            button.disabled = true;
+            MODx.Ajax.request({
+                url: cfg.connector_url,
+                params: { action: 'mgr/revoketoken', id: button.getAttribute('data-id') },
+                listeners: {
+                    success: { fn: function () { window.location.reload(); } },
+                    failure: {
+                        fn: function () {
+                            button.disabled = false;
+                            alert('Не удалось отозвать токен. См. журнал ошибок менеджера.');
+                        }
+                    }
+                }
+            });
+        });
+    });
 
     var saveBtn = document.getElementById('modxmcp-savegroups');
     if (saveBtn) {

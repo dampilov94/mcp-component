@@ -38,15 +38,21 @@ require_once MODX_CORE_PATH . 'model/modx/modx.class.php';
 $modx = new modX();
 $modx->initialize('mgr');
 
-// When triggered over the web (workspace inside a docroot), require the site's modxMCP token
-// as ?key=… so a stranger can't trigger builds. CLI runs are unrestricted.
+// When triggered over the web (workspace inside a docroot), require an admin-scope modxMCP
+// token of this site as ?key=… so a stranger can't trigger builds. CLI runs are unrestricted.
 $__isCli = (PHP_SAPI === 'cli') || (defined('XPDO_CLI_MODE') && XPDO_CLI_MODE);
 if (!$__isCli) {
-    $__expected = (string) $modx->getOption('modxmcp.api_token', null, '');
+    require_once $root . 'core/components/' . PKG_NAMESPACE . '/src/autoload.php';
     $__provided = isset($_GET['key']) ? (string) $_GET['key'] : '';
-    if ($__expected === '' || !hash_equals($__expected, $__provided)) {
+    $__token = null;
+    try {
+        $__token = (new \ModxMCP\Auth\TokenStore($modx))->authenticate($__provided);
+    } catch (Throwable $__e) {
+        $__token = null;
+    }
+    if (!$__token || $__token['scope'] !== \ModxMCP\Auth\Scope::ADMIN) {
         header('HTTP/1.1 403 Forbidden');
-        die("Forbidden: web build requires ?key=<modxmcp.api_token>. Or run via CLI.\n");
+        die("Forbidden: web build requires ?key=<admin-scope modxMCP token>. Or run via CLI.\n");
     }
 }
 
@@ -157,7 +163,7 @@ $assetsVehicle = $builder->createVehicle(
 $assetsVehicle->resolve('php', array('source' => $sources['resolvers'] . 'resolve.token.php'));
 $assetsVehicle->resolve('php', array('source' => $sources['resolvers'] . 'resolve.integrations.php'));
 $builder->putVehicle($assetsVehicle);
-$modx->log(modX::LOG_LEVEL_INFO, 'Packaged core + assets files and the api_token resolver.');
+$modx->log(modX::LOG_LEVEL_INFO, 'Packaged core + assets files and the install resolvers.');
 
 /* ---- package attributes ---- */
 $builder->setPackageAttributes(array(

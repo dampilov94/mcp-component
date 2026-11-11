@@ -32,7 +32,7 @@ function check(label, result) {
   return true;
 }
 
-const sources = ["client", "assets", "core", "_build", "scripts"].flatMap(filesIn);
+const sources = ["client", "assets", "core", "_build", "scripts", "tests"].flatMap(filesIn);
 const jsFiles = sources.filter((file) => /\.(?:js|cjs)$/.test(file));
 for (const file of jsFiles) check(file, run(process.execPath, ["--check", file]));
 console.log(`JavaScript: checked ${jsFiles.length} files.`);
@@ -61,7 +61,7 @@ const versions = {
   lock: lock.version,
   lockRoot: lock.packages?.[""]?.version,
   build: read("_build/build.config.php").match(/define\(\s*['"]PKG_VERSION['"]\s*,\s*['"]([^'"]+)['"]/)?.[1],
-  model: read("core/components/modxmcp/model/modxmcp.class.php").match(/const VERSION\s*=\s*['"]([^'"]+)['"]/)?.[1],
+  kernel: read("core/components/modxmcp/src/Kernel.php").match(/const VERSION\s*=\s*['"]([^'"]+)['"]/)?.[1],
 };
 if (Object.values(versions).some((version) => version !== pkg.version)) {
   failures++;

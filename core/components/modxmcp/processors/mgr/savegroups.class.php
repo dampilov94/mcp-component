@@ -9,21 +9,10 @@ class ModxmcpSaveGroupsProcessor extends modProcessor {
     }
 
     public function process() {
-        // Single source of truth for which groups are toggleable: the model itself. Hardcoding
-        // a subset here silently re-enables the groups that are missing from the list on save.
-        $allowed = array('versionx', 'virtualpage', 'minishop2', 'migx', 'access', 'property_sets', 'contexts', 'package_management', 'namespaces', 'lexicon');
-        $modelFile = $this->modx->getOption('core_path') . 'components/modxmcp/model/modxmcp.class.php';
-        if (file_exists($modelFile)) {
-            require_once $modelFile;
-            try {
-                $caps = (new modxMCP($this->modx))->getCapabilities();
-                if (!empty($caps['toggleable_groups']) && is_array($caps['toggleable_groups'])) {
-                    $allowed = $caps['toggleable_groups'];
-                }
-            } catch (Exception $e) {
-                /* fall back to the static list above */
-            }
-        }
+        $corePath = $this->modx->getOption('modxmcp.core_path', null, $this->modx->getOption('core_path') . 'components/modxmcp/');
+        require_once rtrim($corePath, '/\\') . '/src/autoload.php';
+        // Single source of truth for which groups are toggleable.
+        $allowed = \ModxMCP\Capabilities::TOGGLEABLE;
         $raw = (string) $this->getProperty('disabled', '');
         $disabled = array();
         foreach (explode(',', $raw) as $g) {

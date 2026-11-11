@@ -9,6 +9,8 @@ class ModxApiError extends Error {
   }
 }
 
+const PROTOCOL = 2;
+
 function positiveSetting(name, fallback) {
   const value = process.env[name];
   if (value === undefined) return fallback;
@@ -18,8 +20,13 @@ function positiveSetting(name, fallback) {
   return Number(value);
 }
 
+function isObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** HTTP transport for modxMCP protocol 2. Knows the envelope, not the tools. */
 class ModxApiClient {
-  constructor(url, token, onCapabilities) {
+  constructor(url, token, { sessionId, onManifestHash } = {}) {
     let endpoint;
     try { endpoint = new URL(url); } catch { throw new Error("MODX_MCP_SITE_URL must be an HTTP(S) URL."); }
     if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password) {
@@ -27,7 +34,8 @@ class ModxApiClient {
     }
     this.url = endpoint.href;
     this.token = token;
-    this.onCapabilities = onCapabilities;
+    this.sessionId = sessionId;
+    this.onManifestHash = onManifestHash;
     this.timeout = positiveSetting("MODX_MCP_TIMEOUT_MS", 60000);
     this.maxRequest = positiveSetting("MODX_MCP_MAX_REQUEST_BYTES", 1048576);
     this.maxResponse = positiveSetting("MODX_MCP_MAX_RESPONSE_BYTES", 4194304);
@@ -35,8 +43,12 @@ class ModxApiClient {
 
   outcomeHint(requestId) {
     return requestId
-      ? ` Outcome may be unknown. request_id=${requestId}. Check modx_get_request_status; reuse this ID as _request_id when retrying the same call.`
+      ? ` Outcome may be unknown. request_id=${requestId}. Check modx_request_status; reuse this ID as _request_id when retrying the same call.`
       : "";
+  }
+
+  redact(text) {
+    return String(text).split(this.token).join("[redacted]");
   }
 
   decode(response) {
@@ -63,9 +75,15 @@ class ModxApiClient {
     };
   }
 
-  async post(payload, { signal } = {}) {
-    const requestId = payload.request_id;
+  /**
+   * Call one action. Resolves to { result, meta }; rejects with ModxApiError.
+   * requestId is sent only for writes and makes the call safe to retry.
+   */
+  async call(action, args = {}, { requestId, signal } = {}) {
     if (requestId === this.token) throw new ModxApiError("A request ID must not be the API token; no request was sent.");
+    const payload = { v: PROTOCOL, action, args };
+    if (requestId) payload.request_id = requestId;
+    if (this.sessionId) payload.session_id = this.sessionId;
     const body = JSON.stringify(payload);
     if (Buffer.byteLength(body, "utf8") > this.maxRequest) {
       throw new ModxApiError("Request exceeds MODX_MCP_MAX_REQUEST_BYTES; no request was sent.", undefined, "request_too_large");
@@ -79,37 +97,47 @@ class ModxApiClient {
         throw new ModxApiError(`HTTP ${response.status}: redirects are disabled. Configure the final API URL.`, response.status, "redirect_refused");
       }
       const envelope = this.decode(response);
-      if (!envelope || typeof envelope !== "object" || Array.isArray(envelope) || typeof envelope.success !== "boolean") {
-        throw new ModxApiError("Endpoint returned an invalid response envelope.", response.status, "invalid_response");
+      if (!isObject(envelope) || typeof envelope.ok !== "boolean") {
+        // A 1.x endpoint answers with {success: …}; say so instead of a generic envelope error.
+        const legacy = isObject(envelope) && typeof envelope.success === "boolean";
+        throw new ModxApiError(
+          legacy
+            ? "The site runs modxMCP 1.x, which this client does not support. Install modxMCP 2.x on the site."
+            : "Endpoint returned an invalid response envelope.",
+          response.status, legacy ? "unsupported_protocol" : "invalid_response",
+        );
       }
-      if (envelope.error_id !== undefined && (typeof envelope.error_id !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(envelope.error_id))) {
-        throw new ModxApiError("Endpoint returned invalid error ID metadata.", response.status, "invalid_response");
-      }
-      if (envelope.error_code !== undefined && (typeof envelope.error_code !== "string" || !/^[a-z0-9_]{1,64}$/.test(envelope.error_code))) {
-        throw new ModxApiError("Endpoint returned invalid error-code metadata.", response.status, "invalid_response");
-      }
-      if (envelope.caps !== undefined && typeof envelope.caps !== "string") {
-        throw new ModxApiError("Endpoint returned invalid capabilities metadata.", response.status, "invalid_response");
-      }
-      if (envelope.request_id !== undefined && envelope.request_id !== requestId) {
+      const meta = envelope.meta === undefined ? {} : envelope.meta;
+      if (!isObject(meta)) throw new ModxApiError("Endpoint returned invalid meta.", response.status, "invalid_response");
+      if (meta.request_id !== undefined && meta.request_id !== requestId) {
         throw new ModxApiError("Endpoint returned a different request ID.", response.status, "invalid_response");
       }
-      if (response.headers?.["x-mcp-replayed"] !== "1" && envelope.caps !== undefined) {
-        this.onCapabilities?.(envelope.caps);
+      if (meta.manifest !== undefined && typeof meta.manifest !== "string") {
+        throw new ModxApiError("Endpoint returned invalid manifest metadata.", response.status, "invalid_response");
       }
-      if (!envelope.success) {
-        if (typeof envelope.error !== "string" || !envelope.error) {
+      // A replayed response carries the manifest hash of the original call, not the current one.
+      if (response.headers?.["x-mcp-replayed"] !== "1" && meta.manifest !== undefined) {
+        this.onManifestHash?.(meta.manifest);
+      }
+      if (!envelope.ok) {
+        const error = envelope.error;
+        if (!isObject(error) || typeof error.message !== "string" || !error.message
+          || typeof error.code !== "string" || !/^[a-z0-9_]{1,64}$/.test(error.code)
+          || (error.error_id !== undefined && (typeof error.error_id !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(error.error_id)))) {
           throw new ModxApiError("Endpoint returned an invalid error envelope.", response.status, "invalid_response");
         }
-        const errorId = typeof envelope.error_id === "string" ? ` error_id=${envelope.error_id}` : "";
+        const details = error.details !== undefined ? ` details=${JSON.stringify(error.details).slice(0, 1500)}` : "";
+        const errorId = error.error_id ? ` error_id=${error.error_id}` : "";
         const id = requestId ? ` request_id=${requestId}` : "";
-        const message = envelope.error.slice(0, 1500).split(this.token).join("[redacted]");
-        throw new ModxApiError(`MODX HTTP ${response.status}: ${message}${errorId}${id}`.split(this.token).join("[redacted]"), response.status, envelope.error_code);
+        throw new ModxApiError(
+          this.redact(`MODX ${error.code} (HTTP ${response.status}): ${error.message.slice(0, 1500)}${details}${errorId}${id}`),
+          response.status, error.code,
+        );
       }
-      if (response.status < 200 || response.status >= 300 || !Object.prototype.hasOwnProperty.call(envelope, "data")) {
-        throw new ModxApiError("Endpoint returned inconsistent success status or missing data.", response.status, "invalid_response");
+      if (response.status < 200 || response.status >= 300 || !isObject(envelope.result)) {
+        throw new ModxApiError("Endpoint returned inconsistent success status or a non-object result.", response.status, "invalid_response");
       }
-      return envelope;
+      return { result: envelope.result, meta };
     } catch (error) {
       if (error instanceof ModxApiError) {
         if (["invalid_response", "redirect_refused"].includes(error.errorCode)) error.message += this.outcomeHint(requestId);
@@ -119,19 +147,10 @@ class ModxApiClient {
       if (axios.isCancel(error) || signal?.aborted) message = "MODX request cancelled; stopping the client wait does not cancel PHP execution.";
       else if (["ECONNABORTED", "ETIMEDOUT"].includes(error.code)) message = `MODX request timed out after ${this.timeout} ms.`;
       else if (error.code === "ERR_BAD_RESPONSE") message = "MODX response exceeded its size limit or the connection ended before completion.";
+      else if (error.code) message = `MODX network request failed (${error.code}).`;
       throw new ModxApiError(message + this.outcomeHint(requestId), undefined, "network_error");
     }
   }
-
-  async health() {
-    const response = await axios.get(this.url, this.options(undefined, Math.min(this.timeout, 5000)));
-    if (response.status !== 200) throw new ModxApiError("Health probe failed.", response.status);
-    const body = this.decode(response);
-    if (!body || body.component !== "modxMCP" || typeof body.version !== "string") {
-      throw new ModxApiError("Invalid health response.", response.status);
-    }
-    return body;
-  }
 }
 
-module.exports = { ModxApiClient, ModxApiError };
+module.exports = { ModxApiClient, ModxApiError, PROTOCOL };
