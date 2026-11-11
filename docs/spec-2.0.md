@@ -558,7 +558,7 @@ MODX ставит блокировку. Конвейер записи прове
    Осталось: плагин записи правок из админки, проверка блокировки в админке, `duplicate`,
    `invoke` с `make_static` и авто-статикой, очистка журнала по сроку и объёму. Виды `chunk`, `snippet`, `template`, `plugin`, `tv`, `category`.
    Инструменты объектов и кода, `history`, `history_diff`, `undo`, `checkpoint`.
-3. **Контент и файлы** (ресурсы сделаны; файлы и `media_source` — в работе). Вид `resource` с TV, `resource_tree`, `bulk_resources`, файловые
+3. **Контент и файлы** (сделано; свойства источников файлов пока не редактируются). Вид `resource` с TV, `resource_tree`, `bulk_resources`, файловые
    инструменты, `media_source`.
 4. **Проверка.** `run`, `check_page`, `read_log`, `audit_site`, `search`, `replace`,
    `find_usages`, `dependency_graph`.

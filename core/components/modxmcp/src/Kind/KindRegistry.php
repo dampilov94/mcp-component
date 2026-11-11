@@ -14,6 +14,7 @@ final class KindRegistry {
         TvKind::class,
         CategoryKind::class,
         ResourceKind::class,
+        MediaSourceKind::class,
     );
 
     private $kinds = null;

@@ -3,7 +3,6 @@ namespace ModxMCP\Action;
 
 use ModxMCP\ApiException;
 use ModxMCP\Context;
-use ModxMCP\Journal\Snapshot;
 use ModxMCP\Journal\Undo;
 use ModxMCP\Schema;
 use ModxMCP\Write\Writer;
@@ -79,7 +78,7 @@ final class UndoAction extends WriteAction {
         $plan = Undo::plan($context, $changesets);
         $objects = array();
         foreach ($plan['items'] as $item) {
-            $objects[] = array('kind' => $item['kind']->name(), 'id' => $item['key'], 'name' => $item['label'], 'action' => $item['action'])
+            $objects[] = array('kind' => $item['subject']->kindName(), 'id' => ctype_digit((string) $item['key']) ? (int) $item['key'] : $item['key'], 'name' => $item['label'], 'action' => $item['action'])
                 + ($item['conflict'] !== null ? array('conflict' => $item['conflict']) : array());
         }
         $summary = array('changesets' => $ids, 'objects' => $objects, 'conflicts' => $plan['conflicts']);
@@ -95,8 +94,8 @@ final class UndoAction extends WriteAction {
 
         list(, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $plan, $ids) {
             foreach ($plan['items'] as $item) {
-                $tx->touch($item['kind'], $item['key']);
-                Snapshot::restore($context->modx, $item['kind'], $item['key'], $item['target'], $item['extra']);
+                $tx->touchSubject($item['subject']);
+                $item['subject']->restore($item['target'], $item['extra']);
             }
             $cache = $context->modx->getCacheManager();
             if ($cache) { $cache->refresh(); }

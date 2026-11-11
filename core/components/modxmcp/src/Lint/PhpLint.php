@@ -8,6 +8,16 @@ final class PhpLint {
      * @return array|null    null when the code parses, else ['message' => …, 'line' => int]
      *                       with the line counted in the given source.
      */
+    /** Check a whole PHP file: code outside <?php tags is output, as PHP itself treats it. */
+    public static function checkFile($content) {
+        try {
+            token_get_all((string) $content, TOKEN_PARSE);
+            return null;
+        } catch (\ParseError $e) {
+            return array('message' => $e->getMessage(), 'line' => max(1, $e->getLine()));
+        }
+    }
+
     public static function check($code) {
         $code = (string) $code;
         // Element code is stored without an opening tag. The tag is added on the same line,

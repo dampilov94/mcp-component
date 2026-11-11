@@ -28,6 +28,7 @@ abstract class Kind {
      *   code        holds source code (long; edited with the code tools)
      *   read_only   never writable
      *   derived     maintained by MODX; read_only and never sent to a processor
+     *   computed    not a database column (derived as well); cannot be filtered on
      *   format      "datetime": stored as unix time, shown and written as "YYYY-MM-DD HH:MM:SS" ("" = none)
      *   required    required on create
      */

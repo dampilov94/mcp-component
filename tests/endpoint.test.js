@@ -112,10 +112,11 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
     assert.equal(result.protocol, 2);
     assert.deepEqual(result.tools.map((item) => item.name), [
       "modx_capabilities", "modx_site_info", "modx_describe", "modx_help", "modx_list", "modx_get",
-      "modx_resource_tree", "modx_view_code", "modx_history", "modx_history_diff", "modx_request_status",
+      "modx_resource_tree", "modx_view_code", "modx_list_files", "modx_read_file", "modx_history", "modx_history_diff",
+      "modx_request_status",
     ]);
     const full = (await call(admin, "manifest")).body.result;
-    assert.equal(full.tools.length, 18);
+    assert.equal(full.tools.length, 23);
     assert.notEqual(full.hash, result.hash);
     assert.equal(full.tools.find((item) => item.name === "modx_delete").effect.destructive, true);
     assert.deepEqual(result.token, { label: "reader", scope: "read", plan_only: false });
@@ -137,7 +138,7 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
     assert.equal(caps.body.result.integrations.length, 3);
 
     const kinds = await call(read, "describe");
-    assert.equal(kinds.body.result.kinds.length, 7);
+    assert.equal(kinds.body.result.kinds.length, 8);
     const plugin = await call(read, "describe", { kind: "plugin" });
     assert.ok(plugin.body.result.fields.some((field) => field.name === "content" && field.code));
     const missing = await call(read, "describe", { kind: "nope" });
@@ -224,7 +225,7 @@ test("bridge + kernel end to end", { skip: available ? false : "PHP with pdo_sql
   t.after(async () => { await client.close(); site.stop(); });
 
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 18);
+  assert.equal(tools.length, 23);
   const run = async (name, args = {}) => {
     const result = await client.callTool({ name, arguments: args });
     assert.equal(result.isError, undefined, `${name}: ${result.content[0].text}`);

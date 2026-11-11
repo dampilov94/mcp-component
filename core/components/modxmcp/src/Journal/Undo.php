@@ -3,7 +3,6 @@ namespace ModxMCP\Journal;
 
 use ModxMCP\ApiException;
 use ModxMCP\Context;
-use ModxMCP\Kind\Objects;
 
 /**
  * Plans an undo of one or more changesets. For every object the plan gives the state to go
@@ -13,7 +12,7 @@ use ModxMCP\Kind\Objects;
 final class Undo {
     /**
      * @param array $changesets journal changesets (any order) with their changes loaded
-     * @return array ['items' => [...], 'conflicts' => int]; each item has kind (Kind), key,
+     * @return array ['items' => [...], 'conflicts' => int]; each item has subject (Subject), key,
      *               label, action (restore|recreate|remove), target (state|null), extra, conflict
      */
     public static function plan(Context $context, array $changesets) {
@@ -47,15 +46,15 @@ final class Undo {
         foreach ($objects as $entry) {
             $newest = $entry['newest'];
             $oldest = $entry['oldest'];
-            $kind = Objects::kind($context, $newest['kind'], true);
-            $key = (int) $newest['object_key'];
-            $current = Snapshot::revision(Snapshot::capture($context->modx, $kind, $key));
+            $subject = Subjects::forChange($context, $newest['kind'], $newest['object_key'], true);
+            $key = $newest['object_key'];
+            $current = Snapshot::revision($subject->capture());
 
             $conflict = null;
             if ($entry['broken'] !== null) {
                 $conflict = "another change between the selected changesets also modified it (after changeset {$entry['broken']})";
             } elseif ($current !== $newest['after_revision']) {
-                $last = $journal->lastChange($kind->name(), $key);
+                $last = $journal->lastChange($subject->kindName(), $key);
                 $conflict = $last && $last['changeset_id'] > $newest['changeset_id']
                     ? "changed later by changeset {$last['changeset_id']} ({$last['source']}, {$last['tool']})"
                     : 'changed outside the journal since this change';
@@ -66,7 +65,7 @@ final class Undo {
             if ($oldest['before_revision'] !== null) {
                 $json = $blobs->get($oldest['before_revision']);
                 if ($json === null) {
-                    throw new ApiException('not_reversible', "The stored state of {$kind->name()} {$key} is no longer available.");
+                    throw new ApiException('not_reversible', "The stored state of {$subject->kindName()} {$key} is no longer available.");
                 }
                 $target = json_decode($json, true);
             }
@@ -76,7 +75,7 @@ final class Undo {
                 if ($json !== null) { $extra = json_decode($json, true); }
             }
             $items[] = array(
-                'kind' => $kind, 'key' => $key, 'label' => $newest['label'],
+                'subject' => $subject, 'key' => $key, 'label' => $newest['label'],
                 'action' => $target === null ? 'remove' : ($current === null ? 'recreate' : 'restore'),
                 'target' => $target, 'extra' => $extra, 'conflict' => $conflict,
             );

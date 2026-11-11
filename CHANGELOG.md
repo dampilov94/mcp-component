@@ -64,6 +64,21 @@ Stage 3 — resources:
 - Resources of extended classes (e.g. msProduct) are writable with a warning: data kept outside
   the resource table is not journaled.
 
+Stage 3 — files:
+
+- `modx_list_files`, `modx_read_file` on local media sources and, read-only, on the code of
+  installed components; `modx_write_file`, `modx_move_path`, `modx_delete_path` on media sources.
+- Paths are relative, without traversal, drives or schemes, and must stay inside the root after
+  symlinks are resolved. `core/config`, `core/modxmcp-data` and credential files are never
+  accessible. A source that spans the site root or the core needs
+  `modxmcp.allow_root_filesystem_read`. A directory tree containing symlinks is not moved or
+  deleted as a whole.
+- Server-executed files (`.php`, `.htaccess`, …) need the `develop` scope; PHP files must parse.
+- Files are journaled like objects (kind `file`): revisions, `expected_revision`, diffs, undo of
+  writes, moves and directory deletes, and detection of edits made over FTP. The journal now
+  works on subjects (objects or files).
+- Kind `media_source` (read; writes need `admin`; source properties are not editable yet).
+
 - Offline tests (`npm test`): pure PHP logic, the real kernel behind PHP's built-in server with
   stubbed MODX classes, and the Node bridge end to end. CI runs them.
 

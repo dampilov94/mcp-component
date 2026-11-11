@@ -47,6 +47,26 @@ by lines.
 - New pages are created with the site's defaults; pass `published: false` to keep a page
   hidden until it is ready.
 
+## Files
+
+- Files live in media sources: `modx_list {kind: "media_source"}` shows their ids and
+  directories. Only local sources work.
+- `modx_list_files {source, path?}`, `modx_read_file {source, path}` (returns `revision`),
+  `modx_write_file {source, path, content, expected_revision?}`,
+  `modx_move_path {source, path, to}`, `modx_delete_path {source, path}`.
+- To read the code of an installed add-on use `component` instead of `source`:
+  `modx_list_files {component: "minishop2"}`, `modx_read_file {component: "minishop2",
+  area: "core", path: "…"}`. Component code is read-only.
+- Paths are relative to the source directory. Configuration and credential files are not
+  accessible, and a source that covers the whole site is closed unless the administrator
+  opened it.
+- File changes are journaled and undone like object changes; `modx_delete_path` on a
+  directory keeps every file it removed. Use `dry_run` first.
+- Writing `.php` and other server-executed files needs the `develop` scope and the PHP must
+  parse. Binary content is passed with `encoding: "base64"`.
+- Code of chunks, snippets, templates and plugins is edited with the object tools even when
+  the element is static; do not edit their files directly.
+
 ## Changing things
 
 - `modx_create {kind, fields, relations?}`

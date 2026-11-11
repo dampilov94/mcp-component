@@ -2,7 +2,9 @@
 namespace ModxMCP\Write;
 
 use ModxMCP\Context;
+use ModxMCP\Journal\ObjectSubject;
 use ModxMCP\Journal\Snapshot;
+use ModxMCP\Journal\Subject;
 use ModxMCP\Kind\Kind;
 
 /**
@@ -24,36 +26,40 @@ final class Transaction {
 
     /** Lock an object and remember its current state. Returns that state (null if absent). */
     public function touch(Kind $kind, $key) {
-        $id = $kind->name() . ':' . (int) $key;
+        return $this->touchSubject(new ObjectSubject($this->context->modx, $kind, $key));
+    }
+
+    /** Lock any subject and remember its current state. Returns that state (null if absent). */
+    public function touchSubject(Subject $subject) {
+        $id = $subject->kindName() . ':' . $subject->key();
         if (!isset($this->touched[$id])) {
             $this->lock->acquire($id);
-            $before = Snapshot::capture($this->context->modx, $kind, $key);
-            $this->recordOutsideChange($kind, (int) $key, $before);
-            $this->touched[$id] = array('kind' => $kind, 'key' => (int) $key, 'extra' => array(), 'before' => $before);
+            $before = $subject->capture();
+            $this->recordOutsideChange($subject, $before);
+            $this->touched[$id] = array('subject' => $subject, 'extra' => array(), 'before' => $before);
         }
         return $this->touched[$id]['before'];
     }
 
     /**
-     * The journal knows the state it last left an object in. If the object is in another
-     * state now, somebody changed it without the journal (a manager edit with no save event,
-     * a static file edited over FTP, a direct database query). Record that as a changeset of
-     * its own, so it shows in the history and can be undone like any other.
+     * The journal knows the state it last left a subject in. If it is in another state now,
+     * somebody changed it without the journal (a manager edit with no save event, a file
+     * edited over FTP, a direct database query). Record that as a changeset of its own, so
+     * it shows in the history and can be undone like any other.
      */
-    private function recordOutsideChange(Kind $kind, $key, $current) {
+    private function recordOutsideChange(Subject $subject, $current) {
         $journal = $this->context->journal();
-        $last = $journal->lastChange($kind->name(), $key);
+        $last = $journal->lastChange($subject->kindName(), $subject->key());
         $revision = Snapshot::revision($current);
         if (!$last || $last['after_revision'] === $revision) { return; }
         $blobs = $this->context->blobs();
         $reversible = $last['after_revision'] === null || $blobs->has($last['after_revision']);
         if ($current !== null && $blobs->put(Snapshot::encode($current)) === null) { $reversible = false; }
-        $nameColumn = $kind->column($kind->nameField());
         $journal->commit(array(
-            'source' => 'external', 'tool' => '', 'summary' => "{$kind->name()} {$key} was changed outside the journal",
+            'source' => 'external', 'tool' => '', 'summary' => "{$subject->kindName()} {$subject->key()} was changed outside the journal",
         ), array(array(
-            'kind' => $kind->name(), 'object_key' => $key,
-            'label' => $current !== null && isset($current['fields'][$nameColumn]) ? $current['fields'][$nameColumn] : $last['label'],
+            'kind' => $subject->kindName(), 'object_key' => $subject->key(),
+            'label' => $current !== null ? $subject->label($current) : $last['label'],
             'op' => $last['after_revision'] === null ? 'create' : ($current === null ? 'delete' : 'update'),
             'before_revision' => $last['after_revision'], 'after_revision' => $revision,
             'reversible' => $reversible,
@@ -63,17 +69,19 @@ final class Transaction {
 
     /** Register an object that this call has just created. */
     public function created(Kind $kind, $key) {
-        $id = $kind->name() . ':' . (int) $key;
+        $subject = new ObjectSubject($this->context->modx, $kind, $key);
+        $id = $subject->kindName() . ':' . $subject->key();
         if (!isset($this->touched[$id])) {
             $this->lock->acquire($id);
-            $this->touched[$id] = array('kind' => $kind, 'key' => (int) $key, 'extra' => array(), 'before' => null);
+            $this->touched[$id] = array('subject' => $subject, 'extra' => array(), 'before' => null);
         }
     }
 
     /** Before a delete: keep the rows that would be destroyed with the object. */
     public function keepDeleteExtra(Kind $kind, $key) {
         $this->touch($kind, $key);
-        $this->touched[$kind->name() . ':' . (int) $key]['extra'] = Snapshot::captureDeleteExtra($this->context->modx, $kind, $key);
+        $subject = new ObjectSubject($this->context->modx, $kind, $key);
+        $this->touched[$subject->kindName() . ':' . $subject->key()]['extra'] = $subject->captureDeleteExtra();
     }
 
     /**
@@ -82,15 +90,14 @@ final class Transaction {
      * @return array ['changeset_id' => int|null, 'changes' => [...]]; no changeset when nothing changed
      */
     public function commit($summary, array $undoes = array()) {
-        $modx = $this->context->modx;
         $blobs = $this->context->blobs();
         $rows = array();
         $changes = array();
         foreach ($this->touched as $entry) {
-            /** @var Kind $kind */
-            $kind = $entry['kind'];
+            /** @var Subject $subject */
+            $subject = $entry['subject'];
             $before = $entry['before'];
-            $after = Snapshot::capture($modx, $kind, $entry['key']);
+            $after = $subject->capture();
             $beforeRevision = Snapshot::revision($before);
             $afterRevision = Snapshot::revision($after);
             if ($beforeRevision === $afterRevision) { continue; }
@@ -111,21 +118,20 @@ final class Transaction {
                     $note = 'Related data is larger than modxmcp.history_max_blob_bytes; this delete cannot be fully undone.';
                 }
             }
-            $named = $after !== null ? $after : $before;
-            $nameColumn = $kind->column($kind->nameField());
             $op = $before === null ? 'create' : ($after === null ? 'delete' : 'update');
+            $key = $subject->key();
             $rows[] = array(
-                'kind' => $kind->name(), 'object_key' => $entry['key'], 'op' => $op,
-                'label' => isset($named['fields'][$nameColumn]) ? $named['fields'][$nameColumn] : '',
+                'kind' => $subject->kindName(), 'object_key' => $key, 'op' => $op,
+                'label' => $subject->label($after !== null ? $after : $before),
                 'before_revision' => $beforeRevision, 'after_revision' => $afterRevision,
                 'extra_blob' => $extraBlob, 'reversible' => $reversible, 'note' => $note,
             );
             $changes[] = array(
-                'kind' => $kind->name(), 'id' => $entry['key'], 'op' => $op,
+                'kind' => $subject->kindName(), 'id' => ctype_digit($key) ? (int) $key : $key, 'op' => $op,
                 'revision' => $afterRevision, 'before_revision' => $beforeRevision,
-                'changed' => Snapshot::changed($kind, $before, $after), 'reversible' => $reversible,
+                'changed' => $subject->changed($before, $after), 'reversible' => $reversible,
             );
-            if ($note !== '') { $this->context->warnings[] = "{$kind->name()} {$entry['key']}: {$note}"; }
+            if ($note !== '') { $this->context->warnings[] = "{$subject->kindName()} {$key}: {$note}"; }
         }
         if (!$rows) { return array('changeset_id' => null, 'changes' => array()); }
 
@@ -140,15 +146,14 @@ final class Transaction {
 
     /** Put every touched object back into the state it had when it was touched. */
     public function rollback() {
-        $modx = $this->context->modx;
         foreach (array_reverse($this->touched) as $entry) {
+            $subject = $entry['subject'];
             try {
-                $current = Snapshot::capture($modx, $entry['kind'], $entry['key']);
-                if (Snapshot::revision($current) !== Snapshot::revision($entry['before'])) {
-                    Snapshot::restore($modx, $entry['kind'], $entry['key'], $entry['before'], $entry['extra']);
+                if (Snapshot::revision($subject->capture()) !== Snapshot::revision($entry['before'])) {
+                    $subject->restore($entry['before'], $entry['extra']);
                 }
             } catch (\Throwable $e) {
-                $modx->log(\modX::LOG_LEVEL_ERROR, '[modxmcp] Rollback of ' . $entry['kind']->name() . ' ' . $entry['key'] . ' failed: ' . $e->getMessage());
+                $this->context->modx->log(\modX::LOG_LEVEL_ERROR, '[modxmcp] Rollback of ' . $subject->kindName() . ' ' . $subject->key() . ' failed: ' . $e->getMessage());
             }
         }
     }

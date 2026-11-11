@@ -113,7 +113,7 @@ $context = function ($scope, array $denied = array(), array $options = array()) 
 $read = $context('read');
 $tools = Manifest::tools($read);
 $names = array_column($tools, 'name');
-check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_resource_tree', 'modx_view_code', 'modx_history', 'modx_history_diff', 'modx_request_status'));
+check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_resource_tree', 'modx_view_code', 'modx_list_files', 'modx_read_file', 'modx_history', 'modx_history_diff', 'modx_request_status'));
 check('manifest: protocol action is not a tool', !in_array('modx_manifest', $names, true));
 check('manifest: hash is stable', Manifest::hash($tools) === Manifest::hash(Manifest::tools($context('read'))));
 foreach ($tools as $tool) {
@@ -129,7 +129,7 @@ check('manifest: encodes', is_string(json_encode($tools, JSON_THROW_ON_ERROR)));
 
 $describe = $read->actions->get('describe');
 $list = $describe->run(array(), $read);
-check('describe: lists element kinds', array_column($list['kinds'], 'kind') === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource'));
+check('describe: lists element kinds', array_column($list['kinds'], 'kind') === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source'));
 $chunk = $describe->run(array('kind' => 'chunk'), $read);
 $fields = array_column($chunk['fields'], null, 'name');
 check('describe: chunk exposes content as code', !empty($fields['content']['code']) && $fields['name']['required'] === true && $fields['id']['read_only'] === true);
@@ -485,6 +485,113 @@ $site->store('modResource', array('class_key' => 'msProduct') + $site->row('modR
 $warned = $actor('content');
 $call($warned, 'update', array('kind' => 'resource', 'id' => $news['id'], 'fields' => array('longtitle' => 'Product')));
 check('resource: extended classes get a journaling warning', count($warned->warnings) === 1 && strpos($warned->warnings[0], 'msProduct') !== false);
+
+// --- Files ---
+use ModxMCP\Files\FileRoot;
+
+check('paths: cleaned', FileRoot::normalize('a//b/./c.txt') === 'a/b/c.txt' && FileRoot::normalize('') === '' && FileRoot::normalize('a\\b') === 'a/b');
+foreach (array('../x', 'a/../../x', '/etc/passwd', 'C:\\x', 'php://input', "a\0b") as $bad) {
+    throws('paths: rejected ' . json_encode($bad), ApiException::class, function () use ($bad) { FileRoot::normalize($bad); });
+}
+check('paths: executable names', FileRoot::isExecutable('a/b.php') && FileRoot::isExecutable('.htaccess') && FileRoot::isExecutable('x.PHTML') && !FileRoot::isExecutable('a/b.css') && !FileRoot::isExecutable('php.txt'));
+
+$media = $siteDir . '/media';
+mkdir($media . '/img', 0755, true);
+mkdir($siteDir . '/core/config', 0755, true);
+mkdir($siteDir . '/core/components/demo/model', 0755, true);
+file_put_contents($media . '/style.css', "body { color: red; }\n");
+file_put_contents($media . '/img/logo.png', "\x89PNG\x00\x01binary");
+file_put_contents($siteDir . '/core/config/config.inc.php', '<?php $database_password = "secret";');
+file_put_contents($siteDir . '/core/components/demo/model/demo.class.php', '<?php class Demo {}');
+file_put_contents($siteDir . '/outside.txt', 'outside the source');
+symlink($siteDir . '/outside.txt', $media . '/escape.txt');
+$site->options['base_path'] = $siteDir . '/';
+$site->options['assets_path'] = $siteDir . '/assets/';
+$site->store('sources.modMediaSource', array('id' => 1, 'name' => 'Media', 'description' => '', 'class_key' => 'sources.modFileMediaSource', 'basePath' => $media . '/'));
+$site->store('sources.modMediaSource', array('id' => 2, 'name' => 'Whole site', 'description' => '', 'class_key' => 'sources.modFileMediaSource', 'basePath' => $siteDir . '/'));
+$site->store('sources.modMediaSource', array('id' => 3, 'name' => 'Cloud', 'description' => '', 'class_key' => 'sources.modS3MediaSource', 'basePath' => ''));
+$site->store('modNamespace', array('name' => 'demo'));
+
+$sources = $call($actor('read'), 'list', array('kind' => 'media_source'));
+check('media sources: listed with their directory', $sources['total'] === 3 && $sources['items'][1]['base_path'] === $media . '/' && $sources['items'][0]['base_path'] === '');
+$dirList = $call($actor('read'), 'list_files', array('source' => 1));
+check('files: directory listing, directories first', array_column($dirList['entries'], 'name') === array('img', 'escape.txt', 'style.css') && $dirList['entries'][0]['type'] === 'dir' && $dirList['entries'][1]['type'] === 'link' && $dirList['writable'] === true);
+$css = $call($actor('read'), 'read_file', array('source' => 1, 'path' => 'style.css'));
+check('files: read text with revision', $css['content'] === "body { color: red; }\n" && $css['binary'] === false && $css['truncated'] === false && strlen($css['revision']) === 64);
+$part = $call($actor('read'), 'read_file', array('source' => 1, 'path' => 'style.css', 'max_bytes' => 4));
+check('files: partial read', $part['content'] === 'body' && $part['truncated'] === true && $part['next_offset'] === 4);
+$png = $call($actor('read'), 'read_file', array('source' => 1, 'path' => 'img/logo.png'));
+check('files: binary reports size only', $png['binary'] === true && !isset($png['content']) && $png['size'] === 12
+    && base64_decode($call($actor('read'), 'read_file', array('source' => 1, 'path' => 'img/logo.png', 'as_base64' => true))['content']) === "\x89PNG\x00\x01binary");
+throws('files: symlink out of the root', ApiException::class, function () use ($call, $dev) { $call($dev, 'read_file', array('source' => 1, 'path' => 'escape.txt')); });
+throws('files: traversal', ApiException::class, function () use ($call, $dev) { $call($dev, 'read_file', array('source' => 1, 'path' => '../outside.txt')); });
+$e = throws('files: source spanning the site is off by default', ApiException::class, function () use ($call, $dev) { $call($dev, 'list_files', array('source' => 2)); });
+check('files: spanning source is unavailable', $e && $e->errorCode === 'unavailable');
+throws('files: non-local source', ApiException::class, function () use ($call, $dev) { $call($dev, 'list_files', array('source' => 3)); });
+$site->options['modxmcp.allow_root_filesystem_read'] = true;
+check('files: spanning source works when allowed', count($call($dev, 'list_files', array('source' => 2))['entries']) > 0);
+throws('files: configuration stays closed', ApiException::class, function () use ($call, $dev) { $call($dev, 'read_file', array('source' => 2, 'path' => 'core/config/config.inc.php')); });
+throws('files: modxMCP data stays closed', ApiException::class, function () use ($call, $dev) { $call($dev, 'list_files', array('source' => 2, 'path' => 'core/modxmcp-data')); });
+throws('files: configuration cannot be written', ApiException::class, function () use ($call, $dev) { $call($dev, 'write_file', array('source' => 2, 'path' => 'core/config/x.txt', 'content' => 'x')); });
+$site->options['modxmcp.allow_root_filesystem_read'] = false;
+$component = $call($actor('read'), 'read_file', array('component' => 'demo', 'path' => 'model/demo.class.php'));
+check('files: component code is readable', $component['content'] === '<?php class Demo {}' && $call($actor('read'), 'list_files', array('component' => 'demo'))['writable'] === false);
+throws('files: unknown component', ApiException::class, function () use ($call, $dev) { $call($dev, 'list_files', array('component' => 'nope')); });
+throws('files: source and component together', ApiException::class, function () use ($call, $dev) { $call($dev, 'list_files', array('source' => 1, 'component' => 'demo')); });
+
+$written = $call($editor, 'write_file', array('source' => 1, 'path' => 'css/new/site.css', 'content' => "a { }\n", 'must_be_new' => true));
+check('write_file: creates the file and its directories', file_get_contents($media . '/css/new/site.css') === "a { }\n" && $written['files'][0]['op'] === 'create' && $written['changeset_id'] !== null);
+throws('write_file: must_be_new on an existing file', ApiException::class, function () use ($call, $editor) { $call($editor, 'write_file', array('source' => 1, 'path' => 'style.css', 'content' => 'x', 'must_be_new' => true)); });
+$replaced = $call($editor, 'write_file', array('source' => 1, 'path' => 'style.css', 'content' => "body { color: blue; }\n", 'expected_revision' => $css['revision']));
+check('write_file: replace with the read revision', $replaced['files'][0]['op'] === 'update' && file_get_contents($media . '/style.css') === "body { color: blue; }\n");
+$e = throws('write_file: stale revision', ApiException::class, function () use ($call, $editor, $css) { $call($editor, 'write_file', array('source' => 1, 'path' => 'style.css', 'content' => 'x', 'expected_revision' => $css['revision'])); });
+check('write_file: stale revision is a conflict', $e && $e->errorCode === 'revision_conflict' && file_get_contents($media . '/style.css') === "body { color: blue; }\n");
+check('write_file: dry run', $call($editor, 'write_file', array('source' => 1, 'path' => 'style.css', 'content' => 'never', 'dry_run' => true))['files'][0]['op'] === 'update' && file_get_contents($media . '/style.css') === "body { color: blue; }\n");
+$fileDiff = $call($editor, 'history_diff', array('changeset_id' => $replaced['changeset_id']));
+check('write_file: journal diff', $fileDiff['objects'][0]['kind'] === 'file' && $fileDiff['objects'][0]['id'] === 's1:style.css' && $fileDiff['objects'][0]['changed']['content']['diff'] === "@@ -1,1 +1,1 @@\n-body { color: red; }\n+body { color: blue; }");
+$bin = $call($editor, 'write_file', array('source' => 1, 'path' => 'img/dot.gif', 'content' => base64_encode("GIF\x00\xff"), 'encoding' => 'base64'));
+check('write_file: binary through base64', file_get_contents($media . '/img/dot.gif') === "GIF\x00\xff" && $bin['size'] === 5);
+$e = throws('write_file: php needs the develop scope', ApiException::class, function () use ($call, $editor) { $call($editor, 'write_file', array('source' => 1, 'path' => 'x.php', 'content' => '<?php echo 1;')); });
+check('write_file: php refusal is forbidden_scope', $e && $e->errorCode === 'forbidden_scope' && !file_exists($media . '/x.php'));
+throws('write_file: .htaccess needs the develop scope', ApiException::class, function () use ($call, $editor) { $call($editor, 'write_file', array('source' => 1, 'path' => 'img/.htaccess', 'content' => 'x')); });
+$e = throws('write_file: broken php is refused', ApiException::class, function () use ($call, $dev) { $call($dev, 'write_file', array('source' => 1, 'path' => 'x.php', 'content' => "<p>ok</p>\n<?php echo (;")); });
+check('write_file: lint error with the file line', $e && $e->errorCode === 'lint_failed' && $e->details['line'] === 2 && !file_exists($media . '/x.php'));
+check('write_file: valid php with html around it', $call($dev, 'write_file', array('source' => 1, 'path' => 'x.php', 'content' => "<p>ok</p>\n<?php echo 1;"))['changeset_id'] !== null);
+throws('write_file: component code is read-only', ApiException::class, function () use ($call, $dev) { $call($dev, 'write_file', array('source' => 1, 'path' => '', 'content' => 'x')); });
+
+$call($editor, 'undo', array('changeset_id' => $replaced['changeset_id'], 'confirm' => true));
+check('files: undo of a replace', file_get_contents($media . '/style.css') === "body { color: red; }\n");
+$call($editor, 'undo', array('changeset_id' => $written['changeset_id'], 'confirm' => true));
+check('files: undo of a create removes the file and its empty directories', !file_exists($media . '/css'));
+
+file_put_contents($media . '/style.css', "edited over ftp\n");
+$afterFtp = $call($editor, 'write_file', array('source' => 1, 'path' => 'style.css', 'content' => "final\n"));
+$fileHistory = $call($editor, 'history', array('kind' => 'file', 'source' => 'external'));
+check('files: an edit over FTP is journaled as external', count($fileHistory['changesets']) === 1 && $fileHistory['changesets'][0]['objects'][0]['id'] === 's1:style.css');
+
+mkdir($media . '/docs/sub', 0755, true);
+file_put_contents($media . '/docs/a.txt', 'A');
+file_put_contents($media . '/docs/sub/b.txt', 'B');
+$move = $call($editor, 'move_path', array('source' => 1, 'path' => 'docs', 'to' => 'archive/docs'));
+check('move_path: directory moved as one changeset', file_get_contents($media . '/archive/docs/sub/b.txt') === 'B' && !file_exists($media . '/docs') && count($move['files']) === 4);
+throws('move_path: target exists', ApiException::class, function () use ($call, $editor) { $call($editor, 'move_path', array('source' => 1, 'path' => 'style.css', 'to' => 'x.php')); });
+throws('move_path: into itself', ApiException::class, function () use ($call, $editor) { $call($editor, 'move_path', array('source' => 1, 'path' => 'archive', 'to' => 'archive/inner')); });
+throws('move_path: renaming to php needs develop', ApiException::class, function () use ($call, $editor) { $call($editor, 'move_path', array('source' => 1, 'path' => 'style.css', 'to' => 'style.php')); });
+$call($editor, 'undo', array('changeset_id' => $move['changeset_id'], 'confirm' => true));
+check('move_path: undo moves everything back', file_get_contents($media . '/docs/sub/b.txt') === 'B' && !file_exists($media . '/archive'));
+
+$dryDel = $call($editor, 'delete_path', array('source' => 1, 'path' => 'docs', 'dry_run' => true));
+check('delete_path: dry run counts', $dryDel['count'] === 2 && $dryDel['bytes'] === 2 && $dryDel['directory'] === true && file_exists($media . '/docs/a.txt'));
+$deletedDir = $call($editor, 'delete_path', array('source' => 1, 'path' => 'docs'));
+check('delete_path: directory removed', !file_exists($media . '/docs') && count($deletedDir['files']) === 2 && $deletedDir['reversible'] === true);
+$call($editor, 'undo', array('changeset_id' => $deletedDir['changeset_id'], 'confirm' => true));
+check('delete_path: undo restores the tree', file_get_contents($media . '/docs/a.txt') === 'A' && file_get_contents($media . '/docs/sub/b.txt') === 'B');
+throws('delete_path: php file needs develop', ApiException::class, function () use ($call, $editor) { $call($editor, 'delete_path', array('source' => 1, 'path' => 'x.php')); });
+symlink($siteDir . '/outside.txt', $media . '/docs/link.txt');
+throws('delete_path: a tree with a symlink is refused', ApiException::class, function () use ($call, $editor) { $call($editor, 'delete_path', array('source' => 1, 'path' => 'docs')); });
+check('delete_path: nothing was removed', file_exists($media . '/docs/a.txt') && file_get_contents($siteDir . '/outside.txt') === 'outside the source');
+throws('delete_path: the root cannot be deleted', ApiException::class, function () use ($call, $editor) { $call($editor, 'delete_path', array('source' => 1, 'path' => '.')); });
+throws('files: a read token cannot write', ApiException::class, function () use ($call, $actor) { $call($actor('read'), 'write_file', array('source' => 1, 'path' => 'a.txt', 'content' => 'x')); });
 
 // Concurrent MCP writers
 $lock = new ModxMCP\Write\Lock($dev->dataDir() . '/locks');

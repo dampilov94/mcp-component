@@ -24,6 +24,8 @@ class FakeObject {
             $this->fields[$key] = $value;
         }
     }
+    public function initialize() { return true; }
+    public function getBasePath() { return (string) $this->get('basePath'); }
     public function getSourceFile() { return !empty($this->fields['static']) ? (string) $this->fields['static_file'] : false; }
     public function setTVValue($tvId, $value) {
         $this->modx->removeCollection('modTemplateVarResource', array('tmplvarid' => $tvId, 'contentid' => $this->fields['id']));

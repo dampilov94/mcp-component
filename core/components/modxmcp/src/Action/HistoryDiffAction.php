@@ -2,15 +2,11 @@
 namespace ModxMCP\Action;
 
 use ModxMCP\ApiException;
-use ModxMCP\Code\Diff;
 use ModxMCP\Context;
-use ModxMCP\Journal\Snapshot;
+use ModxMCP\Journal\Subjects;
 use ModxMCP\Schema;
 
 final class HistoryDiffAction extends Action {
-    /** Columns whose values are never shown in a diff. */
-    const SECRET = '/pass|secret|token|salt|hash/i';
-
     public function name() { return 'history_diff'; }
 
     public function group() { return 'history'; }
@@ -45,35 +41,20 @@ final class HistoryDiffAction extends Action {
 
         $objects = array();
         foreach ($changeset['changes'] as $change) {
-            $item = array('kind' => $change['kind'], 'id' => (int) $change['object_key'], 'name' => $change['label'], 'op' => $change['op']);
-            $kind = $context->kinds->get($change['kind']);
+            $item = array('kind' => $change['kind'], 'id' => ctype_digit($change['object_key']) ? (int) $change['object_key'] : $change['object_key'], 'name' => $change['label'], 'op' => $change['op']);
             $before = $load($change['before_revision']);
             $after = $load($change['after_revision']);
-            if (!$kind || $before === false || $after === false) {
+            try {
+                $subject = Subjects::forChange($context, $change['kind'], $change['object_key'], false);
+            } catch (ApiException $e) {
+                $subject = null;   // e.g. the media source is gone
+            }
+            if (!$subject || $before === false || $after === false) {
                 $item['note'] = 'The stored states of this change are not available.';
                 $objects[] = $item;
                 continue;
             }
-            $fields = array();
-            $codeColumn = $kind->codeField() !== null ? $kind->column($kind->codeField()) : null;
-            foreach (Snapshot::changed($kind, $before, $after) as $name) {
-                $definitions = $kind->fields();
-                $column = isset($definitions[$name]) ? $kind->column($name) : $name;
-                $old = $before !== null && array_key_exists($column, $before['fields']) ? $before['fields'][$column] : null;
-                $new = $after !== null && array_key_exists($column, $after['fields']) ? $after['fields'][$column] : null;
-                if ($before !== null && isset($before['relations'][$name]) || $after !== null && isset($after['relations'][$name])) {
-                    $fields[$name] = array(
-                        'old' => $before !== null && isset($before['relations'][$name]) ? $before['relations'][$name] : array(),
-                        'new' => $after !== null && isset($after['relations'][$name]) ? $after['relations'][$name] : array(),
-                    );
-                } elseif ($column === $codeColumn) {
-                    $fields[$name] = array('diff' => Diff::lines((string) $old, (string) $new));
-                } elseif (preg_match(self::SECRET, $column)) {
-                    $fields[$name] = array('old' => '[hidden]', 'new' => '[hidden]');
-                } else {
-                    $fields[$name] = array('old' => $old, 'new' => $new);
-                }
-            }
+            $fields = $subject->describeChange($before, $after);
             $item['changed'] = $fields ? $fields : new \stdClass();
             if ($change['note'] !== '') { $item['note'] = $change['note']; }
             $objects[] = $item;

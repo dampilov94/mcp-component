@@ -11,5 +11,8 @@ Quick reference:
 - `modx_describe` — the object kinds and, for one kind, its fields and relations.
 - `modx_list`, `modx_get`, `modx_view_code` — read objects and code.
 - `modx_create`, `modx_update`, `modx_edit_code`, `modx_delete` — change objects.
+- `modx_resource_tree`, `modx_bulk_resources` — the page tree and bulk page operations.
+- `modx_list_files`, `modx_read_file`, `modx_write_file`, `modx_move_path`,
+  `modx_delete_path` — files in media sources; component code read-only.
 - `modx_history`, `modx_history_diff`, `modx_checkpoint`, `modx_undo` — the change journal.
 - `modx_request_status` — outcome of a write whose response was lost.

@@ -23,7 +23,8 @@ stages have landed. It is not compatible with 1.x clients or tool names.
   validator.
   `Journal/` is the change journal (snapshots, blob store, undo planning); `Write/` the write
   transaction and object locks; `Kind/Objects.php` the generic object operations; `Code/` line
-  edits and diffs; `Lint/` the PHP syntax check.
+  edits and diffs; `Lint/` the PHP syntax check; `Files/` file roots, path guards and the
+  file subject. The journal works on `Journal\Subject` (an object or a file).
 - `client/index.js`: thin MCP bridge. It fetches the manifest from the site and exposes it as
   MCP tools; it contains no tool definitions. `client/api.js`: HTTP transport and envelope.
 - `assets/components/modxmcp/api.php`: bootstraps MODX and calls the kernel.
