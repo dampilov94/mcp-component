@@ -195,6 +195,22 @@ $hash = $blobs->put('hello');
 check('blobs: content addressed', $hash === hash('sha256', 'hello') && $blobs->get($hash) === 'hello' && $blobs->put('hello') === $hash);
 check('blobs: oversize is refused', $blobs->put(str_repeat('x', 4096)) === null);
 check('blobs: absent blob', $blobs->get(hash('sha256', 'nope')) === null);
+$blobPath = $blobDir . '/' . substr($hash, 0, 2) . '/' . $hash . '.php';
+$blobTime = time() - 7200;
+touch($blobPath, $blobTime);
+file_put_contents(dirname($blobPath) . '/ignored.tmp', 'unfinished');
+file_put_contents($blobDir . '/' . $hash . '.php', 'wrong level');
+check('blobs: each reports hash, on-disk bytes and mtime, ignoring other files', iterator_to_array($blobs->each(), false)
+    === array(array($hash, strlen(BlobStore::FILE_GUARD . 'hello'), $blobTime)));
+$missingBlobs = new BlobStore($blobDir . '/not-created');
+check('blobs: each on absent storage is empty', iterator_to_array($missingBlobs->each()) === array());
+check('blobs: delete reports whether the blob existed', $blobs->delete($hash) === true && $blobs->delete($hash) === false
+    && $blobs->get($hash) === null && file_exists(dirname($blobPath) . '/ignored.tmp'));
+unlink(dirname($blobPath) . '/ignored.tmp');
+$blobs->put('hello');
+check('blobs: delete removes an empty shard', $blobs->delete($hash) && !is_dir(dirname($blobPath)));
+throws('blobs: delete validates hashes', InvalidArgumentException::class, function () use ($blobs) { $blobs->delete('../bad'); });
+$blobs->put('hello');
 file_put_contents($blobDir . '/' . substr($hash, 0, 2) . '/' . $hash . '.php', BlobStore::FILE_GUARD . 'tampered');
 throws('blobs: corruption is detected', RuntimeException::class, function () use ($blobs, $hash) { $blobs->get($hash); });
 
@@ -711,6 +727,145 @@ $lock->acquire('chunk:2');
 $e = throws('lock: object held by another request', ApiException::class, function () use ($call, $dev) { $call($dev, 'update', array('kind' => 'chunk', 'id' => 2, 'fields' => array('description' => 'x'))); });
 check('lock: refusal is locked', $e && $e->errorCode === 'locked');
 $lock->releaseAll();
+
+// --- Journal retention on isolated fake sites ---
+$retentionSite = function () use ($dev) {
+    $dir = sys_get_temp_dir() . '/modxmcp-retention-' . bin2hex(random_bytes(6));
+    mkdir($dir . '/core', 0700, true);
+    $modx = fakeSite($dir);
+    $context = new Context($modx, array('id' => 1, 'label' => 'retention', 'prefix' => 'mcp_test', 'scope' => 'develop',
+        'plan_only' => false, 'denied_groups' => array(), 'expires_at' => null), $dev->corePath,
+        function () { throw new RuntimeException('no store in retention tests'); });
+    $context->sessionId = 'retention-session-0001';
+    return array($modx, $context);
+};
+$ageBlobs = function ($context, $mtime) {
+    foreach ($context->blobs()->each() as $blob) {
+        touch($context->dataDir() . '/history/' . substr($blob[0], 0, 2) . '/' . $blob[0] . '.php', $mtime);
+    }
+};
+$retention = new ModxMCP\Journal\Retention();
+list($retSite, $retContext) = $retentionSite();
+$retNow = time();
+$oldTime = $retNow - 40 * 86400;
+$first = $call($retContext, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'retained', 'content' => 'one')));
+$oldCheckpoint = $retContext->journal()->addCheckpoint('old anchor', 1, $retContext->sessionId);
+$freshCheckpoint = $retContext->journal()->addCheckpoint('fresh anchor', 1, $retContext->sessionId);
+$second = $call($retContext, 'update', array('kind' => 'chunk', 'id' => $first['id'], 'fields' => array('content' => 'two')));
+$third = $call($retContext, 'update', array('kind' => 'chunk', 'id' => $first['id'], 'fields' => array('content' => 'three')));
+$keptCheckpoint = $retContext->journal()->addCheckpoint('retained anchor', 1, $retContext->sessionId);
+$retSite->pdo->exec('UPDATE modx_modxmcp_changesets SET created_at = ' . $oldTime . ' WHERE id IN (1,2)');
+$retSite->pdo->exec('UPDATE modx_modxmcp_checkpoints SET created_at = ' . $oldTime . ' WHERE id IN (1,3)');
+$extraHash = $retContext->blobs()->put('{"delete_extra":[]}');
+$retSite->pdo->exec("UPDATE modx_modxmcp_changes SET extra_blob = '" . $extraHash . "' WHERE changeset_id = 3");
+$ageBlobs($retContext, $retNow - 7200);
+$expectedBytes = strlen(BlobStore::FILE_GUARD) + strlen($retContext->blobs()->get($first['revision']));
+$freshHash = $retContext->blobs()->put('uncommitted snapshot');
+$retSite->options['modxmcp.history_max_bytes'] = 0;
+$pruned = $retention->run($retContext, $retNow);
+check('retention: age removes exactly two changesets and their private blob', $pruned === array('changesets' => 2, 'blobs' => 1, 'bytes' => $expectedBytes)
+    && $retContext->journal()->changes(array(1, 2)) === array() && count($retContext->journal()->changes(array(3))) === 1);
+check('retention: shared snapshot and extra blob survive', !$retContext->blobs()->has($first['revision'])
+    && $retContext->blobs()->has($second['revision']) && $retContext->blobs()->has($third['revision']) && $retContext->blobs()->has($extraHash));
+check('retention: reference set includes before, after and extra hashes', $retContext->journal()->referencedBlobs()
+    == array($second['revision'] => true, $third['revision'] => true, $extraHash => true));
+check('retention: only old checkpoints below retained history are removed', $retContext->journal()->checkpoint($oldCheckpoint['id']) === null
+    && $retContext->journal()->checkpoint($freshCheckpoint['id']) !== null && $retContext->journal()->checkpoint($keptCheckpoint['id']) !== null);
+$retHistory = $call($retContext, 'history');
+$retDiff = $call($retContext, 'history_diff', array('changeset_id' => $third['changeset_id']));
+check('retention: remaining history and diff are readable', array_column($retHistory['changesets'], 'changeset_id') === array($third['changeset_id'])
+    && $retDiff['objects'][0]['changed']['content']['diff'] === "@@ -1,1 +1,1 @@\n-two\n+three");
+check('retention: fresh unreferenced blob survives', $retContext->blobs()->has($freshHash));
+$ageBlobs($retContext, $retNow - 3600);
+check('retention: blobs exactly one hour old are protected', $retention->run($retContext, $retNow)['blobs'] === 0);
+$ageBlobs($retContext, $retNow - 3601);
+$collected = $retention->run($retContext, $retNow);
+check('retention: old unreferenced blob is collected without deleting more rows', $collected === array('changesets' => 0, 'blobs' => 1,
+    'bytes' => strlen(BlobStore::FILE_GUARD . 'uncommitted snapshot')) && !$retContext->blobs()->has($freshHash));
+
+// Size cleanup stops after the first batch once enough disk space has been reclaimed.
+list($sizeSite, $sizeContext) = $retentionSite();
+$sizeSite->options['modxmcp.history_retention_days'] = 0;
+$sizeSite->options['modxmcp.history_max_bytes'] = 0;
+$sizeBytes = array();
+for ($i = 1; $i <= 103; $i++) {
+    $hash = $sizeContext->blobs()->put('size snapshot ' . $i);
+    $sizeBytes[$i] = strlen(BlobStore::FILE_GUARD . 'size snapshot ' . $i);
+    $sizeContext->journal()->commit(array('tool' => 'test'), array(array('kind' => 'chunk', 'object_key' => $i,
+        'label' => 'size', 'op' => 'create', 'before_revision' => null, 'after_revision' => $hash, 'reversible' => true)));
+}
+$ageBlobs($sizeContext, $retNow - 7200);
+$sizeSite->options['modxmcp.history_max_bytes'] = array_sum(array_slice($sizeBytes, 100));
+$sizePruned = $retention->run($sizeContext, $retNow);
+check('retention: size removes the 100 oldest changesets first', $sizePruned === array('changesets' => 100, 'blobs' => 100,
+    'bytes' => array_sum(array_slice($sizeBytes, 0, 100))) && $sizeContext->journal()->oldestChangesetIds(PHP_INT_MAX, 500) === array(101, 102, 103));
+$sizeSite->options['modxmcp.history_max_bytes'] = 1;
+$sizePruned = $retention->run($sizeContext, $retNow);
+check('retention: newest changeset survives even if it alone exceeds the size limit', $sizePruned['changesets'] === 2 && $sizePruned['blobs'] === 2
+    && $sizeContext->journal()->oldestChangesetIds(PHP_INT_MAX, 500) === array(103)
+    && count(iterator_to_array($sizeContext->blobs()->each(), false)) === 1);
+$sizeSite->pdo->exec('UPDATE modx_modxmcp_changesets SET created_at = ' . $oldTime);
+$unused = $sizeContext->blobs()->put('disabled cleanup orphan');
+$ageBlobs($sizeContext, $retNow - 7200);
+$sizeSite->options['modxmcp.history_max_bytes'] = 0;
+check('retention: zero/zero disables row deletion and blob collection', $retention->run($sizeContext, $retNow)
+    === array('changesets' => 0, 'blobs' => 0, 'bytes' => 0) && $sizeContext->journal()->changeset(103) !== null && $sizeContext->blobs()->has($unused));
+
+// Age batches, strict boundary, and an empty journal's obsolete checkpoints.
+for ($i = 0; $i < 501; $i++) { $sizeContext->journal()->commit(array('tool' => 'age batch'), array()); }
+$sizeContext->journal()->addCheckpoint('last anchor', 1, $sizeContext->sessionId);
+$sizeSite->pdo->exec('UPDATE modx_modxmcp_changesets SET created_at = ' . $oldTime);
+$sizeSite->pdo->exec('UPDATE modx_modxmcp_checkpoints SET created_at = ' . $oldTime);
+$sizeSite->options['modxmcp.history_retention_days'] = 30;
+$sizeSite->pdo->exec('UPDATE modx_modxmcp_changesets SET created_at = ' . ($retNow - 30 * 86400) . ' WHERE id = 604');
+check('retention: age batches and cut-off are strict', $retention->run($sizeContext, $retNow)['changesets'] === 501
+    && $sizeContext->journal()->oldestChangesetIds(PHP_INT_MAX, 500) === array(604));
+check('retention: age may expire the last changeset and its old checkpoints', $retention->run($sizeContext, $retNow + 1)['changesets'] === 1
+    && $sizeContext->journal()->lastChangesetId() === 0 && (int) $sizeSite->pdo->query('SELECT COUNT(*) FROM modx_modxmcp_checkpoints')->fetchColumn() === 0);
+
+// The hourly hook is exercised by real Writer commits, including failure isolation.
+list($hookSite, $hookContext) = $retentionSite();
+$hookFirst = $call($hookContext, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'hook first')));
+$stamp = $hookContext->dataDir() . '/prune.stamp';
+clearstatcache(true, $stamp);
+check('retention hook: missing stamp is created after the first write', is_file($stamp) && filemtime($stamp) >= $retNow);
+$hookSite->pdo->exec('UPDATE modx_modxmcp_changesets SET created_at = ' . $oldTime);
+$hookSecond = $call($hookContext, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'hook second')));
+check('retention hook: fresh stamp skips pruning', $hookContext->journal()->changeset($hookFirst['changeset_id']) !== null);
+touch($stamp, $retNow - 7200);
+$call($hookContext, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'hook third')));
+clearstatcache(true, $stamp);
+check('retention hook: stale stamp runs pruning', filemtime($stamp) >= $retNow && $hookContext->journal()->changeset($hookFirst['changeset_id']) === null);
+$hookSite->pdo->exec('UPDATE modx_modxmcp_changesets SET created_at = ' . $oldTime . ' WHERE id = ' . $hookSecond['changeset_id']);
+unlink($stamp);
+$pruneLock = fopen($hookContext->dataDir() . '/prune.lock', 'c');
+flock($pruneLock, LOCK_EX | LOCK_NB);
+$call($hookContext, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'hook locked')));
+check('retention hook: held lock skips pruning without failing the write', !file_exists($stamp) && $hookContext->journal()->changeset($hookSecond['changeset_id']) !== null);
+flock($pruneLock, LOCK_UN);
+fclose($pruneLock);
+ModxMCP\Write\Writer::run($hookContext, 'noop', function ($tx) { return array('result' => array()); });
+check('retention hook: no-op write does not prune', !file_exists($stamp));
+$call($hookContext, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'hook missing stamp')));
+check('retention hook: missing stamp runs pruning', is_file($stamp) && $hookContext->journal()->changeset($hookSecond['changeset_id']) === null);
+
+$hookSite->pdo->exec('UPDATE modx_modxmcp_changesets SET created_at = ' . $oldTime);
+$hookSite->pdo->exec("CREATE TRIGGER fail_retention BEFORE DELETE ON modx_modxmcp_changes BEGIN SELECT RAISE(FAIL, 'retention test failure'); END");
+touch($stamp, $retNow - 7200);
+$oldLog = ini_get('error_log');
+$retLog = $hookContext->dataDir() . '/retention-test.log';
+ini_set('error_log', $retLog);
+try {
+    $survived = $call($hookContext, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'write survives pruning failure')));
+} finally {
+    ini_set('error_log', $oldLog);
+    $hookSite->pdo->exec('DROP TRIGGER fail_retention');
+}
+clearstatcache(true, $stamp);
+check('retention hook: failure is logged and never rolls back the successful write', $survived['changeset_id'] !== null
+    && $hookSite->row('modChunk', $survived['id'])['name'] === 'write survives pruning failure'
+    && $hookContext->journal()->changeset($survived['changeset_id']) !== null && filemtime($stamp) >= $retNow
+    && strpos(file_get_contents($retLog), 'Journal retention failed:') !== false && strpos(file_get_contents($retLog), 'retention test failure') !== false);
 
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));

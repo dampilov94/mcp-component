@@ -3,6 +3,7 @@ namespace ModxMCP\Write;
 
 use ModxMCP\Context;
 use ModxMCP\Journal\ObjectSubject;
+use ModxMCP\Journal\Retention;
 use ModxMCP\Journal\Snapshot;
 use ModxMCP\Journal\Subject;
 use ModxMCP\Kind\Kind;
@@ -141,7 +142,33 @@ final class Transaction {
             'request_id' => $this->context->requestId, 'tool' => $this->tool, 'summary' => $summary, 'undoes' => $undoes,
         ), $rows);
         if ($undoes) { $journal->setUndone($undoes, $id); }
+        $this->maybePrune();
         return array('changeset_id' => $id, 'changes' => $changes);
+    }
+
+    /** Best-effort maintenance, at most hourly and without waiting for another collector. */
+    private function maybePrune() {
+        try {
+            $dir = $this->context->dataDir();
+            $lock = @fopen($dir . '/prune.lock', 'c');
+            if (!$lock) { throw new \RuntimeException('Cannot open journal retention lock.'); }
+            try {
+                if (!flock($lock, LOCK_EX | LOCK_NB)) { return; }
+                $stamp = $dir . '/prune.stamp';
+                clearstatcache(true, $stamp);
+                $now = time();
+                if (is_file($stamp) && $now - filemtime($stamp) < 3600) { return; }
+                if (!@touch($stamp, $now)) { throw new \RuntimeException('Cannot stamp journal retention run.'); }
+                (new Retention())->run($this->context, $now);
+            } finally {
+                flock($lock, LOCK_UN);
+                fclose($lock);
+            }
+        } catch (\Throwable $e) {
+            try {
+                $this->context->modx->log(\modX::LOG_LEVEL_ERROR, '[modxmcp] Journal retention failed: ' . $e->getMessage());
+            } catch (\Throwable $logError) { /* Even a logging failure must preserve the committed write. */ }
+        }
     }
 
     /** Put every touched object back into the state it had when it was touched. */

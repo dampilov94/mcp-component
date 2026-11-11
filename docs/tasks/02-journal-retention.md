@@ -84,3 +84,55 @@ context; copy the few lines that build them):
 `src/Journal/Journal.php`, new `src/Journal/Retention.php`, `src/Write/Transaction.php`,
 `_build/data/transport.settings.php`, the two lexicon setting files, and
 `tests/php/run.php`.
+
+## Report
+
+Implemented on `task/02-journal-retention`, based on updated `main` (`fcce907`). Read the
+task 01 Review and compared the architect's changes after `fee7e88` before starting.
+
+- `_build/data/transport.settings.php` and `lexicon/en/setting.inc.php`,
+  `lexicon/ru/setting.inc.php`: added the two limits with the specified defaults, area,
+  names and descriptions of their zero values.
+- `src/Journal/BlobStore.php`: added two-level blob enumeration (hash, physical file size
+  including the PHP guard, mtime) and deletion with empty-shard cleanup. Enumeration
+  ignores temporary files, misplaced names and symlinks; filesystem errors are reported.
+- `src/Journal/Journal.php`: added oldest-id batches, deletion of changes/changesets and
+  obsolete checkpoints, and a distinct set of before/after/extra blob references.
+- `src/Journal/Retention.php`: age batches of 500, size batches of 100 preserving the
+  highest changeset id, and unreferenced blob collection with a strict one-hour grace
+  period. Returns actual removed changeset/blob/byte counts; zero/zero disables all cleanup.
+- `src/Write/Transaction.php`: after a journaled commit, attempts hourly pruning under a
+  non-blocking lock and touches the stamp before running. Cleanup errors are logged and
+  cannot roll back the completed write, even if logging itself throws.
+- `tests/php/run.php`: blob unit checks and isolated retention fixtures cover age and size
+  batches, shared snapshots and extra blobs, history/diff after cleanup, checkpoints,
+  boundary times, disabled limits, newest preservation, stamp/lock behavior, no-op commits,
+  and an injected SQLite deletion failure that leaves the successful write intact.
+
+Validation: `npm run check` passed (12 JavaScript files, 110 PHP files on PHP 7.4.33,
+release metadata). `npm test` passed: 375 PHP checks and 24 Node/HTTP tests, no skips.
+`git diff --check` passed. No deployment, stand scripts, push or release operations.
+
+Interpretations / deviations:
+
+- `deleteChangesets(array $ids, $olderThan = null)` has an optional second argument because
+  checkpoint deletion needs the retention cut-off and `Retention::run()` accepts a supplied
+  clock. The one-argument form derives the cut-off from settings and current time. The
+  method returns the number of changesets actually deleted for the removal counters.
+- When no changesets remain, all checkpoints older than the cut-off are obsolete and are
+  removed; fresh checkpoints survive. With age retention disabled, checkpoints are kept.
+- The newest-changeset exception applies to the size phase, where the brief places it;
+  the age phase can expire every changeset. Oldest ordering is `created_at`, then `id`.
+- Failure isolation is tested with a SQLite trigger that rejects deletion, without adding
+  a production injection seam or changing FakeModx. This report is the only changed file
+  outside the acceptance list, as requested by the executor workflow.
+
+Only verified with fake MODX and real local SQLite/filesystem operations. The architect
+should verify MySQL deletion/count behavior, installed settings and lexicons, MODX error
+logging and continued writes on cleanup failure, and stamp/flock behavior under concurrent
+PHP workers on the stand. The existing history and undo actions were not changed.
+
+Open questions: confirm the empty-journal checkpoint interpretation above. The specified
+mtime grace protects newly written blobs; the unchanged `BlobStore::put()` reuses existing
+blobs without refreshing mtime, so concurrent reuse of an old unreferenced blob is not
+covered by that grace. This concurrency policy was not expanded beyond the decided design.
