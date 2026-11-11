@@ -867,6 +867,28 @@ check('retention hook: failure is logged and never rolls back the successful wri
     && $hookContext->journal()->changeset($survived['changeset_id']) !== null && filemtime($stamp) >= $retNow
     && strpos(file_get_contents($retLog), 'Journal retention failed:') !== false && strpos(file_get_contents($retLog), 'retention test failure') !== false);
 
+// Review additions: grace-period blobs do not cost history, and reused blobs are fresh.
+list($graceSite, $graceContext) = $retentionSite();
+foreach (array('one', 'two', 'three') as $index => $text) {
+    $call($graceContext, $index ? 'update' : 'create', $index
+        ? array('kind' => 'chunk', 'id' => 1, 'fields' => array('content' => $text))
+        : array('kind' => 'chunk', 'fields' => array('name' => 'grace', 'content' => $text)));
+}
+$referencedBytes = 0;
+foreach ($graceContext->blobs()->each() as $blob) { $referencedBytes += $blob[1]; }
+$graceContext->blobs()->put(str_repeat('young unreferenced snapshot ', 2000));
+$graceSite->options['modxmcp.history_retention_days'] = 0;
+$graceSite->options['modxmcp.history_max_bytes'] = $referencedBytes + 100;
+$graceRun = $retention->run($graceContext);
+check('retention: a blob in its grace period does not push history out', $graceRun['changesets'] === 0 && $graceRun['blobs'] === 0
+    && count($graceContext->journal()->changesets(array(), 50)) === 3);
+$reusedHash = $graceContext->blobs()->put('reused content');
+$reusedPath = $graceContext->dataDir() . '/history/' . substr($reusedHash, 0, 2) . '/' . $reusedHash . '.php';
+touch($reusedPath, time() - 7200);
+$graceContext->blobs()->put('reused content');
+clearstatcache(true, $reusedPath);
+check('blobs: storing existing content again refreshes its age', filemtime($reusedPath) > time() - 60);
+
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));
 check('canonical: list order is kept', Kernel::canonical(array(3, 1, 2)) === array(3, 1, 2));

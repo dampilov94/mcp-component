@@ -136,3 +136,23 @@ Open questions: confirm the empty-journal checkpoint interpretation above. The s
 mtime grace protects newly written blobs; the unchanged `BlobStore::put()` reuses existing
 blobs without refreshing mtime, so concurrent reuse of an old unreferenced blob is not
 covered by that grace. This concurrency policy was not expanded beyond the decided design.
+
+## Review
+
+Accepted and merged. On the stand the first write after deployment triggered a prune on
+MySQL: `prune.stamp` appeared, the element stand check passed and the site's error log has
+no retention entries. The stand's journal is younger than 30 days and far below 200 MB, so
+the `DELETE` statements have run only on SQLite so far.
+
+The checkpoint interpretation in the report is confirmed.
+
+Changes the architect made on the branch before merging:
+
+1. The size phase compared the limit with every blob on disk, including unreferenced blobs
+   still inside their one-hour grace period. After a burst of activity that alone exceeded
+   the limit, it would have kept deleting older changesets, down to the newest one, without
+   freeing anything. Only blobs the journal still refers to now count against the limit.
+2. `BlobStore::put()` refreshes the mtime of a blob that already exists — the race the report
+   pointed out. A snapshot being reused by a write in progress can no longer be collected
+   before its journal rows exist.
+3. Lexicon lines reordered so each setting's name and description stay together.

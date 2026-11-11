@@ -31,7 +31,12 @@ final class BlobStore {
         if (strlen($data) > $this->maxBytes) { return null; }
         $hash = self::hash($data);
         $path = $this->path($hash);
-        if (is_file($path)) { return $hash; }
+        if (is_file($path)) {
+            // Reused content counts as fresh: retention must not collect it before the
+            // change that refers to it has been written to the journal.
+            @touch($path);
+            return $hash;
+        }
         $dir = dirname($path);
         if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) { throw new \RuntimeException('Cannot create history storage.'); }
         $temp = $path . '.' . bin2hex(random_bytes(8)) . '.tmp';

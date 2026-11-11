@@ -21,8 +21,14 @@ final class Retention {
             }
         }
         if ($maxBytes > 0) {
+            // Only snapshots the journal still refers to count against the limit. Blobs that
+            // are merely waiting out their grace period will go on their own; deleting more
+            // history because of them would free nothing.
+            $referenced = $journal->referencedBlobs();
             $total = 0;
-            foreach ($blobs->each() as $blob) { $total += $blob[1]; }
+            foreach ($blobs->each() as $blob) {
+                if (isset($referenced[$blob[0]])) { $total += $blob[1]; }
+            }
             while ($total > $maxBytes) {
                 $newest = $journal->lastChangesetId();
                 $ids = array_values(array_diff($journal->oldestChangesetIds(PHP_INT_MAX, 100), array($newest)));
@@ -35,7 +41,7 @@ final class Retention {
         return $removed;
     }
 
-    /** Collect old, unreferenced blobs and return the remaining on-disk size. */
+    /** Collect old, unreferenced blobs and return the size of the blobs still referenced. */
     private function collect(Journal $journal, BlobStore $blobs, $now, array &$removed) {
         $referenced = $journal->referencedBlobs();
         $total = 0;
@@ -44,7 +50,7 @@ final class Retention {
             if (!isset($referenced[$hash]) && $mtime < $now - 3600 && $blobs->delete($hash)) {
                 $removed['blobs']++;
                 $removed['bytes'] += $bytes;
-            } else {
+            } elseif (isset($referenced[$hash])) {
                 $total += $bytes;
             }
         }
