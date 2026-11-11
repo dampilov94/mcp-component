@@ -40,5 +40,28 @@ below) or append a `## Review` section to the brief with numbered change request
 | 01 | [modx_duplicate](01-duplicate.md) | `task/01-duplicate` | merged |
 | 02 | [Journal retention](02-journal-retention.md) | `task/02-journal-retention` | merged |
 | 03 | [modx_search](03-search.md) | `task/03-search` | ready for the executor |
+| 04 | [modx_replace](04-replace.md) | `task/04-replace` | ready for the executor |
+| 05 | [modx_find_usages](05-find-usages.md) | `task/05-find-usages` | ready for the executor |
+| 06 | [modx_read_log](06-read-log.md) | `task/06-read-log` | ready for the executor |
+| 07 | [modx_maintenance](07-maintenance.md) | `task/07-maintenance` | ready for the executor |
+| 08 | [Access kinds](08-access-kinds.md) | `task/08-access-kinds` | ready for the executor |
 
-Do the briefs in order unless told otherwise; each starts from the then-current `main`.
+## Doing several briefs in a row
+
+Do the briefs in number order. The architect may not have merged the previous one yet;
+then **stack**: create the next branch from the previous task branch instead of `main`
+(`git switch task/03-search && git switch -c task/04-replace`). Each branch then contains
+the earlier tasks plus its own commits, and the tool and kind counts asserted in the tests
+simply accumulate. Rules for a stack:
+
+- one branch per brief, never several briefs in one branch, never commits for a later
+  brief on an earlier branch;
+- do not rewrite or rebase a branch once you have reported it;
+- start each report with the line `Based on: <branch or main> at <short sha>`;
+- if a later brief needs a fix to code from an earlier one, make it on the later branch
+  and list it under deviations;
+- if `main` moved because the architect merged something with changes, do not merge or
+  rebase onto it yourself — keep stacking; the architect integrates.
+
+Stop and report after each brief only if you are blocked; otherwise continue with the next
+one and tell the user at the end which branches are ready.

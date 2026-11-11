@@ -32,6 +32,8 @@ Work on 2.0 is split between an **architect** session and an **executor** sessio
 - The executor implements exactly one brief at a time. If you were started with a brief
   (e.g. "do docs/tasks/01-duplicate.md"), you are the executor; read `docs/tasks/README.md`
   first and follow it.
+- Several briefs may be done in a row on stacked branches; `docs/tasks/README.md` has the
+  rules.
 - The executor works only in its own branch `task/NN-name`, never commits to `main`, never
   pushes, never deploys and never runs anything in `scripts/stand/` (those scripts act on a
   real site). It does not touch `.env`, `.mcp.json` or `.local/`.
@@ -73,6 +75,10 @@ MODX traps already handled; keep them handled:
   Kinds report such cascades through `alsoAffected()` so they are journaled.
 - MODX refuses to delete a TV that is attached to a template, a template in use, the site
   start page, etc. Pass these errors through; do not work around them.
+
+A full MODX 2.8.8 source tree is available locally (ignored by git) in `modx-example-2-8-8/`.
+Read the real processors and maps there instead of guessing how MODX behaves; never modify
+or execute anything in it.
 
 ## Tests
 
