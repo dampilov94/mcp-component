@@ -14,7 +14,7 @@ final class ViewCodeAction extends Action {
     public function group() { return 'code'; }
 
     public function description() {
-        return 'Code of a chunk, snippet, template or plugin as numbered lines, optionally only a line range. '
+        return 'Code of a chunk, snippet, template or plugin, or the content of a resource, as numbered lines; optionally only a line range. '
             . 'Use the line numbers and the returned revision with modx_edit_code.';
     }
 

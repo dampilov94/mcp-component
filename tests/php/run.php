@@ -113,7 +113,7 @@ $context = function ($scope, array $denied = array(), array $options = array()) 
 $read = $context('read');
 $tools = Manifest::tools($read);
 $names = array_column($tools, 'name');
-check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_view_code', 'modx_history', 'modx_history_diff', 'modx_request_status'));
+check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_resource_tree', 'modx_view_code', 'modx_history', 'modx_history_diff', 'modx_request_status'));
 check('manifest: protocol action is not a tool', !in_array('modx_manifest', $names, true));
 check('manifest: hash is stable', Manifest::hash($tools) === Manifest::hash(Manifest::tools($context('read'))));
 foreach ($tools as $tool) {
@@ -129,7 +129,7 @@ check('manifest: encodes', is_string(json_encode($tools, JSON_THROW_ON_ERROR)));
 
 $describe = $read->actions->get('describe');
 $list = $describe->run(array(), $read);
-check('describe: lists element kinds', array_column($list['kinds'], 'kind') === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category'));
+check('describe: lists element kinds', array_column($list['kinds'], 'kind') === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource'));
 $chunk = $describe->run(array('kind' => 'chunk'), $read);
 $fields = array_column($chunk['fields'], null, 'name');
 check('describe: chunk exposes content as code', !empty($fields['content']['code']) && $fields['name']['required'] === true && $fields['id']['read_only'] === true);
@@ -399,6 +399,92 @@ $site->options['modxmcp.history_max_blob_bytes'] = 5242880;
 check('oversize: saved, flagged, with a warning', $big['reversible'] === false && $big['changeset_id'] !== null && count($small->warnings) === 1);
 $e = throws('oversize: undo is refused', ApiException::class, function () use ($call, $dev, $big) { $call($dev, 'undo', array('changeset_id' => $big['changeset_id'], 'confirm' => true)); });
 check('oversize: refusal is not_reversible', $e && $e->errorCode === 'not_reversible');
+
+// --- Resources ---
+$editor = $actor('content');
+check('content token: sees write tools', in_array('modx_update', array_column(Manifest::tools($editor), 'name'), true));
+$e = throws('content token: elements stay out of reach', ApiException::class, function () use ($call, $editor) { $call($editor, 'update', array('kind' => 'chunk', 'id' => 1, 'fields' => array('description' => 'x'))); });
+check('content token: element write is forbidden_scope', $e && $e->errorCode === 'forbidden_scope');
+
+$site->store('modTemplateVar', array('id' => 20, 'name' => 'subtitle', 'default_text' => 'default sub', 'caption' => '', 'type' => 'text', 'category' => 0));
+$site->store('modTemplateVar', array('id' => 21, 'name' => 'other', 'default_text' => '', 'caption' => '', 'type' => 'text', 'category' => 0));
+$site->store('modTemplateVarTemplate', array('tmplvarid' => 20, 'templateid' => 2, 'rank' => 0));
+$home = $call($editor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Home', 'template' => 2, 'content' => "<h1>Home</h1>\n<p>text</p>", 'published' => true)));
+$about = $call($editor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'About us', 'parent' => $home['id'], 'template' => 2), 'relations' => array('tvs' => array('subtitle' => 'Who we are'))));
+$team = $call($editor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Team', 'parent' => $about['id'])));
+check('resource: created by a content token', $home['id'] === 1 && $about['changeset_id'] !== null);
+$homeGot = $call($editor, 'get', array('kind' => 'resource', 'id' => $home['id']));
+check('resource: parent became a container, journaled with the child', $homeGot['fields']['isfolder'] === true
+    && count($call($editor, 'history_diff', array('changeset_id' => $about['changeset_id']))['objects']) === 2);
+check('resource: tv values read with defaults', $homeGot['relations']['tvs'] == array('subtitle' => 'default sub')
+    && $call($editor, 'get', array('kind' => 'resource', 'id' => $about['id']))['relations']['tvs'] == array('subtitle' => 'Who we are'));
+check('resource: found by alias', $call($editor, 'get', array('kind' => 'resource', 'name' => 'about-us'))['id'] === $about['id']);
+$e = throws('resource: tv not on the template', ApiException::class, function () use ($call, $editor, $home) { $call($editor, 'update', array('kind' => 'resource', 'id' => $home['id'], 'relations' => array('tvs' => array('other' => 'x')))); });
+check('resource: unknown tv names the valid ones', $e && strpos($e->getMessage(), 'subtitle') !== false);
+throws('resource: tvs must be an object', ApiException::class, function () use ($call, $editor, $home) { $call($editor, 'update', array('kind' => 'resource', 'id' => $home['id'], 'relations' => array('tvs' => array('a', 'b')))); });
+
+$title = $call($editor, 'update', array('kind' => 'resource', 'id' => $home['id'], 'fields' => array('longtitle' => 'Welcome'), 'expected_revision' => $homeGot['revision']));
+$afterTitle = $site->row('modResource', $home['id']);
+check('resource: update changes one field and keeps the checkboxes', $title['changed'] === array('longtitle') && $afterTitle['published'] === '1' && $afterTitle['isfolder'] === '1' && $afterTitle['searchable'] === '1');
+check('resource: the cache was refreshed', $site->getCacheManager()->refreshes > 0);
+$noop = $call($editor, 'update', array('kind' => 'resource', 'id' => $home['id'], 'fields' => array('longtitle' => 'Welcome')));
+check('resource: editedon alone is not a change', $noop['changeset_id'] === null && $noop['revision'] === $title['revision']);
+$tvSet = $call($editor, 'update', array('kind' => 'resource', 'id' => $home['id'], 'relations' => array('tvs' => array('subtitle' => 'Start here'))));
+check('resource: tv write is journaled', $tvSet['changed'] === array('tvs') && $call($editor, 'get', array('kind' => 'resource', 'id' => $home['id']))['relations']['tvs'] == array('subtitle' => 'Start here'));
+$call($editor, 'undo', array('changeset_id' => $tvSet['changeset_id'], 'confirm' => true));
+check('resource: undo of a tv write', $call($editor, 'get', array('kind' => 'resource', 'id' => $home['id']))['relations']['tvs'] == array('subtitle' => 'default sub'));
+
+$future = date('Y-m-d H:i:s', time() + 86400 * 30);
+$scheduled = $call($editor, 'update', array('kind' => 'resource', 'id' => $team['id'], 'fields' => array('pub_date' => $future)));
+check('resource: publish date is written and read as a date string', $call($editor, 'get', array('kind' => 'resource', 'id' => $team['id']))['fields']['pub_date'] === $future);
+$call($editor, 'update', array('kind' => 'resource', 'id' => $team['id'], 'fields' => array('menutitle' => 'Our team')));
+$teamRow = $site->row('modResource', $team['id']);
+check('resource: a later update keeps the schedule and does not publish', (int) $teamRow['pub_date'] === strtotime($future) && $teamRow['published'] === '0');
+
+$edited = $call($editor, 'edit_code', array('kind' => 'resource', 'id' => $home['id'], 'edits' => array(array('start_line' => 2, 'replacement' => '<p>new text</p>', 'expect' => '<p>text</p>'))));
+check('resource: content edits by line', $edited['changed'] === array('content') && $site->row('modResource', $home['id'])['content'] === "<h1>Home</h1>\n<p>new text</p>");
+
+$resources = $call($editor, 'list', array('kind' => 'resource'));
+check('resource: list in tree order', array_column($resources['items'], 'pagetitle') === array('Home', 'About us', 'Team') && $resources['items'][0]['published'] === true);
+check('resource: list searches title and alias', array_column($call($editor, 'list', array('kind' => 'resource', 'query' => 'about-'))['items'], 'id') === array($about['id']));
+check('resource: list filter by parent', array_column($call($editor, 'list', array('kind' => 'resource', 'where' => array('parent' => $home['id'])))['items'], 'id') === array($about['id']));
+$tree = $call($editor, 'resource_tree', array('depth' => 3));
+check('tree: nested with child counts', $tree['returned'] === 3 && $tree['nodes'][0]['children'] === 1 && $tree['nodes'][0]['nodes'][0]['nodes'][0]['pagetitle'] === 'Team');
+check('tree: depth limit leaves the count', !isset($call($editor, 'resource_tree', array('depth' => 1))['nodes'][0]['nodes']));
+
+// Trash with children, and undo
+$aboutBefore = $call($editor, 'get', array('kind' => 'resource', 'id' => $about['id']))['revision'];
+$teamBefore = $call($editor, 'get', array('kind' => 'resource', 'id' => $team['id']))['revision'];
+$trashed = $call($editor, 'delete', array('kind' => 'resource', 'id' => $about['id']));
+check('resource delete: to trash with children', $site->row('modResource', $about['id'])['deleted'] === '1' && $site->row('modResource', $team['id'])['deleted'] === '1');
+check('resource delete: children are in the changeset', count($call($editor, 'history_diff', array('changeset_id' => $trashed['changeset_id']))['objects']) === 2);
+$call($editor, 'undo', array('changeset_id' => $trashed['changeset_id'], 'confirm' => true));
+check('resource delete: undo restores the branch exactly', $call($editor, 'get', array('kind' => 'resource', 'id' => $about['id']))['revision'] === $aboutBefore
+    && $call($editor, 'get', array('kind' => 'resource', 'id' => $team['id']))['revision'] === $teamBefore);
+
+// Bulk
+$news = $call($editor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'News')));
+$dryBulk = $call($editor, 'bulk_resources', array('operation' => 'publish', 'ids' => array($home['id'], $about['id'], $news['id']), 'dry_run' => true));
+check('bulk: dry run lists only real changes', array_column($dryBulk['objects'], 'would_change') === array(array(), array('published'), array('published')) && $site->row('modResource', $news['id'])['published'] === '0');
+$published = $call($editor, 'bulk_resources', array('operation' => 'publish', 'ids' => array($home['id'], $about['id'], $news['id'])));
+check('bulk: one changeset for all', $published['count'] === 2 && $published['changeset_id'] !== null && $site->row('modResource', $about['id'])['published'] === '1');
+$moved = $call($editor, 'bulk_resources', array('operation' => 'move', 'ids' => array($team['id']), 'parent' => $news['id']));
+check('bulk move: both parents follow', $site->row('modResource', $news['id'])['isfolder'] === '1' && $site->row('modResource', $about['id'])['isfolder'] === '0' && $moved['count'] === 3);
+$call($editor, 'undo', array('changeset_id' => $moved['changeset_id'], 'confirm' => true));
+check('bulk move: undo puts the tree back', $site->row('modResource', $team['id'])['parent'] === (string) $about['id'] && $site->row('modResource', $about['id'])['isfolder'] === '1' && $site->row('modResource', $news['id'])['isfolder'] === '0');
+$call($editor, 'bulk_resources', array('operation' => 'reorder', 'ids' => array($news['id'], $home['id'])));
+check('bulk reorder: menu order follows ids', $site->row('modResource', $news['id'])['menuindex'] === '0' && $site->row('modResource', $home['id'])['menuindex'] === '1');
+$e = throws('bulk: a missing id stops everything', ApiException::class, function () use ($call, $editor, $news) { $call($editor, 'bulk_resources', array('operation' => 'unpublish', 'ids' => array($news['id'], 999))); });
+check('bulk: nothing changed after the failure', $e && $e->errorCode === 'not_found' && $site->row('modResource', $news['id'])['published'] === '1');
+$binned = $call($editor, 'bulk_resources', array('operation' => 'delete', 'ids' => array($news['id'], $about['id'])));
+$call($editor, 'bulk_resources', array('operation' => 'undelete', 'ids' => array($about['id'])));
+check('bulk delete/undelete', $site->row('modResource', $news['id'])['deleted'] === '1' && $site->row('modResource', $team['id'])['deleted'] === '0' && $binned['count'] === 3);
+throws('bulk: set_template needs a template', ApiException::class, function () use ($call, $editor, $news) { $call($editor, 'bulk_resources', array('operation' => 'set_template', 'ids' => array($news['id']))); });
+
+$site->store('modResource', array('class_key' => 'msProduct') + $site->row('modResource', $news['id']));
+$warned = $actor('content');
+$call($warned, 'update', array('kind' => 'resource', 'id' => $news['id'], 'fields' => array('longtitle' => 'Product')));
+check('resource: extended classes get a journaling warning', count($warned->warnings) === 1 && strpos($warned->warnings[0], 'msProduct') !== false);
 
 // Concurrent MCP writers
 $lock = new ModxMCP\Write\Lock($dev->dataDir() . '/locks');

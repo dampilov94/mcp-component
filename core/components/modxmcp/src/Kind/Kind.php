@@ -27,6 +27,8 @@ abstract class Kind {
      *   list        included in list results by default
      *   code        holds source code (long; edited with the code tools)
      *   read_only   never writable
+     *   derived     maintained by MODX; read_only and never sent to a processor
+     *   format      "datetime": stored as unix time, shown and written as "YYYY-MM-DD HH:MM:SS" ("" = none)
      *   required    required on create
      */
     abstract public function fields();
@@ -50,6 +52,50 @@ abstract class Kind {
 
     /** Core processor directory with a trailing slash, e.g. "element/chunk/". */
     abstract public function processorPath();
+
+    /** Processor that deletes an object of this kind. */
+    public function deleteProcessor() {
+        return 'remove';
+    }
+
+    /** Extra properties every create/update processor call needs. $op is "create" or "update". */
+    public function processorExtras($op) {
+        return $op === 'create' ? array('clearCache' => 1) : array();
+    }
+
+    /** Columns searched by the `query` argument of modx_list. */
+    public function searchColumns() {
+        return array($this->column($this->nameField()));
+    }
+
+    /** Default order of modx_list: [[column, direction], …]. */
+    public function defaultSort() {
+        return array(array($this->column($this->nameField()), 'ASC'), array('id', 'ASC'));
+    }
+
+    /**
+     * Columns that make up an object's state. Kinds drop columns MODX rewrites on every save
+     * or derives from others, so they neither change the revision nor get restored.
+     */
+    public function stateColumns(array $columns) {
+        return $columns;
+    }
+
+    /**
+     * Ids of other objects of this kind that the operation will also change (MODX cascades),
+     * so they are locked, journaled and restored together with the main object.
+     * @param int|null $id      null for a create
+     * @param array    $columns column => new value for create/update
+     * @param string   $op      create | update | delete | undelete
+     */
+    public function alsoAffected(\modX $modx, $id, array $columns, $op) {
+        return array();
+    }
+
+    /** Warnings about limits of journaling for this particular object, shown after a write. */
+    public function writeWarnings($object) {
+        return array();
+    }
 
     /** "php" when the code field must pass a PHP syntax check before it is saved. */
     public function lint() {
@@ -171,11 +217,30 @@ abstract class Kind {
             return $content[0];
         }
         $raw = $object->get($this->column($field));
+        if (isset($fields[$field]['format']) && $fields[$field]['format'] === 'datetime') {
+            return self::datetime($raw);
+        }
         switch ($fields[$field]['type']) {
             case 'integer': return (int) $raw;
             case 'boolean': return (bool) $raw;
             default:        return $raw === null ? '' : (string) $raw;
         }
+    }
+
+    /** Unix time (or a date string xPDO already formatted) as "YYYY-MM-DD HH:MM:SS"; "" for none. */
+    public static function datetime($raw) {
+        if ($raw === null || $raw === '' || $raw === 0 || $raw === '0') { return ''; }
+        $time = is_numeric($raw) ? (int) $raw : strtotime((string) $raw);
+        return $time ? date('Y-m-d H:i:s', $time) : '';
+    }
+
+    /** Current value of a field in the form the core processors expect. */
+    public function processorValue($object, $field) {
+        $fields = $this->fields();
+        if (isset($fields[$field]['format']) && $fields[$field]['format'] === 'datetime') {
+            return self::datetime($object->get($this->column($field)));
+        }
+        return $object->get($this->column($field));
     }
 
     /** Rows of one relation as the API shows them. */
@@ -207,6 +272,8 @@ abstract class Kind {
         foreach ($this->fields() as $name => $definition) {
             $field = array('name' => $name, 'type' => $definition['type']);
             if (isset($definition['description'])) { $field['description'] = $definition['description']; }
+            if (!empty($definition['derived'])) { $definition['read_only'] = true; }
+            if (isset($definition['format'])) { $field['format'] = $definition['format']; }
             foreach (array('list', 'code', 'read_only', 'required') as $flag) {
                 if (!empty($definition[$flag])) { $field[$flag] = true; }
             }

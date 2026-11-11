@@ -14,7 +14,8 @@ be undone, and the site is edited by people in the manager at the same time.
 ## Objects and kinds
 
 Everything is addressed as `kind` + `id` (or `name`). The element kinds are `chunk`,
-`snippet`, `template`, `plugin`, `tv` and `category`. The same tools work for every kind:
+`snippet`, `template`, `plugin`, `tv` and `category`; pages are the kind `resource`. The
+same tools work for every kind:
 
 - `modx_list {kind, query?, where?, fields?, limit?, start?}` — paged list; `total` and
   `next_start` tell you whether there is more. Code is never listed.
@@ -26,6 +27,25 @@ plugin is always `content`, and the name is always `name`. For a static element 
 is the file. Snippet and plugin code is PHP **without** an opening `<?php` tag; MODX removes
 the tag if you send one, which shifts line numbers, so read the code back before editing it
 by lines.
+
+## Resources
+
+- `modx_resource_tree {parent?, depth?}` — the page tree; `modx_list {kind: "resource"}`
+  searches title, alias and long title and filters with `where` (`parent`, `template`,
+  `published`, …).
+- A resource's title is `pagetitle`; `name` in a lookup may be its alias, URI or title.
+- Page content is the `content` field and can be edited by lines with `modx_edit_code`.
+- TV values are the `tvs` relation: `modx_get` returns `relations.tvs` as `{name: value}`
+  for the TVs of the page's template; write with
+  `modx_update {kind: "resource", id, relations: {tvs: {name: value}}}` — only the named
+  TVs change.
+- `pub_date` and `unpub_date` are `"YYYY-MM-DD HH:MM:SS"` strings, `""` for none.
+- `modx_delete` moves a resource **and its children** to the trash; `modx_undo` brings the
+  whole branch back.
+- `modx_bulk_resources {operation, ids}` changes several resources as one changeset:
+  `publish`, `unpublish`, `set_template`, `move`, `reorder`, `delete`, `undelete`.
+- New pages are created with the site's defaults; pass `published: false` to keep a page
+  hidden until it is ready.
 
 ## Changing things
 

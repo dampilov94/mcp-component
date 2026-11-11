@@ -25,6 +25,13 @@ class FakeObject {
         }
     }
     public function getSourceFile() { return !empty($this->fields['static']) ? (string) $this->fields['static_file'] : false; }
+    public function setTVValue($tvId, $value) {
+        $this->modx->removeCollection('modTemplateVarResource', array('tmplvarid' => $tvId, 'contentid' => $this->fields['id']));
+        $this->modx->store('modTemplateVarResource', array(
+            'id' => $this->modx->nextId('modTemplateVarResource'), 'tmplvarid' => $tvId, 'contentid' => $this->fields['id'], 'value' => $value,
+        ));
+        return true;
+    }
     public function save() {
         $code = modX::codeColumn($this->class);
         $stored = isset($this->fields['id']) ? $this->modx->row($this->class, $this->fields['id']) : null;
@@ -48,11 +55,16 @@ class FakeObject {
 }
 
 class FakeQuery {
-    public $class; public $criteria; public $limit = 0; public $offset = 0; public $sort = array(); public $stmt;
+    public $class; public $criteria; public $limit = 0; public $offset = 0; public $sort = array(); public $stmt; public $groups = array();
     public function __construct($class, $criteria) { $this->class = $class; $this->criteria = (array) $criteria; $this->stmt = new FakeStatement(); }
     public function sortby($column, $direction = 'ASC') { $this->sort[] = array($column, $direction); return $this; }
     public function limit($limit, $offset = 0) { $this->limit = $limit; $this->offset = $offset; return $this; }
-    public function where($criteria) { $this->criteria = (array) $criteria + $this->criteria; return $this; }
+    public function where($criteria) {
+        // A list holding one array is an OR group: [['a:LIKE' => x, 'OR:b:LIKE' => x]].
+        if (isset($criteria[0]) && is_array($criteria[0])) { $this->groups[] = $criteria[0]; return $this; }
+        $this->criteria = (array) $criteria + $this->criteria;
+        return $this;
+    }
     public function __call($name, $arguments) { return $this; }
     public function prepare() { return true; }
 }
@@ -82,7 +94,77 @@ class xPDO {
     public function lastInsertId() { return $this->pdo->lastInsertId(); }
 }
 
+/** Stand-in for the core resource processors, with the behaviours that matter to callers. */
+trait FakeResourceProcessors {
+    private function descendantIds($id) {
+        $out = array();
+        foreach ($this->getCollection('modResource', array('parent' => $id)) as $child) {
+            $out[] = $child->get('id');
+            $out = array_merge($out, $this->descendantIds($child->get('id')));
+        }
+        return $out;
+    }
+    private function fixFolder($id) {
+        $parent = $id ? $this->getObject('modResource', array('id' => $id)) : null;
+        if ($parent) { $parent->set('isfolder', $this->getCount('modResource', array('parent' => $id)) > 0 ? 1 : 0); $parent->save(); }
+    }
+    public function resourceProcessor($action, array $data, $path) {
+        if ($action === 'delete' || $action === 'undelete') {
+            $resource = $this->getObject('modResource', array('id' => $data['id']));
+            if (!$resource) { return new FakeResponse('Resource not found.'); }
+            foreach (array_merge(array($data['id']), $this->descendantIds($data['id'])) as $id) {
+                $item = $this->getObject('modResource', array('id' => $id));
+                $item->set('deleted', $action === 'delete' ? 1 : 0);
+                $item->set('deletedon', $action === 'delete' ? 1700000000 : 0);
+                $item->save();
+            }
+            return new FakeResponse(null, array('id' => $data['id']));
+        }
+        if (!isset($data['pagetitle']) || $data['pagetitle'] === '') { return new FakeResponse('Please specify a title.'); }
+        $syncsite = !empty($data['syncsite']);
+        unset($data['syncsite'], $data['clearCache']);
+        if ($action === 'create') {
+            $resource = $this->newObject('modResource');
+            $data += array(
+                'longtitle' => '', 'description' => '', 'introtext' => '', 'menutitle' => '', 'alias' => strtolower(str_replace(' ', '-', $data['pagetitle'])),
+                'uri_override' => 0, 'parent' => 0, 'context_key' => 'web', 'template' => 0, 'content' => '', 'published' => 0, 'deleted' => 0,
+                'deletedon' => 0, 'hidemenu' => 0, 'isfolder' => 0, 'menuindex' => 0, 'richtext' => 1, 'searchable' => 1, 'cacheable' => 1,
+                'class_key' => 'modDocument', 'content_type' => 1, 'link_attributes' => '', 'pub_date' => 0, 'unpub_date' => 0,
+                'publishedon' => 0, 'createdon' => 1700000000, 'properties' => null,
+            );
+            $oldParent = 0;
+        } else {
+            $resource = $this->getObject('modResource', array('id' => $data['id']));
+            if (!$resource) { return new FakeResponse('Resource not found.'); }
+            if (!isset($data['class_key'])) { return new FakeResponse('class_key is required.'); }
+            // Like modResourceUpdateProcessor::handleCheckBoxes(): an absent checkbox means "off".
+            foreach (array('hidemenu', 'isfolder', 'richtext', 'published', 'cacheable', 'searchable', 'deleted', 'uri_override') as $box) {
+                $data[$box] = empty($data[$box]) ? 0 : 1;
+            }
+            $oldParent = (int) $resource->get('parent');
+        }
+        // Like setPublishDate(): a value strtotime() cannot read, or a past one, publishes at once.
+        foreach (array('pub_date', 'unpub_date') as $date) {
+            if (!array_key_exists($date, $data)) { continue; }
+            if (empty($data[$date])) { $data[$date] = 0; continue; }
+            $time = strtotime($data[$date]);
+            if ($date === 'pub_date' && $time <= time()) { $data['published'] = 1; $time = 0; }
+            $data[$date] = (int) $time;
+        }
+        $data['editedon'] = ((int) $resource->get('editedon')) + 1;   // changes on every save
+        if (empty($data['uri_override'])) { $data['uri'] = isset($data['alias']) ? $data['alias'] : $resource->get('alias'); }
+        $resource->fromArray($data, '', false, true);
+        $resource->save();
+        $this->fixFolder((int) $resource->get('parent'));
+        if ($oldParent !== (int) $resource->get('parent')) { $this->fixFolder($oldParent); }
+        if ($syncsite) { $this->getCacheManager()->refresh(); }
+        if ($this->failProcessor === $path) { throw new RuntimeException('Simulated failure after save.'); }
+        return new FakeResponse(null, array('id' => $resource->get('id')));
+    }
+}
+
 class modX extends xPDO {
+    use FakeResourceProcessors;
     const LOG_LEVEL_ERROR = 1;
     public $user;
     public $events = array();
@@ -91,6 +173,7 @@ class modX extends xPDO {
         array('modPlugin', 'modPluginEvent', 'pluginid', array()),
         array('modTemplateVar', 'modTemplateVarTemplate', 'tmplvarid', array()),
         array('modTemplateVar', 'modTemplateVarResource', 'tmplvarid', array()),
+        array('modResource', 'modTemplateVarResource', 'contentid', array()),
     );
     private static $processors = array(
         'element/chunk/' => array('modChunk', 'name'), 'element/snippet/' => array('modSnippet', 'name'),
@@ -139,10 +222,21 @@ class modX extends xPDO {
         }
         $this->persist();
     }
+    private static function likes($row, $key, $value) {
+        return stripos((string) $row[substr($key, 0, -5)], trim($value, '%')) !== false;
+    }
     private function match($class, $criteria) {
+        $groups = $criteria instanceof FakeQuery ? $criteria->groups : array();
         $criteria = $criteria instanceof FakeQuery ? $criteria->criteria : (array) $criteria;
         $out = array();
         foreach (isset($this->tables[$class]) ? $this->tables[$class] : array() as $row) {
+            foreach ($groups as $group) {
+                $any = false;
+                foreach ($group as $key => $value) {
+                    if (self::likes($row, preg_replace('/^OR:/', '', $key), $value)) { $any = true; }
+                }
+                if (!$any) { continue 2; }
+            }
             foreach ($criteria as $key => $value) {
                 if (substr($key, -5) === ':LIKE') {
                     if (stripos((string) $row[substr($key, 0, -5)], trim($value, '%')) === false) { continue 2; }
@@ -188,6 +282,7 @@ class modX extends xPDO {
     public function runProcessor($path, array $data = array()) {
         $action = basename($path);
         $base = substr($path, 0, -strlen($action));
+        if ($base === 'resource/') { return $this->resourceProcessor($action, $data, $path); }
         if (!isset(self::$processors[$base])) { return null; }
         list($class, $nameColumn) = self::$processors[$base];
         unset($data['clearCache']);

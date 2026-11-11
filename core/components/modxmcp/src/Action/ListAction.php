@@ -19,7 +19,7 @@ final class ListAction extends Action {
     public function inputSchema() {
         return Schema::obj(array(
             'kind'   => Schema::str('Object kind; see modx_describe.', array('pattern' => '^[a-z][a-z0-9_]{0,63}$')),
-            'query'  => Schema::str('Substring of the name.', array('maxLength' => 200)),
+            'query'  => Schema::str('Substring to search for in the name (for resources also alias and long title).', array('maxLength' => 200)),
             'where'  => Schema::obj(array(), array(), true) + array('description' => 'Exact matches, e.g. {"category": 3}.'),
             'fields' => Schema::arr(Schema::str(), 'Fields to return.', array('maxItems' => 40)),
             'limit'  => Schema::int('Page size, default 50.', array('minimum' => 1, 'maximum' => 200)),
@@ -55,8 +55,11 @@ final class ListAction extends Action {
         }
 
         $criteria = array();
+        $search = array();
         if (isset($args['query']) && $args['query'] !== '') {
-            $criteria[$kind->column($kind->nameField()) . ':LIKE'] = '%' . $args['query'] . '%';
+            foreach ($kind->searchColumns() as $index => $column) {
+                $search[($index ? 'OR:' : '') . $column . ':LIKE'] = '%' . $args['query'] . '%';
+            }
         }
         foreach (isset($args['where']) ? $args['where'] : array() as $name => $value) {
             if (!isset($definitions[$name]) || !empty($definitions[$name]['code'])) {
@@ -68,10 +71,11 @@ final class ListAction extends Action {
 
         $limit = isset($args['limit']) ? $args['limit'] : 50;
         $start = isset($args['start']) ? $args['start'] : 0;
-        $total = (int) $modx->getCount($kind->modelClass(), $criteria);
-        $query = $modx->newQuery($kind->modelClass(), $criteria);
-        $query->sortby($kind->column($kind->nameField()), 'ASC');
-        $query->sortby('id', 'ASC');
+        $query = $modx->newQuery($kind->modelClass());
+        if ($criteria) { $query->where($criteria); }
+        if ($search) { $query->where(array($search)); }
+        $total = (int) $modx->getCount($kind->modelClass(), $query);
+        foreach ($kind->defaultSort() as $sort) { $query->sortby($sort[0], $sort[1]); }
         $query->limit($limit, $start);
 
         $items = array();

@@ -15,7 +15,7 @@ final class EditCodeAction extends WriteAction {
     public function group() { return 'code'; }
 
     public function description() {
-        return 'Edit code of a chunk, snippet, template or plugin by line ranges, so only changed lines travel. '
+        return 'Edit code of a chunk, snippet, template or plugin, or the content of a resource, by line ranges, so only changed lines travel. '
             . 'Line numbers are 1-based, inclusive, and are those of the code before this call (see modx_view_code); '
             . 'pass its revision as expected_revision. To insert, set end_line = start_line - 1; to append at the end, '
             . 'start_line = total_lines + 1. `expect` (current text of the lines being replaced) guards against stale '

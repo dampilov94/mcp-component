@@ -49,7 +49,7 @@ final class Objects {
             if (!isset($fields[$name])) {
                 throw new ApiException('validation_failed', "Unknown field '{$name}' for {$kind->name()}. See modx_describe.");
             }
-            if (!empty($fields[$name]['read_only'])) {
+            if (!empty($fields[$name]['read_only']) || !empty($fields[$name]['derived'])) {
                 throw new ApiException('validation_failed', "Field '{$name}' is read-only.");
             }
             $type = $fields[$name]['type'];
@@ -116,8 +116,11 @@ final class Objects {
      */
     public static function save(Context $context, Transaction $tx, Kind $kind, $id, array $columns, array $relations) {
         $modx = $context->modx;
+        foreach ($kind->alsoAffected($modx, $id, $columns, $id === null ? 'create' : 'update') as $other) {
+            $tx->touch($kind, $other);
+        }
         if ($id === null) {
-            $created = self::process($modx, $kind->processorPath() . 'create', $columns + array('clearCache' => 1));
+            $created = self::process($modx, $kind->processorPath() . 'create', $columns + $kind->processorExtras('create'));
             if (empty($created['id'])) { throw new \RuntimeException('The create processor did not return an id.'); }
             $id = (int) $created['id'];
             $tx->created($kind, $id);
@@ -126,9 +129,9 @@ final class Objects {
             // The update processors expect the complete record; omitted fields would be reset.
             $data = array('id' => $id);
             foreach ($kind->fields() as $name => $definition) {
-                $data[$kind->column($name)] = $object->get($kind->column($name));
+                if (empty($definition['derived'])) { $data[$kind->column($name)] = $kind->processorValue($object, $name); }
             }
-            self::process($modx, $kind->processorPath() . 'update', $columns + $data);
+            self::process($modx, $kind->processorPath() . 'update', $columns + $data + $kind->processorExtras('update'));
         }
 
         $field = $kind->codeField();
@@ -143,6 +146,10 @@ final class Objects {
                 $context->warnings[] = "MODX stored the {$field} of {$kind->name()} {$id} differently from what was sent "
                     . '(for PHP it removes an opening <?php tag). Read the code again before editing it by line numbers.';
             }
+        }
+        $saved = $kind->find($modx, array('id' => $id));
+        if ($saved) {
+            foreach ($kind->writeWarnings($saved) as $warning) { $context->warnings[] = $warning; }
         }
         if ($relations) {
             $object = $kind->find($modx, array('id' => $id));
@@ -163,7 +170,10 @@ final class Objects {
             if (empty($specs[$name]['writable'])) {
                 throw new ApiException('validation_failed', "Relation '{$name}' of {$kind->name()} cannot be changed through the API.");
             }
-            if (!is_array($value) || ($value && array_keys($value) !== range(0, count($value) - 1))) {
+            $isList = is_array($value) && (!$value || array_keys($value) === range(0, count($value) - 1));
+            if (!empty($specs[$name]['map'])) {
+                if (!is_array($value) || ($value && $isList)) { throw new ApiException('validation_failed', "Relation '{$name}' must be an object of name => value."); }
+            } elseif (!$isList) {
                 throw new ApiException('validation_failed', "Relation '{$name}' must be a list.");
             }
         }

@@ -13,7 +13,7 @@ final class Snapshot {
     public static function capture(\modX $modx, Kind $kind, $key) {
         $object = $kind->find($modx, array('id' => (int) $key));
         if (!$object) { return null; }
-        $fields = self::row($object);
+        $fields = $kind->stateColumns(self::row($object));
         $state = array('kind' => $kind->name(), 'key' => (string) (int) $key);
         if ($kind->codeField() !== null) {
             // The file is the truth for a static element; a stale database copy must not

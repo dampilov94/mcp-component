@@ -51,6 +51,19 @@ Stage 2 — writes and the change journal (element kinds):
 - Not yet in this stage: recording manager edits through a plugin, the manager lock check,
   `modx_duplicate`, `modx_invoke` (including `make_static` and auto-static), journal retention.
 
+Stage 3 — resources:
+
+- Kind `resource`, writable with the `content` scope: fields, `content` as line-editable code,
+  TV values as the `tvs` relation ({name: value}, defaults shown when nothing is stored),
+  publish dates as date strings. Lookup by id, alias, URI or title.
+- MODX cascades are journaled with the main object: a delete moves the resource and its
+  descendants to the trash in one changeset; parents whose container flag changes are included.
+  `editedon` and generated URIs are not part of a revision.
+- `modx_resource_tree` (bounded tree) and `modx_bulk_resources` (publish, unpublish,
+  set_template, move, reorder, delete, undelete — all or nothing, one changeset).
+- Resources of extended classes (e.g. msProduct) are writable with a warning: data kept outside
+  the resource table is not journaled.
+
 - Offline tests (`npm test`): pure PHP logic, the real kernel behind PHP's built-in server with
   stubbed MODX classes, and the Node bridge end to end. CI runs them.
 

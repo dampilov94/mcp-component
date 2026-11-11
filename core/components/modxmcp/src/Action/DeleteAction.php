@@ -15,7 +15,8 @@ final class DeleteAction extends WriteAction {
 
     public function description() {
         return 'Delete one object. Run with dry_run first to see what would be removed. The object and its '
-            . 'related rows are kept in the journal, so modx_undo restores it with the same id.';
+            . 'related rows are kept in the journal, so modx_undo restores it with the same id. A resource goes '
+            . 'to the MODX trash together with its child resources.';
     }
 
     public function inputSchema() {
@@ -49,7 +50,8 @@ final class DeleteAction extends WriteAction {
                     'reversible' => true,
                 ));
             }
-            Objects::process($context->modx, $kind->processorPath() . 'remove', array('id' => $id));
+            foreach ($kind->alsoAffected($context->modx, $id, array(), 'delete') as $other) { $tx->touch($kind, $other); }
+            Objects::process($context->modx, $kind->processorPath() . $kind->deleteProcessor(), array('id' => $id));
             return array('result' => array(), 'summary' => "delete {$kind->name()} {$id} ({$label})");
         });
         if ($dry) { return $this->plan($context, $result); }

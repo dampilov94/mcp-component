@@ -13,6 +13,7 @@ final class KindRegistry {
         PluginKind::class,
         TvKind::class,
         CategoryKind::class,
+        ResourceKind::class,
     );
 
     private $kinds = null;

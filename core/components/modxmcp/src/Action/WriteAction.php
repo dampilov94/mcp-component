@@ -14,10 +14,10 @@ abstract class WriteAction extends Action {
         return false;
     }
 
-    // Element kinds need "develop". Lower this when a kind writable with "content" exists;
-    // the per-kind scope is checked again when the action runs.
+    // The lowest scope that can write anything (resources). Each kind's own write scope is
+    // checked when the action runs, so a "content" token still cannot change elements.
     public function scope() {
-        return Scope::DEVELOP;
+        return Scope::CONTENT;
     }
 
     public function group() {
