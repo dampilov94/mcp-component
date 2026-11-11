@@ -202,6 +202,43 @@ final class Journal {
         return (int) $this->run('SELECT MAX(`id`) FROM ' . $this->t('changesets'))->fetchColumn();
     }
 
+    /** Changesets strictly before the cut-off, oldest first, with stable ordering for ties. */
+    public function oldestChangesetIds($olderThan, $limit) {
+        return array_map('intval', $this->run(
+            'SELECT `id` FROM ' . $this->t('changesets') . ' WHERE `created_at` < ?'
+            . ' ORDER BY `created_at` ASC, `id` ASC LIMIT ' . max(1, min(500, (int) $limit)),
+            array((int) $olderThan)
+        )->fetchAll(\PDO::FETCH_COLUMN));
+    }
+
+    /** Delete journal rows; an optional cut-off keeps retention's supplied clock consistent. */
+    public function deleteChangesets(array $ids, $olderThan = null) {
+        if (!$ids) { return 0; }
+        $in = implode(',', array_map('intval', $ids));
+        $this->run('DELETE FROM ' . $this->t('changes') . ' WHERE `changeset_id` IN (' . $in . ')');
+        $count = $this->run('DELETE FROM ' . $this->t('changesets') . ' WHERE `id` IN (' . $in . ')')->rowCount();
+        if ($olderThan === null) {
+            $days = max(0, (int) $this->modx->getOption('modxmcp.history_retention_days', null, 30));
+            $olderThan = $days > 0 ? time() - $days * 86400 : 0;
+        }
+        if ($olderThan > 0) {
+            $first = $this->run('SELECT MIN(`id`) FROM ' . $this->t('changesets'))->fetchColumn();
+            // With no changesets left, no checkpoint can anchor retained history.
+            $this->run('DELETE FROM ' . $this->t('checkpoints') . ' WHERE `created_at` < ?'
+                . ($first === null ? '' : ' AND `last_changeset_id` < ' . (int) $first), array((int) $olderThan));
+        }
+        return (int) $count;
+    }
+
+    /** Set of snapshot hashes still referenced by any change, including delete-only data. */
+    public function referencedBlobs() {
+        $selects = array();
+        foreach (array('before_revision', 'after_revision', 'extra_blob') as $column) {
+            $selects[] = 'SELECT `' . $column . '` FROM ' . $this->t('changes') . ' WHERE `' . $column . '` IS NOT NULL';
+        }
+        return array_fill_keys($this->run(implode(' UNION ', $selects))->fetchAll(\PDO::FETCH_COLUMN), true);
+    }
+
     public function addCheckpoint($label, $tokenId, $sessionId) {
         $last = $this->lastChangesetId();
         $this->run(

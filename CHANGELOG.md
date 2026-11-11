@@ -85,6 +85,11 @@ After stage 3:
   the normal create path (journaled, undoable). A resource copy is unpublished, unscheduled,
   not a container and without children; a copy of a static element is not static.
 
+- Journal retention: changesets older than `modxmcp.history_retention_days` (30) are removed,
+  and the oldest go first when referenced snapshots exceed `modxmcp.history_max_bytes` (200 MB);
+  the newest changeset always stays. Unreferenced snapshots are collected after a one-hour
+  grace period. Runs at most hourly after a write and can never fail the write.
+
 - Offline tests (`npm test`): pure PHP logic, the real kernel behind PHP's built-in server with
   stubbed MODX classes, and the Node bridge end to end. CI runs them.
 

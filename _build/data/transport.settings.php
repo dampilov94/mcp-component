@@ -22,6 +22,8 @@ $defs = array(
     array('modxmcp.disabled_groups', 'virtualpage,minishop2,migx,access,property_sets,contexts,package_management,namespaces,lexicon', 'textfield', 'modxmcp:main'),
     array('modxmcp.lint_php', 1, 'combo-boolean', 'modxmcp:main'),
     array('modxmcp.history_max_blob_bytes', 5242880, 'textfield', 'modxmcp:limits'),
+    array('modxmcp.history_retention_days', 30, 'textfield', 'modxmcp:limits'),
+    array('modxmcp.history_max_bytes', 209715200, 'textfield', 'modxmcp:limits'),
     array('modxmcp.allow_run_processor', 0, 'combo-boolean', 'modxmcp:security'),
     array('modxmcp.max_payload_bytes', 1048576, 'textfield', 'modxmcp:limits'),
     array('modxmcp.max_response_bytes', 4194304, 'textfield', 'modxmcp:limits'),
