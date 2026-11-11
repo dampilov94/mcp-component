@@ -139,6 +139,9 @@ final class Objects {
             $content = $kind->effectiveContent($object);
             if ($content[1] && $content[2] !== null && $content[0] !== $columns[$kind->column($field)]) {
                 Snapshot::writeFile($content[2], $columns[$kind->column($field)]);
+            } elseif (!$content[1] && $content[0] !== $columns[$kind->column($field)]) {
+                $context->warnings[] = "MODX stored the {$field} of {$kind->name()} {$id} differently from what was sent "
+                    . '(for PHP it removes an opening <?php tag). Read the code again before editing it by line numbers.';
             }
         }
         if ($relations) {

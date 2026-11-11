@@ -8,9 +8,10 @@ use ModxMCP\Manifest;
 
 /** Protocol action: the tool list and contracts for the calling token. Not a tool itself. */
 final class ManifestAction extends Action {
-    const INSTRUCTIONS = 'Tools for one MODX Revolution site. Start with modx_site_info for an overview and '
-        . 'modx_capabilities to see what this token may do. Objects are addressed by kind; '
-        . 'modx_describe returns the fields of a kind. modx_help serves the built-in guide.';
+    const INSTRUCTIONS = 'Tools for one live MODX Revolution site. modx_site_info gives the overview; '
+        . 'modx_capabilities explains what this token may do when something is unavailable. Objects are addressed '
+        . 'by kind; modx_describe returns the fields of a kind. Every change is journaled and can be reverted with '
+        . 'modx_undo. modx_help {topic: "getting_started"} is the working guide.';
 
     public function name() { return 'manifest'; }
 

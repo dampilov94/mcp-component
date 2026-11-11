@@ -16,16 +16,18 @@ final class EditCodeAction extends WriteAction {
 
     public function description() {
         return 'Edit code of a chunk, snippet, template or plugin by line ranges, so only changed lines travel. '
-            . 'Lines are 1-based, inclusive, and refer to the code as last read. `expect` (the current text of '
-            . 'the lines) guards against stale line numbers. PHP must still parse afterwards.';
+            . 'Line numbers are 1-based, inclusive, and are those of the code before this call (see modx_view_code); '
+            . 'pass its revision as expected_revision. To insert, set end_line = start_line - 1; to append at the end, '
+            . 'start_line = total_lines + 1. `expect` (current text of the lines being replaced) guards against stale '
+            . 'line numbers. PHP must still parse afterwards.';
     }
 
     public function inputSchema() {
         $edit = Schema::obj(array(
             'start_line'  => Schema::int(null, array('minimum' => 1)),
-            'end_line'    => Schema::int('Last line to replace; default start_line. start_line - 1 inserts before start_line.', array('minimum' => 0)),
+            'end_line'    => Schema::int('Last line to replace; default start_line. Use start_line - 1 to insert before start_line without replacing anything.', array('minimum' => 0)),
             'replacement' => Schema::str('New text for the range; empty deletes the lines.'),
-            'expect'      => Schema::str('Current text of the lines being replaced.'),
+            'expect'      => Schema::str('Current text of the lines being replaced; not used for an insert.'),
         ), array('start_line'));
         return Schema::obj(array(
             'kind'      => Schema::str(null, array('pattern' => '^[a-z][a-z0-9_]{0,63}$')),

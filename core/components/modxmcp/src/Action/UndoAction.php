@@ -17,16 +17,19 @@ final class UndoAction extends WriteAction {
 
     public function description() {
         return 'Revert changes recorded in the journal: one changeset, the last N, everything from this session, '
-            . 'or everything after a checkpoint. Without confirm:true it only returns the plan. An object changed '
-            . 'since (e.g. by a person in the manager) is a conflict and stops the undo unless force:true. '
-            . 'The undo is itself a changeset, so undoing it re-applies the changes.';
+            . 'or everything after a checkpoint. Without confirm:true it only returns the plan. Per object the plan '
+            . 'says: restore (back to its earlier state), recreate (a deleted object returns with its id) or remove '
+            . '(an object that was created is removed). An object changed since (e.g. by a person in the manager) is a '
+            . 'conflict and stops the undo unless force:true. Selecting by last / this_session / to_checkpoint skips '
+            . 'changesets already undone and undos themselves. The undo is itself a changeset; to re-apply, undo it '
+            . 'by its changeset_id. To get rid of objects created in this session, undo is the cleanest way.';
     }
 
     public function inputSchema() {
         return Schema::obj(array(
             'changeset_id'  => Schema::int('Undo this changeset.', array('minimum' => 1)),
             'last'          => Schema::int('Undo the last N changesets made through MCP.', array('minimum' => 1, 'maximum' => 100)),
-            'this_session'  => Schema::bool('Undo everything this client session changed.'),
+            'this_session'  => Schema::bool('Undo everything changed since this MCP client was started.'),
             'to_checkpoint' => Schema::int('Undo everything done through MCP after this checkpoint.', array('minimum' => 1)),
             'confirm'       => Schema::bool('Actually perform the undo. Without it the plan is returned.'),
             'force'         => Schema::bool('Undo even over later changes. Their current state is journaled first.'),

@@ -16,8 +16,8 @@ final class HistoryDiffAction extends Action {
     public function group() { return 'history'; }
 
     public function description() {
-        return 'What one changeset changed: per object the operation, the changed fields with old and new values, '
-            . 'and a line diff for code.';
+        return 'What one changeset changed: per object the operation and the changed fields. A field shows '
+            . '{old, new}; code shows {diff} with removed (-) and added (+) lines instead.';
     }
 
     public function inputSchema() {
@@ -79,7 +79,7 @@ final class HistoryDiffAction extends Action {
             $objects[] = $item;
         }
         return array(
-            'changeset_id' => $changeset['id'], 'at' => $changeset['created_at'], 'source' => $changeset['source'],
+            'changeset_id' => $changeset['id'], 'at' => $changeset['created_at'], 'time' => date('c', $changeset['created_at']), 'source' => $changeset['source'],
             'tool' => $changeset['tool'], 'summary' => $changeset['summary'], 'status' => $changeset['status'],
             'objects' => $objects,
         );

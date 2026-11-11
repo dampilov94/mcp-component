@@ -16,7 +16,7 @@ final class HistoryAction extends Action {
 
     public function inputSchema() {
         return Schema::obj(array(
-            'this_session' => Schema::bool('Only changes made in the current client session.'),
+            'this_session' => Schema::bool('Only changes made since this MCP client was started.'),
             'source'       => array('type' => 'string', 'enum' => array('mcp', 'manager', 'external'), 'description' => 'Who made the change.'),
             'kind'         => Schema::str('Only changesets touching this kind.', array('pattern' => '^[a-z][a-z0-9_]{0,63}$')),
             'id'           => Schema::int('With kind: only this object.', array('minimum' => 1)),
@@ -49,6 +49,7 @@ final class HistoryAction extends Action {
             $out[] = array(
                 'changeset_id' => $changeset['id'],
                 'at'           => $changeset['created_at'],
+                'time'         => date('c', $changeset['created_at']),
                 'source'       => $changeset['source'],
                 'tool'         => $changeset['tool'],
                 'summary'      => $changeset['summary'],

@@ -78,6 +78,18 @@ final class Snapshot {
      * Either state may be null (object absent).
      */
     public static function changed(Kind $kind, $before, $after) {
+        if ($before === null && $after !== null) {
+            // A new object: name what it was created with, not every column default.
+            $created = array();
+            foreach ($kind->fields() as $name => $definition) {
+                $value = isset($after['fields'][$kind->column($name)]) ? $after['fields'][$kind->column($name)] : null;
+                if (empty($definition['read_only']) && $value !== null && $value !== '' && $value !== '0') { $created[] = $name; }
+            }
+            foreach ($after['relations'] as $name => $rows) {
+                if ($rows) { $created[] = $name; }
+            }
+            return $created;
+        }
         $changed = array();
         $a = $before === null ? array() : $before['fields'];
         $b = $after === null ? array() : $after['fields'];

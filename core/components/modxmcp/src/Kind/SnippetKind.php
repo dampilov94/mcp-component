@@ -17,7 +17,9 @@ final class SnippetKind extends Kind {
     }
 
     public function fields() {
-        return $this->elementFields('snippet') + array(
+        $fields = $this->elementFields('snippet');
+        $fields['content']['description'] = 'PHP source without an opening <?php tag (MODX removes it). For static elements this is the file content.';
+        return $fields + array(
             'property_preprocess' => array('type' => 'boolean', 'description' => 'Parse tags in property values before use.'),
         );
     }

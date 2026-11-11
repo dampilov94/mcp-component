@@ -21,8 +21,11 @@ Everything is addressed as `kind` + `id` (or `name`). The element kinds are `chu
 - `modx_get {kind, id|name, fields?, full?}` — fields, relations and `revision`.
 - `modx_view_code {kind, id|name, start_line?, end_line?}` — code as numbered lines.
 
-Field names are the same across kinds: the code of a chunk, snippet, template or plugin is
-always `content`, and the name is always `name`. For a static element `content` is the file.
+Field names are the same across element kinds: the code of a chunk, snippet, template or
+plugin is always `content`, and the name is always `name`. For a static element `content`
+is the file. Snippet and plugin code is PHP **without** an opening `<?php` tag; MODX removes
+the tag if you send one, which shifts line numbers, so read the code back before editing it
+by lines.
 
 ## Changing things
 
@@ -31,7 +34,11 @@ always `content`, and the name is always `name`. For a static element `content` 
   fields change.
 - `modx_edit_code {kind, id|name, edits, expected_revision?}` — line edits; prefer this
   for a change inside long code. Give `expect` (the current text of the lines) so stale
-  line numbers cannot corrupt the code.
+  line numbers cannot corrupt the code. Examples, for code with 10 lines:
+  replace lines 3–4: `{start_line: 3, end_line: 4, replacement: "…"}`;
+  delete line 5: `{start_line: 5, replacement: ""}`;
+  insert before line 2: `{start_line: 2, end_line: 1, replacement: "…"}`;
+  append at the end: `{start_line: 11, end_line: 10, replacement: "…"}`.
 - `modx_delete {kind, id|name, expected_revision?}`
 
 Rules that keep a live site safe:
@@ -57,6 +64,16 @@ Rules that keep a live site safe:
 - `modx_undo` with one of `changeset_id`, `last`, `this_session`, `to_checkpoint`.
   Without `confirm: true` it returns the plan. A deleted object comes back with the same
   id and its related rows.
+
+The plan names an action per object: `restore` (back to its earlier state), `recreate` (a
+deleted object returns) or `remove` (an object that was created is removed). Selecting by
+`last`, `this_session` or `to_checkpoint` skips changesets that are already undone and undos
+themselves; to re-apply an undo, undo it by its `changeset_id`. "This session" means since
+the MCP client was started. To clean up objects you created, undoing the session is simpler
+than deleting them one by one.
+
+If PHP code is refused with `lint_failed`, fix the code. `skip_lint: true` exists for
+deliberately incomplete code and should not be used to get past an error on a live site.
 
 If an object was changed after the changeset you are undoing, the plan marks it as a
 conflict and the undo stops. Look at the later change before deciding; `force: true`

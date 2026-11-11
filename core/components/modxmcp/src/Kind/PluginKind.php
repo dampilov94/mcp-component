@@ -19,7 +19,9 @@ final class PluginKind extends Kind {
     }
 
     public function fields() {
-        return $this->elementFields('plugincode') + array(
+        $fields = $this->elementFields('plugincode');
+        $fields['content']['description'] = 'PHP source without an opening <?php tag (MODX removes it). For static elements this is the file content.';
+        return $fields + array(
             'disabled'            => array('type' => 'boolean', 'list' => true, 'description' => 'A disabled plugin does not run.'),
             'property_preprocess' => array('type' => 'boolean', 'description' => 'Parse tags in property values before use.'),
         );
