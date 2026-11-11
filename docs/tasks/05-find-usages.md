@@ -20,7 +20,7 @@ Answer "where is this used?" for one object before it is renamed or deleted:
 
    | Target | Patterns searched in code (each hit carries `via`) |
    |---|---|
-   | `chunk` | `[[$N` and `[[!$N` (`via: tag`); `getChunk('N'` / `getChunk("N"` (`api`); a backtick property value that is exactly N or `@CHUNK N`… no — only exactly N: `` `N` `` (`property`); Fenom `{include 'N'` / `{include "N"` and `'N' | chunk` (`fenom`) |
+   | `chunk` | `[[$N` and `[[!$N` (`via: tag`); `getChunk('N'` / `getChunk("N"` (`api`); a backtick property value that is exactly N: `` `N` `` (`property`); Fenom `{include 'N'` / `{include "N"` and `'N' | chunk` (`fenom`) |
    | `snippet` | `[[N` and `[[!N` (`tag`); `runSnippet('N'` / `runSnippet("N"` (`api`); `` `N` `` (`property`); `'N' | snippet` (`fenom`) |
    | `tv` | `[[*N` and `[[!*N` (`tag`); `getTVValue('N'` / `getTVValue("N"` (`api`); `resource.N` (`fenom`); N as a whole word inside a backtick value of a property named `includeTVs`, `processTVs` or `tvFilters` (`property`) |
    | `resource` | `[[~ID` and `[[!~ID` (`tag`); `makeUrl(ID` (`api`); `ID | url` (`fenom`) — ID must not be followed by a digit |
