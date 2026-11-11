@@ -11,15 +11,17 @@ final class DuplicateAction extends WriteAction {
     public function name() { return 'duplicate'; }
 
     public function description() {
-        return 'Copy one object including its writable relations. A resource copy is unpublished and has no children; '
-            . 'a static element copy is not static.';
+        return 'Copy one object including its writable relations; the copy is named new_name or "<name> copy". '
+            . 'A resource copy is unpublished, unscheduled and has no children; a static element copy is not static. '
+            . 'Reversible with modx_undo.';
     }
 
     public function inputSchema() {
         return Schema::obj(array(
             'kind'    => Schema::str('Object kind; see modx_describe.', array('pattern' => '^[a-z][a-z0-9_]{0,63}$')),
             'id'      => Schema::int(null, array('minimum' => 1)),
-            'name'    => Schema::str('Copy name when id is given; otherwise the source name.', array('maxLength' => 255)),
+            'name'    => Schema::str('Name of the source, when its id is not known.', array('maxLength' => 255)),
+            'new_name' => Schema::str('Name of the copy; default "<source name> copy".', array('minLength' => 1, 'maxLength' => 255)),
             'fields'  => Schema::obj(array(), array(), true) + array('description' => 'Overrides for the copied fields.'),
             'dry_run' => Schema::bool('Validate and report without creating anything.'),
         ), array('kind'));
@@ -38,10 +40,9 @@ final class DuplicateAction extends WriteAction {
             }
         }
         $nameField = $kind->nameField();
-        // Without an id, name belongs to the source reference, just as in update.
-        $explicitName = isset($args['id'], $args['name']);
+        $explicitName = isset($args['new_name']);
         $baseName = $values[$nameField] . ' copy';
-        $newName = $explicitName ? $args['name'] : $baseName;
+        $newName = $explicitName ? $args['new_name'] : $baseName;
         if ($kind->uniqueNames() && !$explicitName) {
             for ($number = 2; $number <= 20 && $kind->find($context->modx, array('name' => $newName)); $number++) {
                 $newName = $baseName . ' ' . $number;
@@ -62,7 +63,7 @@ final class DuplicateAction extends WriteAction {
                 $relations[$name] = !empty($spec['map'])
                     ? (array) $kind->storedRelation($context->modx, $source, $name)
                     : $kind->presentRelation($context->modx, $source, $name);
-            } else {
+            } elseif (empty($spec['delete_only'])) {
                 $criteria = array($spec['fk'] => $sourceId) + (isset($spec['where']) ? $spec['where'] : array());
                 if ($context->modx->getCount($spec['class'], $criteria)) { $notCopied[] = $name; }
             }

@@ -495,13 +495,13 @@ check('duplicate: chunk fields, identity and journal', $copy['id'] !== $original
     && $copy['changeset_id'] !== null && $copy['revision'] === $copyGot['revision']);
 $secondCopy = $call($dev, 'duplicate', array('kind' => 'chunk', 'name' => 'duplicate source'));
 check('duplicate: source by name and automatic numbering', $secondCopy['name'] === 'duplicate source copy 2' && $secondCopy['source_id'] === $original['id']);
-$namedCopy = $call($dev, 'duplicate', array('kind' => 'chunk', 'id' => $original['id'], 'name' => 'Named copy'));
+$namedCopy = $call($dev, 'duplicate', array('kind' => 'chunk', 'id' => $original['id'], 'new_name' => 'Named copy'));
 check('duplicate: explicit copy name', $namedCopy['name'] === 'Named copy');
 $e = throws('duplicate: explicit name collision', ApiException::class, function () use ($call, $dev, $original) {
-    $call($dev, 'duplicate', array('kind' => 'chunk', 'id' => $original['id'], 'name' => 'Named copy'));
+    $call($dev, 'duplicate', array('kind' => 'chunk', 'id' => $original['id'], 'new_name' => 'Named copy'));
 });
 check('duplicate: explicit collision is validation_failed', $e && $e->errorCode === 'validation_failed');
-$overridden = $call($dev, 'duplicate', array('kind' => 'chunk', 'id' => $original['id'], 'name' => 'Before override',
+$overridden = $call($dev, 'duplicate', array('kind' => 'chunk', 'id' => $original['id'], 'new_name' => 'Before override',
     'fields' => array('name' => 'After override', 'description' => 'Overridden', 'content' => 'new content')));
 $overriddenGot = $call($dev, 'get', array('kind' => 'chunk', 'id' => $overridden['id']));
 check('duplicate: fields win including the returned name', $overridden['name'] === 'After override'
@@ -563,7 +563,7 @@ check('duplicate: only stored TVs on the template are copied', $resourceGot['rel
 check('duplicate: resource has no children and source is unchanged', $site->getCount('modResource', array('parent' => $resourceCopy['id'])) === 0
     && $call($editor, 'get', array('kind' => 'resource', 'id' => $about['id']))['revision'] === $resourceBefore['revision']
     && $call($editor, 'get', array('kind' => 'resource', 'id' => $team['id']))['revision'] === $childBefore);
-$sameTitle = $call($editor, 'duplicate', array('kind' => 'resource', 'id' => $home['id'], 'name' => 'Home'));
+$sameTitle = $call($editor, 'duplicate', array('kind' => 'resource', 'id' => $home['id'], 'new_name' => 'Home'));
 check('duplicate: resource names need not be unique and empty TV maps stay empty', $sameTitle['name'] === 'Home'
     && $site->getCount('modTemplateVarResource', array('contentid' => $sameTitle['id'])) === 0);
 
@@ -575,6 +575,12 @@ check('duplicate: dry run and plan-only describe the copy without writes', $dryC
     && $dryCopy['kind'] === 'resource' && $dryCopy['source_id'] === $about['id'] && $dryCopy['would_create'] === array('name' => 'About us copy')
     && $dryCopy['relations'] === array('tvs') && $planCopy['planned'] === true && $planCopy['dry_run'] === true
     && $site->getCount('modResource') === $resourceCount && $site->pdo->query('SELECT COUNT(*) FROM modx_modxmcp_changesets')->fetchColumn() === $journalBefore);
+$site->store('modResource', array('pub_date' => (string) (time() + 86400), 'unpub_date' => (string) (time() + 172800)) + $site->row('modResource', $team['id']));
+$scheduledCopy = $call($editor, 'duplicate', array('kind' => 'resource', 'id' => $team['id']));
+$scheduledRow = $site->row('modResource', $scheduledCopy['id']);
+check('duplicate: the copy does not inherit a publish schedule', $scheduledRow['pub_date'] === '0' && $scheduledRow['unpub_date'] === '0' && $scheduledRow['published'] === '0');
+$byName = $call($dev, 'duplicate', array('kind' => 'chunk', 'name' => 'duplicate source', 'new_name' => 'Copy found by name'));
+check('duplicate: source by name, copy by new_name', $byName['name'] === 'Copy found by name' && $byName['source_id'] === $original['id']);
 foreach (array($actor('read'), $editor) as $deniedActor) {
     $e = throws('duplicate: token cannot copy a chunk', ApiException::class, function () use ($call, $deniedActor, $original) {
         $call($deniedActor, 'duplicate', array('kind' => 'chunk', 'id' => $original['id']));

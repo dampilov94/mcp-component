@@ -23,7 +23,8 @@ final class ResourceKind extends Kind {
     public function uniqueNames() { return false; }
 
     public function duplicateOverrides($source) {
-        return array('published' => false, 'alias' => '', 'uri' => '', 'uri_override' => false)
+        // A copied schedule would publish the copy by itself later. Children are not copied, so the copy is not a container either.
+        return array('published' => false, 'isfolder' => false, 'pub_date' => '', 'unpub_date' => '', 'alias' => '', 'uri' => '', 'uri_override' => false)
             + parent::duplicateOverrides($source);
     }
 

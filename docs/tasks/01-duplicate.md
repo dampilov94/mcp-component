@@ -148,3 +148,19 @@ copy retains `pub_date`; the existing resource processor behavior can publish im
 for a past publish date even with `published: false`. Scheduling policy was left unchanged
 because the decided design only resets the listed publication/URL fields. Check this case
 on the stand and decide separately whether copies should clear the publication schedule.
+
+## Review
+
+Accepted and merged. Verified on the stand with `scripts/stand/check-duplicate.cjs`: chunk
+with automatic names, static chunk, plugin with events, resource with a stored TV value, a
+child and a schedule, and undo.
+
+Changes the architect made on the branch before merging:
+
+1. `name` meant two things. The brief was at fault. `name` now only finds the source; the
+   name of the copy is the new argument `new_name`.
+2. A resource copy no longer inherits `pub_date` / `unpub_date` (it would publish itself
+   later) — the open question in the report was right.
+3. A resource copy is not a container: its children are not copied, and on the stand the
+   copy came out with `isfolder` true. Only the stand showed this.
+4. The "Not copied" warning skips delete-only relations (TV values, media source links).
