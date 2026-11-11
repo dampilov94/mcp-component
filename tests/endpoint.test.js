@@ -25,12 +25,11 @@ function freePort() {
 
 async function startSite(env = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "modxmcp-endpoint-"));
-  const db = path.join(dir, "tokens.sqlite");
-  const setup = spawnSync(php, [harness, "setup", db], { encoding: "utf8" });
+  const setup = spawnSync(php, [harness, "setup", dir], { encoding: "utf8" });
   assert.equal(setup.status, 0, setup.stderr);
   const info = JSON.parse(setup.stdout);
   const port = await freePort();
-  const child = spawn(php, ["-S", `127.0.0.1:${port}`, harness], { env: { ...process.env, MODXMCP_TEST_DB: db, ...env }, stdio: "ignore" });
+  const child = spawn(php, ["-S", `127.0.0.1:${port}`, harness], { env: { ...process.env, MODXMCP_TEST_DIR: dir, ...env }, stdio: "ignore" });
   const url = `http://127.0.0.1:${port}/api.php`;
   for (let attempt = 0; ; attempt++) {
     try { await fetch(url); break; } catch (error) {
@@ -111,7 +110,14 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
     assert.equal(response.status, 200);
     const { result, meta } = response.body;
     assert.equal(result.protocol, 2);
-    assert.deepEqual(result.tools.map((item) => item.name), ["modx_capabilities", "modx_site_info", "modx_describe", "modx_help", "modx_request_status"]);
+    assert.deepEqual(result.tools.map((item) => item.name), [
+      "modx_capabilities", "modx_site_info", "modx_describe", "modx_help", "modx_list", "modx_get",
+      "modx_view_code", "modx_history", "modx_history_diff", "modx_request_status",
+    ]);
+    const full = (await call(admin, "manifest")).body.result;
+    assert.equal(full.tools.length, 16);
+    assert.notEqual(full.hash, result.hash);
+    assert.equal(full.tools.find((item) => item.name === "modx_delete").effect.destructive, true);
     assert.deepEqual(result.token, { label: "reader", scope: "read", plan_only: false });
     assert.equal(meta.manifest, result.hash);
     assert.deepEqual(result.tools[1].inputSchema, { type: "object", properties: {}, additionalProperties: false });
@@ -122,7 +128,7 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
     const info = await call(read, "site_info");
     assert.equal(info.body.result.site_name, "Test site");
     assert.equal(info.body.result.modx_version, "2.8.8-pl");
-    assert.equal(info.body.result.counts.chunks, 7);
+    assert.equal(info.body.result.counts.chunks, 0);
 
     const caps = await call(read, "capabilities");
     assert.equal(caps.body.result.token.scope, "read");
@@ -144,6 +150,46 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
 
     const status = await call(read, "request_status", { request_id: "never-used-request-1" });
     assert.deepEqual(status.body.result, { request_id: "never-used-request-1", state: "not_found" });
+  });
+
+  await t.test("writes: scope, journal and request-ID replay", async () => {
+    const denied = await call(read, "create", { kind: "chunk", fields: { name: "x" } });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.body.error.code, "forbidden_scope");
+
+    const request = { request_id: "create-request-00001", session_id: "session-0000000001" };
+    const created = await call(admin, "create", { kind: "chunk", fields: { name: "hero", content: "<b>hi</b>" } }, request);
+    assert.equal(created.status, 200);
+    assert.equal(created.body.result.id, 1);
+    assert.equal(created.body.result.changeset_id, 1);
+
+    // The same ID with the same arguments replays the stored response and creates nothing.
+    const replay = await call(admin, "create", { kind: "chunk", fields: { name: "hero", content: "<b>hi</b>" } }, request);
+    assert.equal(replay.headers.get("x-mcp-replayed"), "1");
+    assert.deepEqual(replay.body, created.body);
+    assert.equal((await call(admin, "list", { kind: "chunk" })).body.result.total, 1);
+    const reused = await call(admin, "create", { kind: "chunk", fields: { name: "other" } }, request);
+    assert.equal(reused.status, 409);
+    assert.equal(reused.body.error.code, "request_state_error");
+    const status = await call(admin, "request_status", { request_id: request.request_id, include_result: true });
+    assert.equal(status.body.result.state, "completed");
+    assert.equal(status.body.result.response.result.id, 1);
+
+    const lint = await call(admin, "create", { kind: "snippet", fields: { name: "bad", content: "return (;" } });
+    assert.equal(lint.status, 422);
+    assert.equal(lint.body.error.code, "lint_failed");
+    assert.equal(lint.body.error.details.line, 1);
+
+    const stale = await call(admin, "update", { kind: "chunk", id: 1, fields: { description: "x" }, expected_revision: "0".repeat(64) });
+    assert.equal(stale.status, 409);
+    assert.equal(stale.body.error.code, "revision_conflict");
+    assert.equal(stale.body.error.details.current_revision, created.body.result.revision);
+
+    const history = await call(admin, "history", { this_session: true }, { session_id: "session-0000000001" });
+    assert.deepEqual(history.body.result.changesets.map((item) => item.tool), ["create"]);
+    const undone = await call(admin, "undo", { changeset_id: 1, confirm: true });
+    assert.equal(undone.body.result.performed, true);
+    assert.equal((await call(admin, "list", { kind: "chunk" })).body.result.total, 0);
   });
 
   await t.test("request and session IDs are accepted on reads and echoed", async () => {
@@ -170,7 +216,7 @@ test("bridge + kernel end to end", { skip: available ? false : "PHP with pdo_sql
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [path.join(root, "client", "index.js")],
-    env: { ...process.env, MODX_MCP_SITE_URL: site.url, MODX_MCP_TOKEN: site.info.tokens.read, MODX_MCP_TIMEOUT_MS: "5000" },
+    env: { ...process.env, MODX_MCP_SITE_URL: site.url, MODX_MCP_TOKEN: site.info.tokens.admin, MODX_MCP_TIMEOUT_MS: "5000" },
     stderr: "ignore",
   });
   const client = new Client({ name: "test", version: "0" }, { capabilities: {} });
@@ -178,12 +224,39 @@ test("bridge + kernel end to end", { skip: available ? false : "PHP with pdo_sql
   t.after(async () => { await client.close(); site.stop(); });
 
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 5);
-  for (const item of tools) {
-    const result = await client.callTool({ name: item.name, arguments: item.name === "modx_request_status" ? { request_id: "never-used-request-1" } : {} });
-    assert.equal(result.isError, undefined, `${item.name}: ${result.content[0].text}`);
-    assert.ok(result.structuredContent && typeof result.structuredContent === "object");
-  }
+  assert.equal(tools.length, 16);
+  const run = async (name, args = {}) => {
+    const result = await client.callTool({ name, arguments: args });
+    assert.equal(result.isError, undefined, `${name}: ${result.content[0].text}`);
+    return result.structuredContent;
+  };
+  for (const name of ["modx_capabilities", "modx_site_info", "modx_describe", "modx_help", "modx_history"]) await run(name);
+  await run("modx_request_status", { request_id: "never-used-request-1" });
+
+  // A whole edit cycle through the bridge; every result is checked against its output schema.
+  const created = await run("modx_create", { kind: "snippet", fields: { name: "year", content: "return date('Y');" } });
+  const view = await run("modx_view_code", { kind: "snippet", id: created.id });
+  assert.equal(view.numbered, "1\treturn date('Y');");
+  const edited = await run("modx_edit_code", {
+    kind: "snippet", id: created.id, expected_revision: view.revision,
+    edits: [{ start_line: 1, replacement: "return date('Y-m');", expect: "return date('Y');" }],
+  });
+  assert.deepEqual(edited.changed, ["content"]);
+  const got = await run("modx_get", { kind: "snippet", name: "year" });
+  assert.equal(got.fields.content, "return date('Y-m');");
+  assert.equal(got.revision, edited.revision);
+  assert.equal((await run("modx_list", { kind: "snippet" })).total, 1);
+  const diff = await run("modx_history_diff", { changeset_id: edited.changeset_id });
+  assert.match(diff.objects[0].changed.content.diff, /^@@ -1,1 \+1,1 @@/);
+  await run("modx_checkpoint", { label: "before delete" });
+  const dry = await run("modx_delete", { kind: "snippet", id: created.id, dry_run: true });
+  assert.equal(dry.dry_run, true);
+  await run("modx_delete", { kind: "snippet", id: created.id });
+  const undo = await run("modx_undo", { last: 1, confirm: true });
+  assert.equal(undo.objects[0].action, "recreate");
+  assert.equal((await run("modx_get", { kind: "snippet", id: created.id })).revision, edited.revision);
+  const broken = await client.callTool({ name: "modx_update", arguments: { kind: "snippet", id: created.id, fields: { content: "return (;" } } });
+  assert.match(broken.content[0].text, /MODX lint_failed \(HTTP 422\): PHP syntax error on line 1/);
   const failed = await client.callTool({ name: "modx_describe", arguments: { kind: "nope" } });
   assert.match(failed.content[0].text, /MODX not_found \(HTTP 404\)/);
   const { resources } = await client.listResources();

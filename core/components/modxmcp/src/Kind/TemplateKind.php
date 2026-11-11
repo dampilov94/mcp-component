@@ -8,16 +8,25 @@ final class TemplateKind extends Kind {
 
     public function modelClass() { return 'modTemplate'; }
 
+    public function processorPath() { return 'element/template/'; }
+
+    public function eventNames() {
+        return array('save' => 'OnTempFormSave', 'delete' => 'OnTempFormDelete', 'param' => 'template');
+    }
+
     public function fields() {
         return $this->elementFields('content', 'templatename') + array(
             'icon' => array('type' => 'string', 'description' => 'Manager tree icon class.'),
         );
     }
 
-    public function relations() {
+    public function relationSpecs() {
         return array(
-            'tvs'           => 'Template variables attached to the template.',
-            'property_sets' => 'Property sets attached to the template.',
+            'tvs' => array(
+                'class' => 'modTemplateVarTemplate', 'fk' => 'templateid', 'present' => 'tmplvarid',
+                'description' => 'Ids of template variables attached to the template.',
+            ),
+            'property_sets' => $this->propertySetRelation(),
         );
     }
 }

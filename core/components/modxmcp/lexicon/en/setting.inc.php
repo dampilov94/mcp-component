@@ -50,3 +50,8 @@ $_lang['setting_modxmcp.require_https_desc'] = 'Reject POST requests without ser
 
 $_lang['setting_modxmcp.allowed_ips'] = 'Allowed client IPs';
 $_lang['setting_modxmcp.allowed_ips_desc'] = 'Comma-separated IPs or CIDR ranges (IPv4/IPv6), matched against REMOTE_ADDR. Empty allows all peers. X-Forwarded-For is not an authorization source; invalid rules are ignored.';
+
+$_lang['setting_modxmcp.lint_php'] = 'Check PHP before saving';
+$_lang['setting_modxmcp.lint_php_desc'] = 'Snippet and plugin code is checked for syntax errors before it is written. Code with an error is not saved.';
+$_lang['setting_modxmcp.history_max_blob_bytes'] = 'Maximum journal snapshot size';
+$_lang['setting_modxmcp.history_max_blob_bytes_desc'] = 'A change to an object whose snapshot is larger than this size (in bytes) is carried out but cannot be undone.';

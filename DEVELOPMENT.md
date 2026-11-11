@@ -21,6 +21,9 @@ stages have landed. It is not compatible with 1.x clients or tool names.
   the token store, scopes and IP/HTTPS checks; `Request/` the replay-protection store;
   `Manifest.php` builds the per-token tool list; `Schema.php` is the schema subset and its
   validator.
+  `Journal/` is the change journal (snapshots, blob store, undo planning); `Write/` the write
+  transaction and object locks; `Kind/Objects.php` the generic object operations; `Code/` line
+  edits and diffs; `Lint/` the PHP syntax check.
 - `client/index.js`: thin MCP bridge. It fetches the manifest from the site and exposes it as
   MCP tools; it contains no tool definitions. `client/api.js`: HTTP transport and envelope.
 - `assets/components/modxmcp/api.php`: bootstraps MODX and calls the kernel.
@@ -50,6 +53,11 @@ Use the code as the source of truth. `README.md` is the installation and client 
 3. A new object kind is one class in `src/Kind/` listed in `Kind/KindRegistry.php`.
 4. Update built-in help or settings/lexicons when behavior changes. Preserve the existing
    file encoding and line endings, particularly for server PHP files.
+
+A write action extends `WriteAction` and does its work inside `Writer::run()`: it touches each
+object it may change (lock + snapshot), changes it through the core processors, and the
+transaction journals whatever actually differs at commit. On an exception the touched objects
+are restored from their snapshots; there is no reliance on database transactions.
 
 `readOnly()` decides whether a call runs under request-ID replay protection; classify side
 effects conservatively. Scope and group checks are enforced by the kernel, not by the

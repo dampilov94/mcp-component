@@ -12,6 +12,17 @@ final class Registry {
         SiteInfoAction::class,
         DescribeAction::class,
         HelpAction::class,
+        ListAction::class,
+        GetAction::class,
+        CreateAction::class,
+        UpdateAction::class,
+        DeleteAction::class,
+        ViewCodeAction::class,
+        EditCodeAction::class,
+        HistoryAction::class,
+        HistoryDiffAction::class,
+        UndoAction::class,
+        CheckpointAction::class,
         RequestStatusAction::class,
     );
 

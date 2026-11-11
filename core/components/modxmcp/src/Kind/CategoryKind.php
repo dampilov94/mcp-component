@@ -8,6 +8,8 @@ final class CategoryKind extends Kind {
 
     public function modelClass() { return 'modCategory'; }
 
+    public function processorPath() { return 'element/category/'; }
+
     public function fields() {
         return array(
             'id'     => array('type' => 'integer', 'list' => true, 'read_only' => true),

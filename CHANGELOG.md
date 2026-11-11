@@ -25,6 +25,32 @@ Stage 1 — core:
   `modx_request_status`. Kind declarations for chunk, snippet, template, plugin, tv, category.
 - Carried over unchanged in behaviour: request-ID replay protection, HTTPS/proxy and IP checks,
   payload/response limits, output buffering.
+Stage 2 — writes and the change journal (element kinds):
+
+- Object tools driven by kind declarations: `modx_list`, `modx_get`, `modx_create`,
+  `modx_update`, `modx_delete`; code tools `modx_view_code` and `modx_edit_code`. Code is the
+  `content` field for every kind; for a static element it is the file.
+- One write contract: a revision is the SHA-256 of an object's canonical state (columns,
+  related rows, static file content); writes accept `expected_revision` and `dry_run`, and
+  return `changeset_id`, `revision`, `changed` and `reversible`. Plan-only tokens always dry-run.
+- Change journal independent of VersionX: tables `modxmcp_changesets`, `modxmcp_changes`,
+  `modxmcp_checkpoints`; snapshots in a content-addressed store under `core/modxmcp-data/history`.
+  `modx_history`, `modx_history_diff`, `modx_checkpoint`, `modx_undo` (one changeset, last N,
+  this session, to a checkpoint). Undo restores deleted objects with their ids and related
+  rows, stops on conflicts unless forced, and is itself a changeset.
+- A change made outside the journal (manager edit, FTP, SQL) is detected at the next write to
+  the object and recorded as an `external` changeset.
+- PHP syntax check before saving snippets and plugins (`lint_failed` with the line; nothing is
+  written). Settings `modxmcp.lint_php`, `modxmcp.history_max_blob_bytes`.
+- A failed write puts the touched objects back from their snapshots; per-object locks between
+  concurrent MCP requests.
+- The client remembers the revision of objects read or written in the session and sends it as
+  `expected_revision` when the model omits it.
+- Built-in guide rewritten for 2.0 (`index`, `getting_started`); 1.x topics moved to
+  `docs/legacy-help/` until their stages land.
+- Not yet in this stage: recording manager edits through a plugin, the manager lock check,
+  `modx_duplicate`, `modx_invoke` (including `make_static` and auto-static), journal retention.
+
 - Offline tests (`npm test`): pure PHP logic, the real kernel behind PHP's built-in server with
   stubbed MODX classes, and the Node bridge end to end. CI runs them.
 

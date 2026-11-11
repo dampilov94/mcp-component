@@ -1,11 +1,12 @@
 <?php
 namespace ModxMCP\Kind;
 
+use ModxMCP\ApiException;
 use ModxMCP\Auth\Scope;
 
 /**
  * One kind of site object. A kind declares how its objects are named, which fields the API
- * exposes and which relations travel with the object; the generic object tools, snapshots
+ * exposes and which related rows travel with the object; the generic object tools, snapshots
  * and undo are driven by these declarations.
  */
 abstract class Kind {
@@ -47,14 +48,67 @@ abstract class Kind {
         return Scope::DEVELOP;
     }
 
-    /** Related data that belongs to the object: name => description. */
-    public function relations() {
+    /** Core processor directory with a trailing slash, e.g. "element/chunk/". */
+    abstract public function processorPath();
+
+    /** "php" when the code field must pass a PHP syntax check before it is saved. */
+    public function lint() {
+        return null;
+    }
+
+    /**
+     * MODX events announced when an object is restored outside the processors:
+     * ['save' => event, 'delete' => event, 'param' => name of the object parameter].
+     */
+    public function eventNames() {
+        return array();
+    }
+
+    /**
+     * Related rows that belong to the object: name => spec.
+     *   class        xPDO class of the rows
+     *   fk           column that holds this object's id
+     *   where        extra fixed criteria (optional)
+     *   present      column, or list of columns, shown by the API
+     *   description  meaning, for describe
+     *   delete_only  captured only before a delete (data another object owns, e.g. TV values)
+     *   writable     can be replaced through the API
+     */
+    public function relationSpecs() {
         return array();
     }
 
     /** Special operations for modx_invoke: op => [description, read_only]. */
     public function operations() {
         return array();
+    }
+
+    /** Replace a writable relation. $value is the API form (a list). */
+    public function writeRelation(\modX $modx, $object, $name, $value) {
+        throw new ApiException('validation_failed', "Relation '{$name}' of {$this->name()} cannot be changed through the API.");
+    }
+
+    // ---- derived helpers ----
+
+    public function column($field) {
+        $fields = $this->fields();
+        return isset($fields[$field]['column']) ? $fields[$field]['column'] : $field;
+    }
+
+    /** Name of the code field, or null when the kind has none. */
+    public function codeField() {
+        foreach ($this->fields() as $name => $definition) {
+            if (!empty($definition['code'])) { return $name; }
+        }
+        return null;
+    }
+
+    /** Property set links shared by every element type. */
+    protected function propertySetRelation() {
+        return array(
+            'class' => 'modElementPropertySet', 'fk' => 'element', 'where' => array('element_class' => $this->modelClass()),
+            'present' => 'property_set', 'description' => 'Ids of property sets attached to the element.',
+        );
     }
 
     /** Fields shared by chunks, snippets, templates and plugins. */
@@ -76,6 +130,77 @@ abstract class Kind {
         );
     }
 
+    /** Find an object by ['id' => …] or ['name' => …]; null when it does not exist. Never cached. */
+    public function find(\modX $modx, array $ref) {
+        if (isset($ref['id'])) {
+            return $modx->getObject($this->modelClass(), array('id' => (int) $ref['id']), false);
+        }
+        if (isset($ref['name']) && $ref['name'] !== '') {
+            return $modx->getObject($this->modelClass(), array($this->column($this->nameField()) => (string) $ref['name']), false);
+        }
+        return null;
+    }
+
+    /**
+     * Code as the site runs it: the file for a static element, the database column otherwise.
+     * Reads without synchronising the file back into the database.
+     * @return array [content, is static, absolute file path or null, file missing]
+     */
+    public function effectiveContent($object) {
+        $field = $this->codeField();
+        if ($field === null) { return array('', false, null, false); }
+        $column = $this->column($field);
+        $stored = (string) $object->get($column);
+        if (!array_key_exists('static', $this->fields()) || !(bool) $object->get('static')) {
+            return array($stored, false, null, false);
+        }
+        $path = $object->getSourceFile();
+        if (!$path || strpos($path, '://') !== false) { return array($stored, true, null, true); }
+        clearstatcache(true, $path);
+        if (!is_file($path)) { return array('', true, $path, true); }
+        $content = @file_get_contents($path);
+        if ($content === false) { throw new \RuntimeException('Cannot read the static file of ' . $this->name() . ' ' . $object->get('id') . '.'); }
+        return array($content, true, $path, false);
+    }
+
+    /** API value of one field. */
+    public function value($object, $field) {
+        $fields = $this->fields();
+        if (!empty($fields[$field]['code'])) {
+            $content = $this->effectiveContent($object);
+            return $content[0];
+        }
+        $raw = $object->get($this->column($field));
+        switch ($fields[$field]['type']) {
+            case 'integer': return (int) $raw;
+            case 'boolean': return (bool) $raw;
+            default:        return $raw === null ? '' : (string) $raw;
+        }
+    }
+
+    /** Rows of one relation as the API shows them. */
+    public function presentRelation(\modX $modx, $object, $name) {
+        $specs = $this->relationSpecs();
+        $spec = $specs[$name];
+        $criteria = array($spec['fk'] => $object->get('id')) + (isset($spec['where']) ? $spec['where'] : array());
+        $out = array();
+        foreach ($modx->getCollection($spec['class'], $criteria) as $row) {
+            if (is_array($spec['present'])) {
+                $item = array();
+                foreach ($spec['present'] as $column) { $item[$column] = self::scalar($row->get($column)); }
+                $out[] = $item;
+            } else {
+                $out[] = self::scalar($row->get($spec['present']));
+            }
+        }
+        usort($out, function ($a, $b) { return strcmp(json_encode($a), json_encode($b)); });
+        return $out;
+    }
+
+    private static function scalar($value) {
+        return is_numeric($value) && (string) (int) $value === (string) $value ? (int) $value : $value;
+    }
+
     /** @return array Schema of this kind for modx_describe. */
     public function describe() {
         $fields = array();
@@ -88,8 +213,9 @@ abstract class Kind {
             $fields[] = $field;
         }
         $relations = array();
-        foreach ($this->relations() as $name => $description) {
-            $relations[] = array('name' => $name, 'description' => $description);
+        foreach ($this->relationSpecs() as $name => $spec) {
+            if (!empty($spec['delete_only'])) { continue; }
+            $relations[] = array('name' => $name, 'description' => $spec['description'], 'writable' => !empty($spec['writable']));
         }
         $operations = array();
         foreach ($this->operations() as $op => $definition) {

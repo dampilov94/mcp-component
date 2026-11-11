@@ -76,6 +76,22 @@ function noteManifestHash(hash) {
 
 const api = new ModxApiClient(MODX_SITE_URL, API_TOKEN, { sessionId: randomUUID(), onManifestHash: noteManifestHash });
 
+// Revisions of objects this session has read or written. If the model omits
+// expected_revision, the remembered one is sent, so a write made on top of a stale read is
+// refused by the site instead of silently overwriting someone else's change.
+const seenRevisions = new Map();
+const revisionKey = (kind, id) => `${kind}:${id}`;
+
+function rememberRevisions(tool, result) {
+  if (tool.action === "undo" && result.performed === true) {
+    seenRevisions.clear();   // an undo moves any number of objects to older states
+    return;
+  }
+  if (typeof result.kind !== "string" || !Number.isInteger(result.id)) return;
+  if (result.deleted === true || typeof result.revision !== "string") seenRevisions.delete(revisionKey(result.kind, result.id));
+  else if (result.dry_run !== true) seenRevisions.set(revisionKey(result.kind, result.id), result.revision);
+}
+
 function toMcpTool(tool) {
   const readOnly = tool.effect.read_only === true;
   const inputSchema = readOnly
@@ -157,7 +173,20 @@ async function callTool(request, extra) {
       requestId = args._request_id || randomUUID();
       delete args._request_id;
     }
-    const { result } = await api.call(tool.action, args, { requestId, signal: extra.signal });
+    const tracked = write && tool.inputSchema.properties?.expected_revision && typeof args.kind === "string" && Number.isInteger(args.id)
+      ? revisionKey(args.kind, args.id) : null;
+    if (tracked && args.expected_revision === undefined && seenRevisions.has(tracked)) {
+      args.expected_revision = seenRevisions.get(tracked);
+    }
+    let result;
+    try {
+      ({ result } = await api.call(tool.action, args, { requestId, signal: extra.signal }));
+    } catch (error) {
+      // After a conflict the remembered revision is known to be stale; the next read replaces it.
+      if (tracked && error.errorCode === "revision_conflict") seenRevisions.delete(tracked);
+      throw error;
+    }
+    rememberRevisions(tool, result);
     const output = validator("out", tool)(result);
     if (!output.valid) {
       const hint = requestId ? ` The action may have completed; check modx_request_status for request_id=${requestId}.` : "";

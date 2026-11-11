@@ -2,16 +2,7 @@
 // Offline tests for logic that does not need a MODX installation.
 // Run: php tests/php/run.php
 
-class xPDO {}
-class modX extends xPDO {
-    const LOG_LEVEL_ERROR = 1;
-    public $options = array();
-    public $user;
-    public function getOption($key, $options = null, $default = null) {
-        return array_key_exists($key, $this->options) ? $this->options[$key] : $default;
-    }
-    public function log() {}
-}
+require_once __DIR__ . '/FakeModx.php';
 
 $component = dirname(dirname(__DIR__)) . '/core/components/modxmcp/';
 require_once $component . 'src/autoload.php';
@@ -122,11 +113,15 @@ $context = function ($scope, array $denied = array(), array $options = array()) 
 $read = $context('read');
 $tools = Manifest::tools($read);
 $names = array_column($tools, 'name');
-check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_request_status'));
+check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_view_code', 'modx_history', 'modx_history_diff', 'modx_request_status'));
 check('manifest: protocol action is not a tool', !in_array('modx_manifest', $names, true));
 check('manifest: hash is stable', Manifest::hash($tools) === Manifest::hash(Manifest::tools($context('read'))));
 foreach ($tools as $tool) {
     check("manifest: {$tool['name']} is read-only", $tool['effect']['read_only'] === true && $tool['effect']['destructive'] === false);
+}
+$all = array_column(Manifest::tools($context('admin')), null, 'name');
+check('manifest: writes are marked', $all['modx_update']['effect']['read_only'] === false && $all['modx_delete']['effect']['destructive'] === true && $all['modx_update']['effect']['destructive'] === false);
+foreach ($all as $tool) {
     check("manifest: {$tool['name']} schemas are objects", $tool['inputSchema']['type'] === 'object' && $tool['outputSchema']['type'] === 'object');
     check("manifest: {$tool['name']} has a description", strlen($tool['description']) > 20);
 }
@@ -155,6 +150,262 @@ $disabled = $context('admin', array(), array('modxmcp.disabled_groups' => 'acces
 check('groups: site-disabled group', $disabled->capabilities->groupBlockReason('access', $disabled->token) === 'disabled_group');
 check('groups: unknown names are ignored', $disabled->capabilities->disabledGroups() === array('access'));
 check('groups: core is never blocked', $disabled->capabilities->groupBlockReason('core', $disabled->token) === null);
+
+// --- Line edits, diff, lint (pure) ---
+use ModxMCP\Code\Diff;
+use ModxMCP\Code\LineEdit;
+use ModxMCP\Journal\BlobStore;
+use ModxMCP\Lint\PhpLint;
+
+$code = "one\ntwo\nthree\nfour";
+list($edited, $linesBefore, $linesAfter) = LineEdit::apply($code, array(
+    array('start_line' => 2, 'replacement' => "TWO\n2b"),
+    array('start_line' => 4, 'end_line' => 3, 'replacement' => 'inserted'),
+));
+check('edit: replace and insert against the original', $edited === "one\nTWO\n2b\nthree\ninserted\nfour" && $linesBefore === 4 && $linesAfter === 6);
+check('edit: delete lines', LineEdit::apply($code, array(array('start_line' => 2, 'end_line' => 3)))[0] === "one\nfour");
+check('edit: CRLF is kept', LineEdit::apply("a\r\nb\r\nc", array(array('start_line' => 2, 'replacement' => 'B')))[0] === "a\r\nB\r\nc");
+check('edit: expect relocates a drifted range', LineEdit::apply($code, array(array('start_line' => 1, 'expect' => 'three', 'replacement' => '3')))[0] === "one\ntwo\n3\nfour");
+$e = throws('edit: expect not found', ApiException::class, function () use ($code) { LineEdit::apply($code, array(array('start_line' => 2, 'expect' => 'zzz'))); });
+check('edit: stale expect is a revision conflict', $e && $e->errorCode === 'revision_conflict');
+throws('edit: ambiguous expect', ApiException::class, function () { LineEdit::apply("x\ny\nx", array(array('start_line' => 2, 'expect' => 'x'))); });
+throws('edit: overlapping ranges', ApiException::class, function () use ($code) {
+    LineEdit::apply($code, array(array('start_line' => 1, 'end_line' => 2), array('start_line' => 2, 'end_line' => 3)));
+});
+throws('edit: out of range', ApiException::class, function () use ($code) { LineEdit::apply($code, array(array('start_line' => 9))); });
+$view = LineEdit::numbered($code, 2, 3);
+check('view: numbered window', $view[0] === "2\ttwo\n3\tthree" && $view[1] === 4);
+
+check('diff: equal texts', Diff::lines("a\nb", "a\nb") === '');
+check('diff: change and insert', Diff::lines("a\nb\nc\nd\ne", "a\nB\nc\nd\nx\ne") === "@@ -2,1 +2,1 @@\n-b\n+B\n@@ -5,0 +5,1 @@\n+x");
+check('diff: output is capped', substr_count(Diff::lines(implode("\n", range(1, 400)), implode("\n", range(1001, 1400)), 50), "\n") === 50);
+
+check('lint: valid snippet code', PhpLint::check("\$a = 1;\nreturn \$a;") === null);
+check('lint: opening tag accepted', PhpLint::check("<?php\nreturn 1;") === null);
+$lint = PhpLint::check("\$a = 1;\nreturn \$a +;\n");
+check('lint: error line refers to the stored source', $lint && $lint['line'] === 2 && strpos($lint['message'], 'syntax error') === 0);
+
+$blobDir = sys_get_temp_dir() . '/modxmcp-blob-' . bin2hex(random_bytes(6));
+$blobs = new BlobStore($blobDir, 2048);
+$hash = $blobs->put('hello');
+check('blobs: content addressed', $hash === hash('sha256', 'hello') && $blobs->get($hash) === 'hello' && $blobs->put('hello') === $hash);
+check('blobs: oversize is refused', $blobs->put(str_repeat('x', 4096)) === null);
+check('blobs: absent blob', $blobs->get(hash('sha256', 'nope')) === null);
+file_put_contents($blobDir . '/' . substr($hash, 0, 2) . '/' . $hash . '.php', BlobStore::FILE_GUARD . 'tampered');
+throws('blobs: corruption is detected', RuntimeException::class, function () use ($blobs, $hash) { $blobs->get($hash); });
+
+// --- Objects, journal and undo on a fake site ---
+$siteDir = sys_get_temp_dir() . '/modxmcp-site-' . bin2hex(random_bytes(6));
+mkdir($siteDir . '/core', 0700, true);
+$site = fakeSite($siteDir);
+$site->store('modEvent', array('name' => 'OnLoadWebDocument'));
+$site->store('modEvent', array('name' => 'OnWebPageInit'));
+$site->store('modTemplate', array('id' => 1, 'templatename' => 'Base', 'content' => '<html>', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => '', 'icon' => ''));
+$actor = function ($scope, array $token = array(), $session = 'session-aaaaaaaaaaaa') use ($site, $component) {
+    $record = $token + array('id' => 1, 'label' => 'test', 'prefix' => 'mcp_test', 'scope' => $scope, 'plan_only' => false, 'denied_groups' => array(), 'expires_at' => null);
+    $c = new Context($site, $record, $component, function () { throw new RuntimeException('no store in tests'); });
+    $c->sessionId = $session;
+    return $c;
+};
+// Validate arguments exactly as the kernel does, then run the action.
+$call = function (Context $c, $name, array $args = array()) {
+    $action = $c->actions->get($name);
+    $reason = $c->actions->blockReason($action, $c);
+    if ($reason !== null) { throw new ApiException($reason === 'forbidden_scope' ? 'forbidden_scope' : 'unavailable', $reason); }
+    $invalid = Schema::validate($action->inputSchema(), json_decode(json_encode($args ? $args : new stdClass())));
+    if ($invalid !== null) { throw new ApiException('validation_failed', $invalid); }
+    $result = $action->run($args, $c);
+    $bad = Schema::validate($action->outputSchema(), json_decode(json_encode($result)), 'result');
+    if ($bad !== null) { throw new RuntimeException("Output of {$name} violates its schema: {$bad}"); }
+    return $result;
+};
+$dev = $actor('develop');
+
+$created = $call($dev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'header', 'content' => "<h1>\nTitle\n</h1>", 'description' => 'Top')));
+check('create: returns id, revision and changeset', $created['id'] === 1 && preg_match('/^[a-f0-9]{64}$/', $created['revision']) && $created['changeset_id'] === 1 && $created['reversible']);
+$got = $call($dev, 'get', array('kind' => 'chunk', 'name' => 'header'));
+check('get: fields by api name', $got['fields']['content'] === "<h1>\nTitle\n</h1>" && $got['fields']['static'] === false && $got['revision'] === $created['revision']);
+check('get: selected fields only', array_keys($call($dev, 'get', array('kind' => 'chunk', 'id' => 1, 'fields' => array('name')))['fields']) === array('name'));
+$e = throws('get: missing object', ApiException::class, function () use ($call, $dev) { $call($dev, 'get', array('kind' => 'chunk', 'id' => 99)); });
+check('get: missing object is not_found', $e && $e->errorCode === 'not_found');
+throws('create: duplicate name is refused', ApiException::class, function () use ($call, $dev) { $call($dev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'header'))); });
+throws('create: required field', ApiException::class, function () use ($call, $dev) { $call($dev, 'create', array('kind' => 'chunk', 'fields' => array('description' => 'x'))); });
+throws('create: unknown field', ApiException::class, function () use ($call, $dev) { $call($dev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'a', 'snippet' => 'x'))); });
+throws('create: wrong type', ApiException::class, function () use ($call, $dev) { $call($dev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'a', 'category' => '3'))); });
+$e = throws('write: read token is refused', ApiException::class, function () use ($call, $actor) { $call($actor('read'), 'create', array('kind' => 'chunk', 'fields' => array('name' => 'a'))); });
+check('write: refusal is forbidden_scope', $e && $e->errorCode === 'forbidden_scope');
+check('read token: write tools are not in its manifest', !in_array('modx_update', array_column(Manifest::tools($actor('read')), 'name'), true)
+    && in_array('modx_get', array_column(Manifest::tools($actor('read')), 'name'), true));
+
+$updated = $call($dev, 'update', array('kind' => 'chunk', 'id' => 1, 'fields' => array('description' => 'Header block'), 'expected_revision' => $created['revision']));
+check('update: only the given field changes', $updated['changed'] === array('description') && $updated['revision'] !== $created['revision'] && $updated['changeset_id'] === 2);
+check('update: other fields are kept', $call($dev, 'get', array('kind' => 'chunk', 'id' => 1))['fields']['content'] === "<h1>\nTitle\n</h1>");
+$e = throws('update: stale revision', ApiException::class, function () use ($call, $dev, $created) {
+    $call($dev, 'update', array('kind' => 'chunk', 'id' => 1, 'fields' => array('description' => 'x'), 'expected_revision' => $created['revision']));
+});
+check('update: stale revision reports who changed it', $e && $e->errorCode === 'revision_conflict' && $e->details['current_revision'] === $updated['revision'] && $e->details['last_change']['changeset_id'] === 2);
+$dry = $call($dev, 'update', array('kind' => 'chunk', 'id' => 1, 'fields' => array('description' => 'never', 'name' => 'header'), 'dry_run' => true));
+check('dry run: reports and changes nothing', $dry['dry_run'] === true && $dry['would_change'] === array('description') && $call($dev, 'get', array('kind' => 'chunk', 'id' => 1))['revision'] === $updated['revision']);
+$same = $call($dev, 'update', array('kind' => 'chunk', 'id' => 1, 'fields' => array('description' => 'Header block')));
+check('update: no real change records no changeset', $same['changeset_id'] === null && $same['changed'] === array() && $same['revision'] === $updated['revision']);
+$planner = $actor('develop', array('plan_only' => true));
+$planned = $call($planner, 'update', array('kind' => 'chunk', 'id' => 1, 'fields' => array('description' => 'planned')));
+check('plan-only token: every write is a dry run', $planned['dry_run'] === true && $planned['planned'] === true && $call($dev, 'get', array('kind' => 'chunk', 'id' => 1))['revision'] === $updated['revision']);
+
+$view = $call($dev, 'view_code', array('kind' => 'chunk', 'id' => 1, 'start_line' => 2, 'end_line' => 2));
+check('view_code: numbered range', $view['numbered'] === "2\tTitle" && $view['total_lines'] === 3 && $view['revision'] === $updated['revision']);
+$edit = $call($dev, 'edit_code', array('kind' => 'chunk', 'id' => 1, 'expected_revision' => $view['revision'],
+    'edits' => array(array('start_line' => 2, 'replacement' => 'New title', 'expect' => 'Title'))));
+check('edit_code: applies', $edit['changed'] === array('content') && $edit['total_lines_after'] === 3 && $call($dev, 'get', array('kind' => 'chunk', 'id' => 1))['fields']['content'] === "<h1>\nNew title\n</h1>");
+throws('edit_code: kind without code', ApiException::class, function () use ($call, $dev) { $call($dev, 'edit_code', array('kind' => 'tv', 'id' => 1, 'edits' => array(array('start_line' => 1)))); });
+
+$snippet = $call($dev, 'create', array('kind' => 'snippet', 'fields' => array('name' => 'year', 'content' => "return date('Y');")));
+$e = throws('lint: broken PHP is refused', ApiException::class, function () use ($call, $dev, $snippet) {
+    $call($dev, 'update', array('kind' => 'snippet', 'id' => $snippet['id'], 'fields' => array('content' => "return date('Y';")));
+});
+check('lint: refusal names the line and saves nothing', $e && $e->errorCode === 'lint_failed' && $e->details['line'] === 1
+    && $call($dev, 'get', array('kind' => 'snippet', 'id' => $snippet['id']))['revision'] === $snippet['revision']);
+$e = throws('lint: line edit that breaks PHP', ApiException::class, function () use ($call, $dev, $snippet) {
+    $call($dev, 'edit_code', array('kind' => 'snippet', 'id' => $snippet['id'], 'edits' => array(array('start_line' => 1, 'replacement' => 'return (;'))));
+});
+check('lint: line edit refused', $e && $e->errorCode === 'lint_failed');
+throws('lint: create with broken PHP', ApiException::class, function () use ($call, $dev) { $call($dev, 'create', array('kind' => 'plugin', 'fields' => array('name' => 'bad', 'content' => 'if ('))); });
+check('lint: nothing was created', $site->getCount('modPlugin') === 0);
+$skipped = $call($dev, 'update', array('kind' => 'snippet', 'id' => $snippet['id'], 'fields' => array('content' => 'return (;'), 'skip_lint' => true));
+check('lint: skip_lint saves and warns', $skipped['changed'] === array('content') && count($dev->warnings) === 1);
+check('lint: chunks are not PHP', $call($dev, 'update', array('kind' => 'chunk', 'id' => 1, 'fields' => array('description' => 'if (')))['changeset_id'] !== null);
+
+// Relations
+$plugin = $call($dev, 'create', array('kind' => 'plugin', 'fields' => array('name' => 'tracker', 'content' => 'return;'), 'relations' => array('events' => array('OnLoadWebDocument'))));
+$pluginGot = $call($dev, 'get', array('kind' => 'plugin', 'id' => $plugin['id']));
+check('relations: created with the object', $pluginGot['relations']['events'] === array(array('event' => 'OnLoadWebDocument', 'priority' => 0)));
+$rel = $call($dev, 'update', array('kind' => 'plugin', 'id' => $plugin['id'], 'relations' => array('events' => array(array('event' => 'OnWebPageInit', 'priority' => 5)))));
+check('relations: replacing them is a journaled change', $rel['changed'] === array('events') && $rel['changeset_id'] !== null);
+throws('relations: unknown event', ApiException::class, function () use ($call, $dev, $plugin) { $call($dev, 'update', array('kind' => 'plugin', 'id' => $plugin['id'], 'relations' => array('events' => array('OnNothing')))); });
+check('relations: failed write leaves them as they were', $call($dev, 'get', array('kind' => 'plugin', 'id' => $plugin['id']))['revision'] === $rel['revision']);
+throws('relations: not writable', ApiException::class, function () use ($call, $dev, $plugin) { $call($dev, 'update', array('kind' => 'plugin', 'id' => $plugin['id'], 'relations' => array('property_sets' => array(1)))); });
+$tv = $call($dev, 'create', array('kind' => 'tv', 'fields' => array('name' => 'hero', 'type' => 'image'), 'relations' => array('templates' => array(1))));
+check('relations: tv templates', $call($dev, 'get', array('kind' => 'tv', 'id' => $tv['id']))['relations']['templates'] === array(1));
+
+// List
+$call($dev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'footer', 'category' => 3)));
+$call($dev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'head_meta')));
+$list = $call($dev, 'list', array('kind' => 'chunk'));
+check('list: sorted by name with total', $list['total'] === 3 && array_column($list['items'], 'name') === array('footer', 'head_meta', 'header') && $list['next_start'] === null);
+check('list: default fields exclude code', !isset($list['items'][0]['content']) && isset($list['items'][0]['static']));
+$page = $call($dev, 'list', array('kind' => 'chunk', 'limit' => 2));
+check('list: paging', count($page['items']) === 2 && $page['next_start'] === 2);
+check('list: name query', array_column($call($dev, 'list', array('kind' => 'chunk', 'query' => 'head'))['items'], 'name') === array('head_meta', 'header'));
+check('list: exact filter', array_column($call($dev, 'list', array('kind' => 'chunk', 'where' => array('category' => 3)))['items'], 'name') === array('footer'));
+throws('list: code cannot be listed', ApiException::class, function () use ($call, $dev) { $call($dev, 'list', array('kind' => 'chunk', 'fields' => array('content'))); });
+
+// History and diff
+$history = $call($dev, 'history', array('kind' => 'chunk', 'id' => 1));
+check('history: newest first, for one object', array_column($history['changesets'], 'tool') === array('update', 'edit_code', 'update', 'create') && $history['changesets'][0]['this_session'] === true);
+$editChangeset = $history['changesets'][1]['changeset_id'];
+$diff = $call($dev, 'history_diff', array('changeset_id' => $editChangeset));
+check('history_diff: code as a line diff', $diff['objects'][0]['changed']['content']['diff'] === "@@ -2,1 +2,1 @@\n-Title\n+New title");
+$relDiff = $call($dev, 'history_diff', array('changeset_id' => $rel['changeset_id']));
+check('history_diff: relation rows', $relDiff['objects'][0]['changed']['events']['new'][0]['event'] === 'OnWebPageInit');
+check('history: other session filter', $call($actor('develop', array(), 'session-bbbbbbbbbbbb'), 'history', array('this_session' => true))['changesets'] === array());
+
+// Undo
+$beforeUndo = $call($dev, 'get', array('kind' => 'chunk', 'id' => 1));
+$planOnly = $call($dev, 'undo', array('changeset_id' => $editChangeset));
+check('undo: without confirm only plans', $planOnly['performed'] === false && $call($dev, 'get', array('kind' => 'chunk', 'id' => 1))['revision'] === $beforeUndo['revision']);
+check('undo: a later change is a conflict', $planOnly['conflicts'] === 1 && strpos($planOnly['objects'][0]['conflict'], 'changed later by changeset') === 0);
+$e = throws('undo: conflict stops a confirmed undo', ApiException::class, function () use ($call, $dev, $editChangeset) { $call($dev, 'undo', array('changeset_id' => $editChangeset, 'confirm' => true)); });
+check('undo: conflict error', $e && $e->errorCode === 'undo_conflict' && $call($dev, 'get', array('kind' => 'chunk', 'id' => 1))['revision'] === $beforeUndo['revision']);
+
+$lastUndo = $call($dev, 'undo', array('last' => 1, 'confirm' => true));   // the "create head_meta" changeset
+check('undo: create is undone by removing the object', $lastUndo['performed'] === true && $lastUndo['objects'][0]['action'] === 'remove' && $site->getCount('modChunk', array('name' => 'head_meta')) === 0);
+$redo = $call($dev, 'undo', array('changeset_id' => $lastUndo['changeset_id'], 'confirm' => true));
+$restored = $site->getObject('modChunk', array('name' => 'head_meta'));
+check('undo of undo: the object is back with the same id', $redo['performed'] === true && $restored && (int) $restored->get('id') === 3);
+check('undo of undo: the original changeset is live again', $call($dev, 'history', array('kind' => 'chunk', 'id' => 3))['changesets'][2]['status'] === 'committed');
+throws('undo: an undone changeset cannot be undone twice', ApiException::class, function () use ($call, $dev, $lastUndo) { $call($dev, 'undo', array('changeset_id' => $lastUndo['changeset_id'], 'confirm' => true)); });
+
+$pluginBefore = $call($dev, 'get', array('kind' => 'plugin', 'id' => $plugin['id']));
+$site->store('modTemplateVarResource', array('id' => 1, 'tmplvarid' => $tv['id'], 'contentid' => 7, 'value' => 'hero.jpg'));
+$tvBefore = $call($dev, 'get', array('kind' => 'tv', 'id' => $tv['id']));
+$dryDelete = $call($dev, 'delete', array('kind' => 'tv', 'id' => $tv['id'], 'dry_run' => true));
+check('delete: dry run counts related rows', $dryDelete['would_delete']['related_rows'] == array('templates' => 1, 'values' => 1) && $site->getCount('modTemplateVar') === 1);
+$checkpoint = $call($dev, 'checkpoint', array('label' => 'before cleanup'));
+$deletedTv = $call($dev, 'delete', array('kind' => 'tv', 'id' => $tv['id']));
+$deletedPlugin = $call($dev, 'delete', array('kind' => 'plugin', 'name' => 'tracker'));
+$call($dev, 'update', array('kind' => 'chunk', 'id' => 2, 'fields' => array('description' => 'after checkpoint')));
+check('delete: object and its rows are gone', $deletedTv['deleted'] === true && $site->getCount('modTemplateVar') === 0 && $site->getCount('modTemplateVarTemplate') === 0
+    && $site->getCount('modTemplateVarResource') === 0 && $site->getCount('modPluginEvent') === 0);
+$site->events = array();
+$back = $call($dev, 'undo', array('to_checkpoint' => $checkpoint['checkpoint_id'], 'confirm' => true));
+check('undo to checkpoint: everything after it is reverted', $back['performed'] === true && count($back['changesets']) === 3 && $back['conflicts'] === 0);
+check('undo of delete: same id, same state', $call($dev, 'get', array('kind' => 'tv', 'id' => $tv['id']))['revision'] === $tvBefore['revision']
+    && $call($dev, 'get', array('kind' => 'plugin', 'id' => $plugin['id']))['revision'] === $pluginBefore['revision']);
+check('undo of delete: rows owned by other objects return too', $site->getCount('modTemplateVarResource', array('value' => 'hero.jpg')) === 1);
+check('undo: MODX save events are announced', in_array('OnTVFormSave', $site->events, true) && in_array('OnPluginFormSave', $site->events, true) && in_array('OnChunkFormSave', $site->events, true));
+check('undo: nothing left after the checkpoint', $call($dev, 'undo', array('to_checkpoint' => $checkpoint['checkpoint_id']))['changesets'] === array());
+
+// A change made outside the journal is detected, and force undoes over it.
+$chunk2 = $call($dev, 'update', array('kind' => 'chunk', 'id' => 2, 'fields' => array('description' => 'by mcp')));
+$row = $site->row('modChunk', 2);
+$site->store('modChunk', array('description' => 'by a person in the manager') + $row);
+$outside = $call($dev, 'undo', array('changeset_id' => $chunk2['changeset_id']));
+check('undo: change outside the journal is a conflict', $outside['conflicts'] === 1 && $outside['objects'][0]['conflict'] === 'changed outside the journal since this change');
+$forced = $call($dev, 'undo', array('changeset_id' => $chunk2['changeset_id'], 'confirm' => true, 'force' => true));
+check('undo: force goes back and journals the overwritten state', $forced['performed'] === true && $site->row('modChunk', 2)['description'] === ''
+    && $call($dev, 'history_diff', array('changeset_id' => $forced['changeset_id']))['objects'][0]['changed']['description']['old'] === 'by a person in the manager');
+$outsideLog = $call($dev, 'history', array('kind' => 'chunk', 'id' => 2, 'source' => 'external'));
+check('outside change: recorded as its own changeset when next touched', count($outsideLog['changesets']) === 1 && $outsideLog['changesets'][0]['objects'][0]['op'] === 'update');
+$outsideDiff = $call($dev, 'history_diff', array('changeset_id' => $outsideLog['changesets'][0]['changeset_id']));
+check('outside change: its diff shows what the person did', $outsideDiff['objects'][0]['changed']['description'] === array('old' => 'by mcp', 'new' => 'by a person in the manager'));
+throws('undo: exactly one selector', ApiException::class, function () use ($call, $dev) { $call($dev, 'undo', array('last' => 1, 'this_session' => true)); });
+
+// Static elements: the file is the content.
+$file = $siteDir . '/menu.tpl';
+file_put_contents($file, "file v1");
+$site->store('modChunk', array('id' => 10, 'name' => 'menu', 'snippet' => 'stale database copy', 'static' => 1, 'static_file' => $file, 'source' => 0, 'category' => 0, 'description' => '', 'locked' => 0, 'properties' => null));
+$menu = $call($dev, 'get', array('kind' => 'chunk', 'id' => 10));
+check('static: reads the file, not the stale column', $menu['fields']['content'] === 'file v1' && $menu['fields']['static'] === true);
+$menuEdit = $call($dev, 'update', array('kind' => 'chunk', 'id' => 10, 'fields' => array('content' => 'file v2'), 'expected_revision' => $menu['revision']));
+check('static: update writes the file', file_get_contents($file) === 'file v2' && $menuEdit['changed'] === array('content'));
+$site->store('modChunk', array('snippet' => 'file v3') + $site->row('modChunk', 10));   // column already equals the new content
+$call($dev, 'update', array('kind' => 'chunk', 'id' => 10, 'fields' => array('content' => 'file v3')));
+check('static: file is written even when the column already matched', file_get_contents($file) === 'file v3');
+file_put_contents($file, 'edited over FTP');
+$e = throws('static: file edited outside is a revision conflict', ApiException::class, function () use ($call, $dev, $menuEdit) {
+    $call($dev, 'update', array('kind' => 'chunk', 'id' => 10, 'fields' => array('content' => 'x'), 'expected_revision' => $menuEdit['revision']));
+});
+check('static: conflict leaves the file alone', $e && $e->errorCode === 'revision_conflict' && file_get_contents($file) === 'edited over FTP');
+$ftp = $call($dev, 'update', array('kind' => 'chunk', 'id' => 10, 'fields' => array('content' => 'file v4')));
+$call($dev, 'undo', array('changeset_id' => $ftp['changeset_id'], 'confirm' => true));
+check('static: undo restores the file content', file_get_contents($file) === 'edited over FTP');
+
+// A failure after the processor saved: the object is put back and nothing is journaled.
+$stable = $call($dev, 'get', array('kind' => 'chunk', 'id' => 1));
+$journalSize = count($call($dev, 'history', array('limit' => 100))['changesets']);
+$site->failProcessor = 'element/chunk/update';
+throws('rollback: failure after save', RuntimeException::class, function () use ($call, $dev) { $call($dev, 'update', array('kind' => 'chunk', 'id' => 1, 'fields' => array('description' => 'half done'))); });
+$site->failProcessor = 'element/chunk/create';
+throws('rollback: failure after create', RuntimeException::class, function () use ($call, $dev) { $call($dev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'orphan'))); });
+$site->failProcessor = null;
+check('rollback: update is reverted', $call($dev, 'get', array('kind' => 'chunk', 'id' => 1))['revision'] === $stable['revision']);
+check('rollback: nothing is journaled', count($call($dev, 'history', array('limit' => 100))['changesets']) === $journalSize);
+
+// Oversized snapshots are saved but marked irreversible.
+$small = $actor('develop');
+$site->options['modxmcp.history_max_blob_bytes'] = 1024;
+$big = $call($small, 'update', array('kind' => 'chunk', 'id' => 1, 'fields' => array('content' => str_repeat('x', 5000))));
+$site->options['modxmcp.history_max_blob_bytes'] = 5242880;
+check('oversize: saved, flagged, with a warning', $big['reversible'] === false && $big['changeset_id'] !== null && count($small->warnings) === 1);
+$e = throws('oversize: undo is refused', ApiException::class, function () use ($call, $dev, $big) { $call($dev, 'undo', array('changeset_id' => $big['changeset_id'], 'confirm' => true)); });
+check('oversize: refusal is not_reversible', $e && $e->errorCode === 'not_reversible');
+
+// Concurrent MCP writers
+$lock = new ModxMCP\Write\Lock($dev->dataDir() . '/locks');
+$lock->acquire('chunk:2');
+$e = throws('lock: object held by another request', ApiException::class, function () use ($call, $dev) { $call($dev, 'update', array('kind' => 'chunk', 'id' => 2, 'fields' => array('description' => 'x'))); });
+check('lock: refusal is locked', $e && $e->errorCode === 'locked');
+$lock->releaseAll();
 
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));

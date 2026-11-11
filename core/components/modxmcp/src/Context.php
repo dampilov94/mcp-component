@@ -2,6 +2,8 @@
 namespace ModxMCP;
 
 use ModxMCP\Action\Registry;
+use ModxMCP\Journal\BlobStore;
+use ModxMCP\Journal\Journal;
 use ModxMCP\Kind\KindRegistry;
 use ModxMCP\Request\RequestStore;
 
@@ -36,6 +38,21 @@ final class Context {
         $this->actions = new Registry();
         $this->kinds = new KindRegistry();
         $this->requestStoreFactory = $requestStoreFactory;
+    }
+
+    /** Private runtime state of the component, outside the MODX cache and the component files. */
+    public function dataDir() {
+        return rtrim($this->modx->getOption('core_path'), '/\\') . '/modxmcp-data';
+    }
+
+    /** @return Journal */
+    public function journal() {
+        return new Journal($this->modx);
+    }
+
+    /** @return BlobStore */
+    public function blobs() {
+        return new BlobStore($this->dataDir() . '/history', $this->modx->getOption('modxmcp.history_max_blob_bytes', null, 5242880));
     }
 
     /** @return RequestStore */

@@ -1,18 +1,15 @@
-# modxMCP — built-in help
+# modxMCP — built-in guide
 
-Call `modx_help` with a `topic` for a focused guide. **New to a site? Read `getting_started`
-first** (the recommended workflow), and call `modx_project_overview` to orient in one cheap call.
+Call `modx_help` with a `topic` for a focused guide.
 
-- `getting_started` — recommended workflow + core concepts (start here).
-- `graph` — how elements are wired together: who uses what, broken references, dead elements.
-- `tv_input_types` — choose the right TV input type per task and wire it (see also `modx_suggest_tv_type`).
-- `migx` — repeating structured rows: inline configs, `inputTV` (+ `ForMigx` convention), gotchas.
-- `study_component` — learn & use a newly-installed add-on from its source.
-- `minishop2` — products, options, links, categories, orders.
-- `acl` — users, groups, roles, policies, resource/context access.
+- `getting_started` — how to work on a site: orient, read, change safely, undo.
 
-Discovery tools: `modx_project_overview` (what exists — whole-site map, cheap),
-`modx_dependency_graph` (how it is connected — who uses what, broken refs, dead elements),
-`modx_list_actions` (supported actions incl. disabled groups), `modx_check_integrations`
-(installed add-ons), `modx_list_tv_input_types` (TV types + hints), `modx_describe_object`
-(real field names of a class).
+Quick reference:
+
+- `modx_site_info` — versions, counts, contexts, installed add-ons.
+- `modx_capabilities` — what this token may do and why something is unavailable.
+- `modx_describe` — the object kinds and, for one kind, its fields and relations.
+- `modx_list`, `modx_get`, `modx_view_code` — read objects and code.
+- `modx_create`, `modx_update`, `modx_edit_code`, `modx_delete` — change objects.
+- `modx_history`, `modx_history_diff`, `modx_checkpoint`, `modx_undo` — the change journal.
+- `modx_request_status` — outcome of a write whose response was lost.

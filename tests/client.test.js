@@ -17,12 +17,14 @@ const tool = (action, extra = {}) => ({
 });
 
 function mockSite() {
-  const state = { requests: [], hash: "h1", tools: [
+  const state = { requests: [], hash: "h1", revision: "r1", tools: [
     tool("site_info"),
     tool("help", { inputSchema: object({ topic: { type: "string" } }) }),
     tool("describe", { inputSchema: object({ kind: { type: "string", pattern: "^[a-z]+$" } }) }),
+    tool("get", { inputSchema: object({ kind: { type: "string" }, id: { type: "integer" } }) }),
+    tool("undo", { inputSchema: object({ confirm: { type: "boolean" } }), effect: { read_only: false, destructive: true, reversible: true, open_world: false } }),
     tool("update", {
-      inputSchema: object({ kind: { type: "string" } }, ["kind"]),
+      inputSchema: object({ kind: { type: "string" }, id: { type: "integer" }, expected_revision: { type: "string" } }, ["kind"]),
       effect: { read_only: false, destructive: true, reversible: true, open_world: false },
     }),
   ] };
@@ -50,8 +52,16 @@ function mockSite() {
             : ok({ topics: ["index", "acl"], topic: "index", content: "# index" });
         case "describe":
           return reply(404, { ok: false, error: { code: "not_found", message: `Unknown kind '${body.args.kind}'. Token ${TOKEN}`, details: { hint: "list kinds" } }, meta });
+        case "get":
+          return ok({ kind: body.args.kind, id: body.args.id, revision: state.revision });
+        case "undo":
+          return ok({ performed: true });
         case "update":
-          return ok({ kind: body.args.kind, id: 1 });
+          if (body.args.id === 7 && body.args.expected_revision !== state.revision) {
+            return reply(409, { ok: false, error: { code: "revision_conflict", message: "changed" }, meta });
+          }
+          if (body.args.id === 7) state.revision = "r" + (Number(state.revision.slice(1)) + 1);
+          return ok({ kind: body.args.kind, id: body.args.id ?? 1, ...(body.args.id === 7 ? { revision: state.revision } : {}) });
         default:
           return reply(400, { ok: false, error: { code: "unknown_action", message: "Unknown action." }, meta });
       }
@@ -84,7 +94,7 @@ test("bridge serves the site's manifest and proxies calls", async (t) => {
 
   await t.test("tools are built from the manifest", async () => {
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map((item) => item.name), ["modx_site_info", "modx_help", "modx_describe", "modx_update"]);
+    assert.deepEqual(tools.map((item) => item.name), ["modx_site_info", "modx_help", "modx_describe", "modx_get", "modx_undo", "modx_update"]);
     const read = tools.find((item) => item.name === "modx_site_info");
     assert.equal(read.annotations.readOnlyHint, true);
     assert.equal(read.inputSchema.properties._request_id, undefined);
@@ -112,6 +122,33 @@ test("bridge serves the site's manifest and proxies calls", async (t) => {
     const given = await client.callTool({ name: "modx_update", arguments: { kind: "chunk", _request_id: "retry-id-0000000001" } });
     assert.equal(given._meta.request_id, "retry-id-0000000001");
     assert.deepEqual(site.state.requests.at(-1).args, { kind: "chunk" });
+  });
+
+  await t.test("the revision last seen is sent when the model omits expected_revision", async () => {
+    const update = (args) => client.callTool({ name: "modx_update", arguments: { kind: "chunk", id: 7, ...args } });
+    const sent = () => site.state.requests.at(-1).args.expected_revision;
+
+    await update({});
+    assert.equal(sent(), undefined, "nothing is known about an object that was never read");
+    await client.callTool({ name: "modx_get", arguments: { kind: "chunk", id: 7 } });
+    assert.equal((await update({})).isError, undefined);
+    assert.equal(sent(), "r1", "revision from the read");
+    assert.equal((await update({})).isError, undefined);
+    assert.equal(sent(), "r2", "revision from the previous write");
+
+    site.state.revision = "r9";   // somebody else changed the object
+    const conflict = await update({});
+    assert.equal(conflict.isError, true);
+    assert.match(conflict.content[0].text, /revision_conflict/);
+    await client.callTool({ name: "modx_get", arguments: { kind: "chunk", id: 7 } });
+    assert.equal((await update({})).isError, undefined);
+    assert.equal(sent(), "r9", "after re-reading, the write goes through");
+
+    await update({ expected_revision: "r10" });
+    assert.equal(sent(), "r10", "an explicit revision is never replaced");
+    await client.callTool({ name: "modx_undo", arguments: { confirm: true } });
+    await update({});
+    assert.equal(sent(), undefined, "an undo forgets every remembered revision");
   });
 
   await t.test("invalid arguments are rejected before any request", async () => {

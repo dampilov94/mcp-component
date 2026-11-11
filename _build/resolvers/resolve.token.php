@@ -1,6 +1,6 @@
 <?php
 /**
- * Resolver: create the token table on install/upgrade and import the single 1.x token
+ * Resolver: create the component tables (tokens, change journal) on install/upgrade and import the single 1.x token
  * (modxmcp.api_token) as an admin-scope token so existing clients keep working.
  * A fresh install has no tokens; the administrator creates one in Components > modxMCP.
  *
@@ -36,11 +36,12 @@ if ($action === xPDOTransport::ACTION_INSTALL || $action === xPDOTransport::ACTI
     try {
         $store = new \ModxMCP\Auth\TokenStore($modx);
         $store->install();
+        (new \ModxMCP\Journal\Journal($modx))->install();
         if (!$store->all()) {
             $modx->log(modX::LOG_LEVEL_INFO, '[modxMCP] No API tokens yet. Create one in Components > modxMCP and put it into your MCP client.');
         }
     } catch (Exception $e) {
-        $modx->log(modX::LOG_LEVEL_ERROR, '[modxMCP] Could not prepare the token table: ' . $e->getMessage());
+        $modx->log(modX::LOG_LEVEL_ERROR, '[modxMCP] Could not prepare the component tables: ' . $e->getMessage());
         return false;
     }
     if ($modx->getCacheManager()) {

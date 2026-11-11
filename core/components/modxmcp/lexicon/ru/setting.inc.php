@@ -50,3 +50,8 @@ $_lang['setting_modxmcp.require_https_desc'] = 'Отклонять POST-запр
 
 $_lang['setting_modxmcp.allowed_ips'] = 'Разрешённые IP-адреса';
 $_lang['setting_modxmcp.allowed_ips_desc'] = 'IP-адреса или диапазоны CIDR через запятую (IPv4/IPv6), проверяемые по REMOTE_ADDR. Пустой список разрешает все адреса. X-Forwarded-For не используется для авторизации, неверные правила игнорируются.';
+
+$_lang['setting_modxmcp.lint_php'] = 'Проверять PHP перед сохранением';
+$_lang['setting_modxmcp.lint_php_desc'] = 'Код сниппетов и плагинов проверяется на синтаксические ошибки до записи. Код с ошибкой не сохраняется.';
+$_lang['setting_modxmcp.history_max_blob_bytes'] = 'Максимальный размер снимка в журнале';
+$_lang['setting_modxmcp.history_max_blob_bytes_desc'] = 'Изменение объекта, снимок которого больше этого размера (в байтах), выполняется, но не может быть отменено.';
