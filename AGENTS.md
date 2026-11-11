@@ -23,6 +23,69 @@ stages; `CHANGELOG.md` records which stages have landed. 2.0 is not compatible w
 - `README.md` is the user guide; `CHANGELOG.md` records releases. `DEVELOPMENT.md`
   has further technical detail. Source code is authoritative for current behavior.
 
+## Two-agent workflow
+
+Work on 2.0 is split between an **architect** session and an **executor** session.
+
+- The architect writes task briefs in `docs/tasks/`, reviews the executor's branch, deploys
+  to the development stand, runs the stand checks and merges into `main`.
+- The executor implements exactly one brief at a time. If you were started with a brief
+  (e.g. "do docs/tasks/01-duplicate.md"), you are the executor; read `docs/tasks/README.md`
+  first and follow it.
+- The executor works only in its own branch `task/NN-name`, never commits to `main`, never
+  pushes, never deploys and never runs anything in `scripts/stand/` (those scripts act on a
+  real site). It does not touch `.env`, `.mcp.json` or `.local/`.
+
+## How the 2.0 core is built (read before changing it)
+
+- **An action is one class** in `src/Action/`, listed in `Action/Registry.php`. It declares
+  name, description, input/output schema, scope, group and effect; nothing is defined in the
+  client. Schemas must stay inside the subset `src/Schema.php` validates, and every action
+  returns a JSON object (an empty map must encode as `{}`: use `new \stdClass()`).
+- **A kind is one class** in `src/Kind/`, listed in `Kind/KindRegistry.php`. Generic tools
+  (`list`, `get`, `create`, `update`, `delete`, code tools) work from its declarations. API
+  field names differ from columns via `column`; code is always the field `content`.
+- **Every change goes through `Write\Writer::run()`.** Inside, `touch()` each object before
+  changing it (lock + snapshot); the transaction journals whatever really differs at commit
+  and restores touched objects if the body throws. Never write to the site outside a
+  transaction, and do not use database transactions for rollback.
+- **Change objects through the core processors** (`Kind\Objects::save()` /
+  `Objects::process()`), so MODX validation and events run. `Journal\Snapshot::restore()` is
+  the only place that writes xPDO objects directly.
+- **A revision** is the SHA-256 of an object's canonical state (`Journal\Snapshot`). The
+  same value appears in read results, write results and the journal.
+- The component's own tables are plain SQL through `src/Db.php`. Queries must run on both
+  MySQL (sites) and SQLite (tests); table creation lives in `Journal::install()` /
+  `TokenStore::install()` (MySQL) and `fakeSchema()` in `tests/php/FakeModx.php` (SQLite).
+- PHP 7.4 syntax only: no `match`, enums, constructor promotion, named arguments, union
+  types, `readonly`, nullsafe `?->`, or `str_contains`/`str_starts_with`.
+
+MODX traps already handled; keep them handled:
+
+- Update processors expect the complete record. Omitted checkbox fields of a resource
+  (`published`, `hidemenu`, `deleted`, …) are reset to off, and `syncsite` must be sent or
+  the cache is not refreshed. `Objects::save()` sends the full record; do not bypass it.
+- Resource `pub_date` / `unpub_date` are unix times in the database but must be sent to the
+  processor as date strings; a raw number publishes the page immediately.
+- MODX strips an opening `<?php` from snippet and plugin code and writes a static file only
+  when the database column changed.
+- A resource delete also trashes its descendants, and saves change the parent's `isfolder`.
+  Kinds report such cascades through `alsoAffected()` so they are journaled.
+- MODX refuses to delete a TV that is attached to a template, a template in use, the site
+  start page, etc. Pass these errors through; do not work around them.
+
+## Tests
+
+- `npm run check` (syntax + release metadata) and `npm test` must both pass before a task
+  is reported done. `npm test` needs PHP with `pdo_sqlite`.
+- `tests/php/run.php` drives actions on an in-memory MODX stand-in
+  (`tests/php/FakeModx.php`), validating arguments and results against the action schemas.
+  New behaviour needs checks there; extend the fake only as far as the real MODX behaves.
+- `tests/endpoint.test.js` runs the real kernel over HTTP and through the bridge. It asserts
+  the exact tool list and counts; update them when you add a tool or a kind.
+- The fake is not MODX. State in your report which behaviour you could only verify against
+  the fake, so the architect checks it on the stand.
+
 ## Working practices
 
 - Follow the user's current scope and preferences. Keep changes focused and preserve
