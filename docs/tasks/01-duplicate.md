@@ -95,3 +95,56 @@ Update the expected tool lists/counts in `tests/php/run.php` and `tests/endpoint
 `npm run check` and `npm test` pass; no change outside `src/Action/DuplicateAction.php`,
 `src/Action/Registry.php`, `src/Kind/Kind.php`, `src/Kind/ResourceKind.php`, the two test
 files and (if the fake really lacks something MODX has) `tests/php/FakeModx.php`.
+
+## Report
+
+Implemented on `task/01-duplicate`:
+
+- `src/Action/DuplicateAction.php`: generic copy through `Objects::save()` inside
+  `Writer::run()`, source lookup, automatic names through suffix 20, explicit name collision
+  checks, validated field overrides, writable relations, omitted-relation warnings, PHP
+  lint, dry run / plan-only and the standard journaled write result.
+- `src/Action/Registry.php`: registered `DuplicateAction` immediately after `DeleteAction`.
+- `src/Kind/Kind.php`: added `uniqueNames()`, `duplicateOverrides()` and `storedRelation()`;
+  static elements become non-static copies with their effective content.
+- `src/Kind/ResourceKind.php`: allows repeated titles, resets publication and URL fields,
+  and reads only stored TV values belonging to the source template, preserving empty maps.
+- `tests/php/run.php`: added the duplicate block after Bulk and manifest assertions.
+  Covers the requested cases plus exhausted names, field validation, non-writable relation
+  warnings, default-only and detached TVs, repeated resource titles and plan-only tokens.
+- `tests/endpoint.test.js`: updated full manifest counts to 24 and checked duplicate's
+  placement and write effect; read-token expectations are unchanged.
+- `tests/php/FakeModx.php`: generates an alias from the resource title on create when the
+  supplied alias is empty. Previously the fake only generated one when alias was absent.
+
+Validation: `npm run check` passed (11 JavaScript files, 109 PHP files on PHP 7.4.33,
+release metadata). `npm test` passed: 348 PHP checks and 24 Node/HTTP tests, no skips.
+The first sandboxed test run could not listen on localhost (`EPERM`); the approved rerun
+outside the sandbox passed. No real site operations were performed.
+
+Interpretations / deviations:
+
+- The brief uses `name` both for source lookup and for the new name. Without `id`, it is
+  the source name and the copy gets the automatic suffix; with `id`, it is the explicit
+  copy name. `fields` is applied last, including the kind's name field. This is documented
+  in the input schema and tested; no new argument was introduced.
+- The dry-run relation names are returned as a top-level `relations` list alongside
+  `would_create: {name: ...}`. The brief does not specify a key for that list.
+- Resource `uri` is cleared to an empty string along with `uri_override: false`, so the
+  source's frozen URI is not copied. Stored TV maps are cast to arrays internally for the
+  existing writable-relation validator; the kind still returns `{}` for an empty map.
+- The branch was created from the clean current local `main`, without switching back or
+  pulling, following the user's explicit instruction not to touch `main`. This report is
+  the only changed file outside the implementation/test acceptance list, as requested.
+
+Only verified against fake MODX; the architect should check on the stand: real create
+processor validation/events/cache refresh, generated resource aliases and URIs, static
+file isolation, plugin event copying, stored-only TV copying (including default-only and
+detached TVs), parent journaling, and undo. The fake does not reproduce all MODX processor
+side effects or third-party plugins.
+
+Open questions: confirm the overloaded `name` interpretation above. Also, the prescribed
+copy retains `pub_date`; the existing resource processor behavior can publish immediately
+for a past publish date even with `published: false`. Scheduling policy was left unchanged
+because the decided design only resets the listed publication/URL fields. Check this case
+on the stand and decide separately whether copies should clear the publication schedule.
