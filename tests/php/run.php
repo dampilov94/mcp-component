@@ -2473,7 +2473,7 @@ $ivan = $call($uAdmin, 'create', array('kind' => 'user', 'fields' => array('user
 $ivanId = $ivan['id'];
 check('user: create result', is_int($ivanId) && $ivan['changeset_id'] !== null && $ivan['reversible'] === true && !$leaks($ivan)
     && in_array('password', $ivan['changed'], true) && in_array('email', $ivan['changed'], true) && in_array('username', $ivan['changed'], true) && !in_array('profile', $ivan['changed'], true));
-check('user: the kind list of an admin token ends with user', array_slice(array_column($call($uAdmin, 'describe')['kinds'], 'kind'), -2) === array('namespace', 'user'));
+check('user: the kind list of an admin token has user after namespace', array_slice(array_column($call($uAdmin, 'describe')['kinds'], 'kind'), 14, 2) === array('namespace', 'user'));
 check('user: create stored the user and its profile', $userRow($ivanId)['username'] === 'иван' && $userRow($ivanId)['active'] === '1' && $userRow($ivanId)['sudo'] === '0'
     && $userRow($ivanId)['class_key'] === 'modUser' && $userRow($ivanId)['password'] === modX::fakeHash($secretPw, $userRow($ivanId)['salt'])
     && $profileRow($ivanId)['email'] === 'ivan@example.com' && $profileRow($ivanId)['fullname'] === 'Иван Петров' && $profileRow($ivanId)['comment'] === 'Редактор сайта');
@@ -2787,6 +2787,469 @@ $e = throws('users: the service user cannot leave a group', ApiException::class,
     $call($loginAdmin, 'invoke', array('kind' => 'user_group', 'id' => 1, 'op' => 'remove_member', 'args' => array('user' => 99)));
 });
 check('users: the refusal names the service user', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'service user') !== false);
+
+// --- Access kinds: access_policy, policy_template, context_access, resourcegroup_access (task 18) ---
+$aclDir = $siteDir . '/acl';
+mkdir($aclDir . '/core', 0700, true);
+$aSite = fakeSite($aclDir);
+$aActor = function ($scope, array $token = array()) use ($aSite, $dev) {
+    $c = new Context($aSite, $token + array('scope' => $scope) + $dev->token, $dev->corePath, function () {});
+    $c->sessionId = 'session-access0001';
+    return $c;
+};
+$aAdmin = $aActor('admin');
+$aTables = array('modAccessPolicy', 'modAccessPolicyTemplate', 'modAccessPermission', 'modAccessContext', 'modAccessResourceGroup');
+$aState = function () use ($aSite, $aTables) { $dump = array(); foreach ($aTables as $table) { $dump[$table] = $aSite->tableDump($table); } return json_encode($dump); };
+$aLast = function () use ($aAdmin) { return $aAdmin->journal()->lastChangesetId(); };
+$aFlushes = function () use ($aSite) { return $aSite->getCacheManager()->flushes; };
+// A refused write: the right error, no changeset, nothing changed on the site.
+$aRefuse = function ($label, callable $fn, $code = 'validation_failed') use ($aState, $aLast) {
+    $before = $aState();
+    $last = $aLast();
+    $e = throws("access: {$label}", ApiException::class, $fn);
+    check("access: {$label} is {$code} and changes nothing", $e && $e->errorCode === $code && $aLast() === $last && $aState() === $before);
+    return $e;
+};
+$aRow = function ($class, $id) use ($aSite) { return $aSite->row($class, $id); };
+$aPlantPolicy = function ($id, $name, $template, array $permissions, $parent = 0) use ($aSite) {
+    $aSite->store('modAccessPolicy', array('id' => $id, 'name' => $name, 'description' => '', 'parent' => $parent, 'template' => $template,
+        'class' => '', 'data' => $permissions, 'lexicon' => 'permissions'));
+};
+$aPlantTemplate = function ($id, $name, array $permissions) use ($aSite) {
+    $aSite->store('modAccessPolicyTemplate', array('id' => $id, 'name' => $name, 'description' => '', 'template_group' => 0, 'lexicon' => 'permissions'));
+    foreach ($permissions as $permission) {
+        $aSite->store('modAccessPermission', array('id' => $aSite->nextId('modAccessPermission'), 'template' => $id, 'name' => $permission, 'description' => $permission . '_desc', 'value' => 1));
+    }
+};
+$aPlantAcl = function ($class, $id, $principal, $target, $policy, array $more = array()) use ($aSite) {
+    $aSite->store($class, $more + array('id' => $id, 'target' => $target, 'principal_class' => 'modUserGroup', 'principal' => $principal, 'authority' => 0, 'policy' => $policy)
+        + ($class === 'modAccessResourceGroup' ? array('context_key' => 'web') : array()));
+};
+foreach (array(1 => 'Administrator', 2 => 'Редакторы', 3 => 'Авторы') as $groupId => $groupName) {
+    $aSite->store('modUserGroup', array('id' => $groupId, 'name' => $groupName, 'description' => '', 'parent' => 0, 'rank' => 0, 'dashboard' => 1));
+}
+foreach (array('web' => 'Web', 'mgr' => 'Manager', 'shop' => 'Магазин') as $contextKey => $contextName) {
+    $aSite->store('modContext', array('key' => $contextKey, 'name' => $contextName, 'description' => '', 'rank' => 0));
+}
+$aSite->store('modResourceGroup', array('id' => 1, 'name' => 'Закрытые'));
+$aSite->store('modResourceGroup', array('id' => 2, 'name' => 'Public'));
+// What MODX installs (ids as in the install vehicles), a custom template and policies, and the Administrator group's own rules.
+$aPlantTemplate(1, 'ContextTemplate', array('load', 'list', 'view', 'save'));
+$aPlantTemplate(2, 'ResourceTemplate', array('load', 'list', 'view', 'save', 'delete'));
+$aPlantTemplate(40, 'Шаблон гостя', array('load', 'view'));
+$aPlantTemplate(41, 'Шаблон контекста', array('load', 'list'));
+$aPlantTemplate(42, 'Шаблон со встроенной политикой', array('load'));
+$aPlantPolicy(1, 'Resource', 2, array('load' => true, 'list' => true, 'view' => true, 'save' => true, 'delete' => true));
+$aPlantPolicy(2, 'Administrator', 1, array('load' => true, 'list' => true, 'view' => true, 'save' => true));
+$aPlantPolicy(3, 'Load Only', 1, array('load' => true));
+$aPlantPolicy(11, 'Context', 1, array('load' => true, 'view' => true));
+$aPlantPolicy(30, 'Гость', 40, array('load' => true, 'view' => true));            // used by a resource group rule of group 1
+$aPlantPolicy(31, 'Контекстный гость', 41, array('load' => true));                // used by a context rule of group 1
+$aPlantPolicy(32, 'Дочерний гость', 41, array('load' => true), 31);              // a child of policy 31
+$aPlantPolicy(33, 'load only', 42, array('load' => true));                        // a built-in name in other case, in a custom template
+$aPlantPolicy(34, 'Родитель без защиты', 41, array('load' => true));
+$aPlantPolicy(35, 'Дитя под защитой', 41, array('load' => true), 34);
+$aPlantAcl('modAccessContext', 1, 1, 'web', 2);
+$aPlantAcl('modAccessContext', 2, 1, 'mgr', 11);
+$aPlantAcl('modAccessContext', 3, 1, 'shopx', 31);                                // group 1 uses policy 31 (a context that does not matter)
+$aPlantAcl('modAccessResourceGroup', 1, 1, 1, 30);
+$aPlantAcl('modAccessResourceGroup', 2, 1, 2, 35);                                // group 1 uses policy 35, the child of 34
+$aAdminRules = $aRow('modAccessContext', 1);
+
+// ---- describe, scopes and groups ----
+foreach (array('access_policy', 'policy_template', 'context_access', 'resourcegroup_access') as $kindName) {
+    $described = $call($aAdmin, 'describe', array('kind' => $kindName));
+    check("access: describe {$kindName}", $described['group'] === 'access' && $described['read_scope'] === 'admin' && $described['write_scope'] === 'admin' && $described['key_type'] === 'integer');
+}
+$aFields = function ($kindName) use ($call, $aAdmin) { return array_column($call($aAdmin, 'describe', array('kind' => $kindName))['fields'], null, 'name'); };
+$policyFields = $aFields('access_policy');
+check('access: policy fields', $policyFields['permissions']['type'] === 'object' && $policyFields['name']['required'] === true && $policyFields['template']['required'] === true
+    && $policyFields['name']['list'] === true && $policyFields['template']['list'] === true && $call($aAdmin, 'describe', array('kind' => 'access_policy'))['name_field'] === 'name');
+$templateDescribed = $call($aAdmin, 'describe', array('kind' => 'policy_template'));
+check('access: template relation permissions is read-only', array_column($templateDescribed['relations'], 'name') === array('permissions') && $templateDescribed['relations'][0]['writable'] === false);
+$contextFields = $aFields('context_access');
+check('access: context rule fields', $call($aAdmin, 'describe', array('kind' => 'context_access'))['name_field'] === 'id' && $contextFields['target']['type'] === 'string' && $contextFields['target']['required'] === true
+    && $contextFields['label']['read_only'] === true && $contextFields['label']['list'] === true && $contextFields['principal_class']['read_only'] === true
+    && $contextFields['principal']['required'] === true && $contextFields['authority']['required'] === true && $contextFields['policy']['required'] === true);
+$groupRuleFields = $aFields('resourcegroup_access');
+check('access: resource group rule fields', $groupRuleFields['target']['type'] === 'integer' && $groupRuleFields['context_key']['list'] === true && $groupRuleFields['label']['read_only'] === true);
+foreach (array('read', 'content', 'develop') as $scope) {
+    foreach (array('access_policy', 'policy_template', 'context_access', 'resourcegroup_access') as $kindName) {
+        foreach (array('list' => array('kind' => $kindName), 'get' => array('kind' => $kindName, 'id' => 1), 'create' => array('kind' => $kindName, 'fields' => array('name' => 'x'))) as $action => $args) {
+            $e = throws("access: {$scope} token, {$action} {$kindName}", ApiException::class, function () use ($call, $aActor, $scope, $action, $args) { $call($aActor($scope), $action, $args); });
+            check("access: {$scope} token cannot {$action} {$kindName}", $e && $e->errorCode === 'forbidden_scope');
+        }
+    }
+}
+check('access: an admin token lists the four kinds, a develop token does not', count(array_intersect(array('access_policy', 'policy_template', 'context_access', 'resourcegroup_access'),
+    array_column($call($aActor('develop'), 'describe')['kinds'], 'kind'))) === 0);
+$aSite->options['modxmcp.disabled_groups'] = 'access';
+foreach (array('access_policy', 'policy_template', 'context_access', 'resourcegroup_access') as $kindName) {
+    foreach (array('list', 'describe') as $action) {
+        $e = throws("access: disabled group blocks {$kindName} {$action}", ApiException::class, function () use ($call, $aAdmin, $kindName, $action) { $call($aAdmin, $action, array('kind' => $kindName)); });
+        check("access: {$kindName} is unavailable when the access group is off", $e && $e->errorCode === 'unavailable');
+    }
+}
+$aSite->options['modxmcp.disabled_groups'] = '';
+
+// ---- access_policy: create, get, list ----
+$flushBase = $aFlushes();
+$editors = $call($aAdmin, 'create', array('kind' => 'access_policy', 'fields' => array('name' => 'Редактор контента', 'template' => 2, 'description' => 'Правит страницы')));
+$editorsId = $editors['id'];
+check('access: policy create', is_int($editorsId) && $editors['changeset_id'] !== null && $editors['reversible'] === true && preg_match('/^[a-f0-9]{64}$/', $editors['revision'])
+    && $editors['changed'] === array('name', 'description', 'template', 'lexicon', 'permissions') && $aFlushes() > $flushBase);
+$editorsGot = $call($aAdmin, 'get', array('kind' => 'access_policy', 'id' => $editorsId));
+check('access: a new policy starts with the template permissions on, keys sorted', json_encode($editorsGot['fields']['permissions']) === '{"delete":true,"list":true,"load":true,"save":true,"view":true}'
+    && $editorsGot['fields']['name'] === 'Редактор контента' && $editorsGot['fields']['template'] === 2 && $editorsGot['fields']['parent'] === 0 && $editorsGot['revision'] === $editors['revision']);
+$aRefuse('policy get of a name that does not exist', function () use ($call, $aAdmin) { $call($aAdmin, 'get', array('kind' => 'access_policy', 'name' => 'нет такой')); }, 'not_found');
+check('access: policy get by name', $call($aAdmin, 'get', array('kind' => 'access_policy', 'name' => 'Редактор контента'))['id'] === $editorsId);
+$withMap = $call($aAdmin, 'create', array('kind' => 'access_policy', 'fields' => array('name' => 'Только чтение', 'template' => 2, 'permissions' => array('view' => true, 'load' => true, 'save' => false))));
+$withMapGot = $call($aAdmin, 'get', array('kind' => 'access_policy', 'id' => $withMap['id']));
+check('access: policy create with permissions as an object', json_encode($withMapGot['fields']['permissions']) === '{"load":true,"save":false,"view":true}'
+    && $aRow('modAccessPolicy', $withMap['id'])['data'] === '{"load":true,"save":false,"view":true}' && in_array('permissions', $withMap['changed'], true));
+$emptyMap = $call($aAdmin, 'create', array('kind' => 'access_policy', 'fields' => array('name' => 'Без прав', 'template' => 2, 'permissions' => new stdClass())));
+$emptyGot = $call($aAdmin, 'get', array('kind' => 'access_policy', 'id' => $emptyMap['id']));
+check('access: an empty permissions object stays empty and encodes as {}', json_encode($emptyGot['fields']['permissions']) === '{}' && json_encode($call($aAdmin, 'get', array('kind' => 'access_policy', 'id' => $emptyMap['id'], 'fields' => array('permissions')))['fields']) === '{"permissions":{}}');
+foreach (array(
+    'a non-boolean value' => array('load' => 'yes'),
+    'a number as value' => array('load' => 1),
+    'null as value' => array('load' => null),
+    'a nested object' => array('load' => array('x' => true)),
+    'a list' => array(true, false),
+    'an empty name' => array('' => true),
+) as $label => $bad) {
+    $aRefuse("permissions with {$label} (create)", function () use ($call, $aAdmin, $bad) { $call($aAdmin, 'create', array('kind' => 'access_policy', 'fields' => array('name' => 'Плохая', 'template' => 2, 'permissions' => $bad))); });
+    $aRefuse("permissions with {$label} (update)", function () use ($call, $aAdmin, $bad, $editorsId) { $call($aAdmin, 'update', array('kind' => 'access_policy', 'id' => $editorsId, 'fields' => array('permissions' => $bad))); });
+}
+$aRefuse('permissions that are a string', function () use ($call, $aAdmin, $editorsId) { $call($aAdmin, 'update', array('kind' => 'access_policy', 'id' => $editorsId, 'fields' => array('permissions' => '{"load":true}'))); });
+$aRefuse('a policy without a template', function () use ($call, $aAdmin) { $call($aAdmin, 'create', array('kind' => 'access_policy', 'fields' => array('name' => 'Без шаблона'))); });
+$aRefuse('a policy with an unknown template passes the MODX refusal on', function () use ($call, $aAdmin) { $call($aAdmin, 'create', array('kind' => 'access_policy', 'fields' => array('name' => 'Сирота', 'template' => 999))); });
+$aRefuse('a duplicate policy name is MODX\'s refusal', function () use ($call, $aAdmin) { $call($aAdmin, 'create', array('kind' => 'access_policy', 'fields' => array('name' => 'Редактор контента', 'template' => 2))); });
+$policyList = $call($aAdmin, 'list', array('kind' => 'access_policy', 'query' => 'контент'));
+check('access: policy list with a Cyrillic query', $policyList['total'] === 1 && array_keys($policyList['items'][0]) === array('id', 'name', 'template') && $policyList['items'][0]['name'] === 'Редактор контента');
+check('access: policy list where template', $call($aAdmin, 'list', array('kind' => 'access_policy', 'where' => array('template' => 42)))['total'] === 1);
+$aRefuse('list where permissions', function () use ($call, $aAdmin) { $call($aAdmin, 'list', array('kind' => 'access_policy', 'where' => array('permissions' => 'x'))); });
+check('access: policy list can ask for permissions', $call($aAdmin, 'list', array('kind' => 'access_policy', 'where' => array('template' => 42), 'fields' => array('name', 'permissions')))['items'][0]['permissions'] == (object) array('load' => true));
+
+// ---- access_policy: update replaces the map, diff, dry run, undo ----
+$dataBefore = $aRow('modAccessPolicy', $editorsId)['data'];
+$describe = $call($aAdmin, 'update', array('kind' => 'access_policy', 'id' => $editorsId, 'fields' => array('description' => 'Редактирование страниц')));
+check('access: updating another field leaves the permissions text alone', $describe['changed'] === array('description') && $aRow('modAccessPolicy', $editorsId)['data'] === $dataBefore);
+$flushBase = $aFlushes();
+$dryMap = $call($aAdmin, 'update', array('kind' => 'access_policy', 'id' => $editorsId, 'dry_run' => true, 'fields' => array('permissions' => array('view' => true, 'save' => true, 'load' => true, 'list' => true, 'delete' => true))));
+check('access: dry run sees the same map in another key order as no change', $dryMap['would_change'] === array() && $aFlushes() === $flushBase);
+$dryMap = $call($aAdmin, 'update', array('kind' => 'access_policy', 'id' => $editorsId, 'dry_run' => true, 'fields' => array('permissions' => array('view' => true))));
+check('access: dry run names a changed map and writes nothing', $dryMap['would_change'] === array('permissions') && $aRow('modAccessPolicy', $editorsId)['data'] === $dataBefore);
+$replaced = $call($aAdmin, 'update', array('kind' => 'access_policy', 'id' => $editorsId, 'fields' => array('permissions' => array('view' => true, 'load' => true, 'publish' => false))));
+check('access: update replaces the whole map', $replaced['changed'] === array('permissions') && $replaced['changeset_id'] !== null && $aFlushes() > $flushBase
+    && json_encode($call($aAdmin, 'get', array('kind' => 'access_policy', 'id' => $editorsId))['fields']['permissions']) === '{"load":true,"publish":false,"view":true}');
+$mapDiff = $call($aAdmin, 'history_diff', array('changeset_id' => $replaced['changeset_id']));
+check('access: the diff shows the old and the new map as objects', json_encode($mapDiff['objects'][0]['changed']['permissions']) === '{"old":{"delete":true,"list":true,"load":true,"save":true,"view":true},"new":{"load":true,"publish":false,"view":true}}');
+$sameMap = $call($aAdmin, 'update', array('kind' => 'access_policy', 'id' => $editorsId, 'fields' => array('permissions' => array('publish' => false, 'load' => true, 'view' => true))));
+check('access: sending the same map again is no change', $sameMap['changeset_id'] === null && $sameMap['changed'] === array());
+$flushBase = $aFlushes();
+$undoMap = $call($aAdmin, 'undo', array('changeset_id' => $replaced['changeset_id'], 'confirm' => true));
+check('access: undo of a permissions change restores the old map and flushes the permissions', json_encode($call($aAdmin, 'get', array('kind' => 'access_policy', 'id' => $editorsId))['fields']['permissions']) === '{"delete":true,"list":true,"load":true,"save":true,"view":true}'
+    && $aFlushes() > $flushBase);
+$undoUndo = $call($aAdmin, 'undo', array('changeset_id' => $undoMap['changeset_id'], 'confirm' => true));
+check('access: undo of the undo brings the replaced map back', json_encode($call($aAdmin, 'get', array('kind' => 'access_policy', 'id' => $editorsId))['fields']['permissions']) === '{"load":true,"publish":false,"view":true}');
+
+// ---- access_policy: duplicate, delete, undo of each ----
+$copy = $call($aAdmin, 'duplicate', array('kind' => 'access_policy', 'id' => $editorsId, 'new_name' => 'Копия редактора'));
+$copyGot = $call($aAdmin, 'get', array('kind' => 'access_policy', 'id' => $copy['id']));
+check('access: policy duplicate copies the permissions and the template', $copy['name'] === 'Копия редактора' && $copy['source_id'] === $editorsId
+    && json_encode($copyGot['fields']['permissions']) === '{"load":true,"publish":false,"view":true}' && $copyGot['fields']['template'] === 2 && $copyGot['fields']['description'] === 'Редактирование страниц');
+$copy2 = $call($aAdmin, 'duplicate', array('kind' => 'access_policy', 'id' => $editorsId));
+check('access: policy duplicate default name', $copy2['name'] === 'Редактор контента copy');
+$call($aAdmin, 'undo', array('changeset_id' => $copy2['changeset_id'], 'confirm' => true));
+check('access: undo of a duplicate removes the copy', $aSite->getCount('modAccessPolicy', array('name' => 'Редактор контента copy')) === 0);
+$flushBase = $aFlushes();
+$deleted = $call($aAdmin, 'delete', array('kind' => 'access_policy', 'id' => $copy['id']));
+check('access: policy delete', $deleted['deleted'] === true && $aSite->getCount('modAccessPolicy', array('id' => $copy['id'])) === 0 && $aFlushes() > $flushBase);
+$call($aAdmin, 'undo', array('changeset_id' => $deleted['changeset_id'], 'confirm' => true));
+check('access: undo of a delete brings the policy back with its id and map', json_encode($call($aAdmin, 'get', array('kind' => 'access_policy', 'id' => $copy['id']))['fields']['permissions']) === '{"load":true,"publish":false,"view":true}'
+    && $aFlushes() > $flushBase);
+$fresh = $call($aAdmin, 'create', array('kind' => 'access_policy', 'fields' => array('name' => 'Временная', 'template' => 1)));
+$flushBase = $aFlushes();
+$call($aAdmin, 'undo', array('changeset_id' => $fresh['changeset_id'], 'confirm' => true));
+check('access: undo of a create removes the policy and flushes', $aSite->getCount('modAccessPolicy', array('id' => $fresh['id'])) === 0 && $aFlushes() > $flushBase);
+
+// ---- access_policy: delete cascades to child policies, and their undo ----
+$parent = $call($aAdmin, 'create', array('kind' => 'access_policy', 'fields' => array('name' => 'Родительская', 'template' => 1)));
+$child = $call($aAdmin, 'create', array('kind' => 'access_policy', 'fields' => array('name' => 'Дочерняя', 'template' => 1, 'parent' => $parent['id'], 'permissions' => array('load' => true))));
+$grandchild = $call($aAdmin, 'create', array('kind' => 'access_policy', 'fields' => array('name' => 'Внучка', 'template' => 1, 'parent' => $child['id'])));
+$cascadeDelete = $call($aAdmin, 'delete', array('kind' => 'access_policy', 'id' => $parent['id']));
+check('access: deleting a policy deletes its children (MODX composite) and journals each', $aSite->getCount('modAccessPolicy', array('id' => $child['id'])) === 0 && $aSite->getCount('modAccessPolicy', array('id' => $grandchild['id'])) === 0
+    && count($call($aAdmin, 'history_diff', array('changeset_id' => $cascadeDelete['changeset_id']))['objects']) === 3);
+$call($aAdmin, 'undo', array('changeset_id' => $cascadeDelete['changeset_id'], 'confirm' => true));
+check('access: undo of the delete brings parent, child and grandchild back as themselves', $aRow('modAccessPolicy', $parent['id'])['name'] === 'Родительская'
+    && (int) $aRow('modAccessPolicy', $child['id'])['parent'] === $parent['id'] && (int) $aRow('modAccessPolicy', $grandchild['id'])['parent'] === $child['id']
+    && $aRow('modAccessPolicy', $child['id'])['data'] === '{"load":true}');
+$dryCascade = $call($aAdmin, 'delete', array('kind' => 'access_policy', 'id' => $parent['id'], 'dry_run' => true));
+check('access: delete dry run changes nothing', $dryCascade['dry_run'] === true && $aSite->getCount('modAccessPolicy', array('id' => $parent['id'])) === 1);
+// MODX would leave a rule that uses the policy dangling (architect's review): the delete is refused.
+$aPlantAcl('modAccessContext', 50, 2, 'shop', $child['id'], array('authority' => 5));
+$aRefuse('delete of a policy still used by a rule', function () use ($call, $aAdmin, $child) { $call($aAdmin, 'delete', array('kind' => 'access_policy', 'id' => $child['id'])); });
+$aRefuse('delete of a parent whose child policy is used by a rule', function () use ($call, $aAdmin, $parent) { $call($aAdmin, 'delete', array('kind' => 'access_policy', 'id' => $parent['id'])); });
+check('access: the used policy and its rule are untouched', $aRow('modAccessContext', 50) !== null && $aSite->getCount('modAccessPolicy', array('id' => $child['id'])) === 1);
+$aSite->drop('modAccessContext', $aRow('modAccessContext', 50));
+
+// ---- access_policy: safety rules ----
+foreach (array('Administrator' => 2, 'Resource' => 1, 'Context' => 11, 'Load Only' => 3, 'load only (other case)' => 33) as $label => $builtinId) {
+    $aRefuse("update of the built-in policy {$label}", function () use ($call, $aAdmin, $builtinId) { $call($aAdmin, 'update', array('kind' => 'access_policy', 'id' => $builtinId, 'fields' => array('description' => 'x'))); });
+    $aRefuse("permissions of the built-in policy {$label}", function () use ($call, $aAdmin, $builtinId) { $call($aAdmin, 'update', array('kind' => 'access_policy', 'id' => $builtinId, 'fields' => array('permissions' => array('load' => false)))); });
+    $aRefuse("delete of the built-in policy {$label}", function () use ($call, $aAdmin, $builtinId) { $call($aAdmin, 'delete', array('kind' => 'access_policy', 'id' => $builtinId)); });
+    $aRefuse("dry-run update of the built-in policy {$label}", function () use ($call, $aAdmin, $builtinId) { $call($aAdmin, 'update', array('kind' => 'access_policy', 'id' => $builtinId, 'dry_run' => true, 'fields' => array('description' => 'x'))); });
+    $aRefuse("dry-run delete of the built-in policy {$label}", function () use ($call, $aAdmin, $builtinId) { $call($aAdmin, 'delete', array('kind' => 'access_policy', 'id' => $builtinId, 'dry_run' => true)); });
+}
+$adminCopy = $call($aAdmin, 'duplicate', array('kind' => 'access_policy', 'id' => 2));
+check('access: a built-in policy can be duplicated and the copy is an ordinary policy', $adminCopy['name'] === 'Administrator copy'
+    && $call($aAdmin, 'update', array('kind' => 'access_policy', 'id' => $adminCopy['id'], 'fields' => array('permissions' => array('load' => true))))['changed'] === array('permissions')
+    && $call($aAdmin, 'delete', array('kind' => 'access_policy', 'id' => $adminCopy['id']))['deleted'] === true);
+foreach (array('used by a resource group rule of group 1' => 30, 'used by a context rule of group 1' => 31) as $label => $usedId) {
+    $aRefuse("update of a policy {$label}", function () use ($call, $aAdmin, $usedId) { $call($aAdmin, 'update', array('kind' => 'access_policy', 'id' => $usedId, 'fields' => array('description' => 'x'))); });
+    $aRefuse("permissions of a policy {$label}", function () use ($call, $aAdmin, $usedId) { $call($aAdmin, 'update', array('kind' => 'access_policy', 'id' => $usedId, 'fields' => array('permissions' => array()))); });
+    $aRefuse("delete of a policy {$label}", function () use ($call, $aAdmin, $usedId) { $call($aAdmin, 'delete', array('kind' => 'access_policy', 'id' => $usedId)); });
+}
+$usedCopy = $call($aAdmin, 'duplicate', array('kind' => 'access_policy', 'id' => 30, 'new_name' => 'Гость 2'));
+check('access: a policy that group 1 uses can be duplicated, the copy is free', $call($aAdmin, 'update', array('kind' => 'access_policy', 'id' => $usedCopy['id'], 'fields' => array('description' => 'ok')))['changed'] === array('description')
+    && $call($aAdmin, 'delete', array('kind' => 'access_policy', 'id' => $usedCopy['id']))['deleted'] === true);
+$aRefuse('delete of a policy whose child group 1 uses', function () use ($call, $aAdmin) { $call($aAdmin, 'delete', array('kind' => 'access_policy', 'id' => 34)); });
+$aRefuse('delete of a policy whose child group 1 uses (dry run)', function () use ($call, $aAdmin) { $call($aAdmin, 'delete', array('kind' => 'access_policy', 'id' => 34, 'dry_run' => true)); });
+$aPlantPolicy(36, 'Родитель встроенной', 1, array());
+$aPlantPolicy(37, 'Developer', 1, array(), 36);
+$aRefuse('delete of the parent of a built-in policy', function () use ($call, $aAdmin) { $call($aAdmin, 'delete', array('kind' => 'access_policy', 'id' => 36)); });
+// the policy of group 3 only is free
+$aPlantAcl('modAccessContext', 60, 3, 'shop', $editorsId);
+check('access: a policy that another group uses can still be changed', $call($aAdmin, 'update', array('kind' => 'access_policy', 'id' => $editorsId, 'fields' => array('description' => 'для авторов')))['changed'] === array('description'));
+$aSite->drop('modAccessContext', $aRow('modAccessContext', 60));
+
+// undo doors for policies
+$door = $call($aAdmin, 'create', array('kind' => 'access_policy', 'fields' => array('name' => 'Дверь', 'template' => 1)));
+$doorEdit = $call($aAdmin, 'update', array('kind' => 'access_policy', 'id' => $door['id'], 'fields' => array('description' => 'правка')));
+$aPlantAcl('modAccessContext', 70, 1, 'shopx', $door['id']);   // a person made group 1 use it in the manager
+$aRefuse('undo of an edit after group 1 started to use the policy', function () use ($call, $aAdmin, $doorEdit) { $call($aAdmin, 'undo', array('changeset_id' => $doorEdit['changeset_id'], 'confirm' => true)); }, 'not_reversible');
+$aRefuse('undo of the create after group 1 started to use the policy', function () use ($call, $aAdmin, $door) { $call($aAdmin, 'undo', array('changeset_id' => $door['changeset_id'], 'confirm' => true, 'force' => true)); }, 'not_reversible');
+$aRefuse('restoring the state of a policy that group 1 uses', function () use ($aSite, $aAdmin, $door) {
+    $kind = $aAdmin->kinds->get('access_policy');
+    \ModxMCP\Journal\Snapshot::restore($aSite, $kind, $door['id'], \ModxMCP\Journal\Snapshot::capture($aSite, $kind, $door['id']));
+}, 'not_reversible');
+$aSite->drop('modAccessContext', $aRow('modAccessContext', 70));
+$rename = $call($aAdmin, 'update', array('kind' => 'access_policy', 'id' => $door['id'], 'fields' => array('description' => 'второй')));
+$renamed = $aRow('modAccessPolicy', $door['id']);
+$aSite->store('modAccessPolicy', array('name' => 'Developer') + $renamed);   // renamed to a built-in name outside the API
+$aRefuse('undo of an edit after the policy was renamed to a built-in name', function () use ($call, $aAdmin, $rename) { $call($aAdmin, 'undo', array('changeset_id' => $rename['changeset_id'], 'confirm' => true, 'force' => true)); }, 'not_reversible');
+$aSite->store('modAccessPolicy', array('name' => 'Дверь') + $aRow('modAccessPolicy', $door['id']));
+
+// ---- policy_template ----
+$tpl = $call($aAdmin, 'create', array('kind' => 'policy_template', 'fields' => array('name' => 'Шаблон редакторов', 'description' => 'Для редакторов', 'template_group' => 0)));
+$tplId = $tpl['id'];
+$flushBase = $aFlushes();
+$tplGot = $call($aAdmin, 'get', array('kind' => 'policy_template', 'id' => $tplId));
+check('access: template create and get', $tpl['changed'] === array('name', 'description', 'lexicon') && $tplGot['fields']['name'] === 'Шаблон редакторов' && $tplGot['relations']['permissions'] === array());
+foreach (array('load', 'view') as $permission) {
+    $aSite->store('modAccessPermission', array('id' => $aSite->nextId('modAccessPermission'), 'template' => $tplId, 'name' => $permission, 'description' => 'Право ' . $permission, 'value' => 1));
+}
+check('access: the permissions of a template are shown', $call($aAdmin, 'get', array('kind' => 'policy_template', 'id' => $tplId))['relations']['permissions']
+    === array(array('name' => 'load', 'description' => 'Право load', 'value' => 1), array('name' => 'view', 'description' => 'Право view', 'value' => 1)));
+$aRefuse('permissions of a template cannot be written', function () use ($call, $aAdmin, $tplId) { $call($aAdmin, 'update', array('kind' => 'policy_template', 'id' => $tplId, 'relations' => array('permissions' => array()))); });
+check('access: template list', $call($aAdmin, 'list', array('kind' => 'policy_template', 'query' => 'редакторов'))['items'][0]['id'] === $tplId
+    && array_keys($call($aAdmin, 'list', array('kind' => 'policy_template'))['items'][0]) === array('id', 'name', 'template_group'));
+$tplUpd = $call($aAdmin, 'update', array('kind' => 'policy_template', 'id' => $tplId, 'fields' => array('description' => 'Новое описание', 'template_group' => 2)));
+check('access: template update flushes the permissions', $tplUpd['changed'] === array('description', 'template_group') && $aFlushes() > $flushBase
+    && $call($aAdmin, 'get', array('kind' => 'policy_template', 'id' => $tplId))['relations']['permissions'] !== array());
+$tplDiff = $call($aAdmin, 'history_diff', array('changeset_id' => $tplUpd['changeset_id']));
+check('access: template diff', $tplDiff['objects'][0]['changed']['description'] === array('old' => 'Для редакторов', 'new' => 'Новое описание'));
+$call($aAdmin, 'undo', array('changeset_id' => $tplUpd['changeset_id'], 'confirm' => true));
+check('access: undo of a template update', $call($aAdmin, 'get', array('kind' => 'policy_template', 'id' => $tplId))['fields']['description'] === 'Для редакторов');
+$tplContext = $aActor('admin');
+$tplCopy = $call($tplContext, 'duplicate', array('kind' => 'policy_template', 'id' => $tplId, 'new_name' => 'Копия шаблона'));
+check('access: template duplicate (the permissions are not copied, and it says so)', $tplCopy['name'] === 'Копия шаблона' && in_array('Not copied: permissions', $tplContext->warnings, true)
+    && $call($aAdmin, 'get', array('kind' => 'policy_template', 'id' => $tplCopy['id']))['relations']['permissions'] === array());
+$call($aAdmin, 'undo', array('changeset_id' => $tplCopy['changeset_id'], 'confirm' => true));
+check('access: undo of a template duplicate', $aSite->getCount('modAccessPolicyTemplate', array('name' => 'Копия шаблона')) === 0);
+// delete: the template's policies and permissions go with it
+$inTpl = $call($aAdmin, 'create', array('kind' => 'access_policy', 'fields' => array('name' => 'Политика в шаблоне', 'template' => $tplId, 'permissions' => array('load' => true))));
+$inTplChild = $call($aAdmin, 'create', array('kind' => 'access_policy', 'fields' => array('name' => 'Дочерняя в шаблоне', 'template' => $tplId, 'parent' => $inTpl['id'])));
+$dryTpl = $call($aAdmin, 'delete', array('kind' => 'policy_template', 'id' => $tplId, 'dry_run' => true));
+check('access: template delete dry run reports the permissions', $dryTpl['would_delete']['related_rows'] === array('permissions' => 2) && $aRow('modAccessPolicyTemplate', $tplId) !== null);
+$flushBase = $aFlushes();
+$tplDel = $call($aAdmin, 'delete', array('kind' => 'policy_template', 'id' => $tplId));
+$tplDelDiff = $call($aAdmin, 'history_diff', array('changeset_id' => $tplDel['changeset_id']));
+check('access: deleting a template removes its permissions and its policies, each journaled', $aSite->getCount('modAccessPermission', array('template' => $tplId)) === 0
+    && $aSite->getCount('modAccessPolicy', array('template' => $tplId)) === 0 && count($tplDelDiff['objects']) === 3 && $aFlushes() > $flushBase
+    && array_count_values(array_column($tplDelDiff['objects'], 'kind')) == array('policy_template' => 1, 'access_policy' => 2));
+$flushBase = $aFlushes();
+$call($aAdmin, 'undo', array('changeset_id' => $tplDel['changeset_id'], 'confirm' => true));
+check('access: undo of the template delete restores the template, its permissions and its policies', $aSite->getCount('modAccessPermission', array('template' => $tplId)) === 2
+    && (int) $aRow('modAccessPolicy', $inTpl['id'])['template'] === $tplId && (int) $aRow('modAccessPolicy', $inTplChild['id'])['parent'] === $inTpl['id']
+    && $aRow('modAccessPolicy', $inTpl['id'])['data'] === '{"load":true}' && $aFlushes() > $flushBase);
+$tplFresh = $call($aAdmin, 'create', array('kind' => 'policy_template', 'fields' => array('name' => 'Шаблон-однодневка')));
+$call($aAdmin, 'undo', array('changeset_id' => $tplFresh['changeset_id'], 'confirm' => true));
+check('access: undo of a template create', $aSite->getCount('modAccessPolicyTemplate', array('name' => 'Шаблон-однодневка')) === 0);
+// safety
+foreach (array('ContextTemplate' => 1, 'ResourceTemplate' => 2) as $label => $builtinTpl) {
+    $aRefuse("update of the built-in template {$label}", function () use ($call, $aAdmin, $builtinTpl) { $call($aAdmin, 'update', array('kind' => 'policy_template', 'id' => $builtinTpl, 'fields' => array('description' => 'x'))); });
+    $aRefuse("delete of the built-in template {$label}", function () use ($call, $aAdmin, $builtinTpl) { $call($aAdmin, 'delete', array('kind' => 'policy_template', 'id' => $builtinTpl)); });
+    $aRefuse("dry-run delete of the built-in template {$label}", function () use ($call, $aAdmin, $builtinTpl) { $call($aAdmin, 'delete', array('kind' => 'policy_template', 'id' => $builtinTpl, 'dry_run' => true)); });
+}
+$builtinTplCopy = $call($aAdmin, 'duplicate', array('kind' => 'policy_template', 'id' => 1));
+check('access: a built-in template can be duplicated, the copy is free', $builtinTplCopy['name'] === 'ContextTemplate copy'
+    && $call($aAdmin, 'update', array('kind' => 'policy_template', 'id' => $builtinTplCopy['id'], 'fields' => array('description' => 'моя')))['changed'] === array('description')
+    && $call($aAdmin, 'delete', array('kind' => 'policy_template', 'id' => $builtinTplCopy['id']))['deleted'] === true);
+foreach (array('policy 30 (resource group rule)' => 40, 'policy 31 (context rule)' => 41) as $label => $usedTpl) {
+    $aRefuse("update of the template of {$label}", function () use ($call, $aAdmin, $usedTpl) { $call($aAdmin, 'update', array('kind' => 'policy_template', 'id' => $usedTpl, 'fields' => array('name' => 'Переименован'))); });
+    $aRefuse("delete of the template of {$label}", function () use ($call, $aAdmin, $usedTpl) { $call($aAdmin, 'delete', array('kind' => 'policy_template', 'id' => $usedTpl)); });
+}
+$usedTplCopy = $call($aAdmin, 'duplicate', array('kind' => 'policy_template', 'id' => 40, 'new_name' => 'Шаблон гостя 2'));
+check('access: the template of a policy that group 1 uses can be duplicated', $call($aAdmin, 'delete', array('kind' => 'policy_template', 'id' => $usedTplCopy['id']))['deleted'] === true);
+// 42 is free to edit (its policy is only built-in by name) but cannot be deleted: MODX would remove the built-in policy with it
+check('access: a template that holds a built-in policy by name can be edited', $call($aAdmin, 'update', array('kind' => 'policy_template', 'id' => 42, 'fields' => array('description' => 'ok')))['changed'] === array('description'));
+$aRefuse('delete of a template that would take a built-in policy with it', function () use ($call, $aAdmin) { $call($aAdmin, 'delete', array('kind' => 'policy_template', 'id' => 42)); });
+$aRefuse('dry-run delete of a template that would take a built-in policy with it', function () use ($call, $aAdmin) { $call($aAdmin, 'delete', array('kind' => 'policy_template', 'id' => 42, 'dry_run' => true)); });
+$tplDoor = $call($aAdmin, 'create', array('kind' => 'policy_template', 'fields' => array('name' => 'Шаблон-дверь')));
+$tplDoorEdit = $call($aAdmin, 'update', array('kind' => 'policy_template', 'id' => $tplDoor['id'], 'fields' => array('description' => 'правка')));
+$aSite->store('modAccessPolicyTemplate', array('name' => 'AdministratorTemplate') + $aRow('modAccessPolicyTemplate', $tplDoor['id']));
+$aRefuse('undo of an edit after the template was renamed to a built-in name', function () use ($call, $aAdmin, $tplDoorEdit) { $call($aAdmin, 'undo', array('changeset_id' => $tplDoorEdit['changeset_id'], 'confirm' => true, 'force' => true)); }, 'not_reversible');
+$aSite->store('modAccessPolicyTemplate', array('name' => 'Шаблон-дверь') + $aRow('modAccessPolicyTemplate', $tplDoor['id']));
+$aPlantPolicy(80, 'Политика двери', $tplDoor['id'], array('load' => true));
+$aPlantAcl('modAccessContext', 81, 1, 'shopx', 80);
+$aRefuse('undo of an edit after the template became the template of a policy group 1 uses', function () use ($call, $aAdmin, $tplDoorEdit) { $call($aAdmin, 'undo', array('changeset_id' => $tplDoorEdit['changeset_id'], 'confirm' => true, 'force' => true)); }, 'not_reversible');
+$aSite->drop('modAccessContext', $aRow('modAccessContext', 81));
+
+// ---- context_access ----
+$aPlantPolicy(90, 'Читатель контекста', 1, array('load' => true, 'view' => true));
+$flushBase = $aFlushes();
+$ruleDry = $call($aAdmin, 'create', array('kind' => 'context_access', 'dry_run' => true, 'fields' => array('target' => 'shop', 'principal' => 2, 'authority' => 9999, 'policy' => 90)));
+check('access: context rule create dry run changes nothing', $ruleDry['dry_run'] === true && $aSite->getCount('modAccessContext', array('target' => 'shop')) === 0);
+$rule = $call($aAdmin, 'create', array('kind' => 'context_access', 'fields' => array('target' => 'shop', 'principal' => 2, 'authority' => 9999, 'policy' => 90)));
+$ruleId = $rule['id'];
+$ruleDiff = $call($aAdmin, 'history_diff', array('changeset_id' => $rule['changeset_id']));
+$adminRuleOnShop = $aSite->getCollection('modAccessContext', array('principal' => 1, 'target' => 'shop'));
+check('access: context rule create', is_int($ruleId) && $rule['reversible'] === true && $aFlushes() > $flushBase && $aRow('modAccessContext', $ruleId)['principal_class'] === 'modUserGroup'
+    && $rule['changed'] === array('target', 'principal', 'authority', 'policy'));
+check('access: MODX\'s own Administrator rule on the new context is journaled with the create', count($adminRuleOnShop) === 1 && $adminRuleOnShop[0]->get('policy') == 11 && count($ruleDiff['objects']) === 2
+    && array_count_values(array_column($ruleDiff['objects'], 'op')) === array('create' => 2));
+$ruleGot = $call($aAdmin, 'get', array('kind' => 'context_access', 'id' => $ruleId));
+check('access: context rule get has the computed label', $ruleGot['fields']['label'] === 'Редакторы → shop (Читатель контекста, authority 9999)' && $ruleGot['fields']['principal_class'] === 'modUserGroup'
+    && $ruleGot['fields']['target'] === 'shop' && $ruleGot['fields']['principal'] === 2 && $ruleGot['fields']['policy'] === 90);
+$ruleList = $call($aAdmin, 'list', array('kind' => 'context_access', 'where' => array('target' => 'shop', 'principal' => 2)));
+check('access: context rule list with label, where target and principal', $ruleList['total'] === 1 && array_keys($ruleList['items'][0]) === array('id', 'target', 'principal', 'authority', 'policy', 'label')
+    && $ruleList['items'][0]['label'] === 'Редакторы → shop (Читатель контекста, authority 9999)');
+check('access: context rule list where policy', $call($aAdmin, 'list', array('kind' => 'context_access', 'where' => array('policy' => 90)))['total'] === 1);
+check('access: context rule list shows the Administrator rules too (read-only)', $call($aAdmin, 'list', array('kind' => 'context_access', 'where' => array('principal' => 1)))['total'] === 4);
+$aRefuse('list where label', function () use ($call, $aAdmin) { $call($aAdmin, 'list', array('kind' => 'context_access', 'where' => array('label' => 'x'))); });
+$e = $aRefuse('context rule lookup by name', function () use ($call, $aAdmin) { $call($aAdmin, 'get', array('kind' => 'context_access', 'name' => 'shop')); });
+check('access: the name lookup refusal says to use id', $e && strpos($e->getMessage(), 'use the id') !== false);
+$aRefuse('context rule update by name', function () use ($call, $aAdmin) { $call($aAdmin, 'update', array('kind' => 'context_access', 'name' => 'shop', 'fields' => array('authority' => 1))); });
+$aRefuse('context rule duplicate with new_name', function () use ($call, $aAdmin, $ruleId) { $call($aAdmin, 'duplicate', array('kind' => 'context_access', 'id' => $ruleId, 'new_name' => 'x')); });
+$aRefuse('a context rule for a context that does not exist is MODX\'s refusal', function () use ($call, $aAdmin) { $call($aAdmin, 'create', array('kind' => 'context_access', 'fields' => array('target' => 'нет', 'principal' => 2, 'authority' => 1, 'policy' => 90))); });
+$aRefuse('a context rule with a policy that does not exist', function () use ($call, $aAdmin) { $call($aAdmin, 'create', array('kind' => 'context_access', 'fields' => array('target' => 'web', 'principal' => 2, 'authority' => 1, 'policy' => 999))); });
+$aRefuse('the same context rule twice is MODX\'s refusal', function () use ($call, $aAdmin) { $call($aAdmin, 'create', array('kind' => 'context_access', 'fields' => array('target' => 'shop', 'principal' => 2, 'authority' => 1, 'policy' => 90))); });
+$aRefuse('a context rule without a policy', function () use ($call, $aAdmin) { $call($aAdmin, 'create', array('kind' => 'context_access', 'fields' => array('target' => 'shop', 'principal' => 2, 'authority' => 1))); });
+$aRefuse('principal_class cannot be written', function () use ($call, $aAdmin) { $call($aAdmin, 'create', array('kind' => 'context_access', 'fields' => array('target' => 'shop', 'principal' => 3, 'authority' => 1, 'policy' => 90, 'principal_class' => 'modUser'))); });
+$aRefuse('label cannot be written', function () use ($call, $aAdmin, $ruleId) { $call($aAdmin, 'update', array('kind' => 'context_access', 'id' => $ruleId, 'fields' => array('label' => 'x'))); });
+$flushBase = $aFlushes();
+$ruleUpdate = $call($aAdmin, 'update', array('kind' => 'context_access', 'id' => $ruleId, 'fields' => array('authority' => 5)));
+check('access: context rule update', $ruleUpdate['changed'] === array('authority') && (int) $aRow('modAccessContext', $ruleId)['authority'] === 5 && $aFlushes() > $flushBase
+    && $aRow('modAccessContext', $ruleId)['principal_class'] === 'modUserGroup');
+check('access: context rule update dry run', $call($aAdmin, 'update', array('kind' => 'context_access', 'id' => $ruleId, 'dry_run' => true, 'fields' => array('authority' => 5, 'policy' => 11)))['would_change'] === array('policy'));
+$ruleLabelDiff = $call($aAdmin, 'history_diff', array('changeset_id' => $ruleUpdate['changeset_id']));
+check('access: context rule diff', $ruleLabelDiff['objects'][0]['changed']['authority'] === array('old' => '9999', 'new' => '5'));
+$aRefuse('a context rule moved to a context that does not exist', function () use ($call, $aAdmin, $ruleId) { $call($aAdmin, 'update', array('kind' => 'context_access', 'id' => $ruleId, 'fields' => array('target' => 'нет'))); });
+$call($aAdmin, 'undo', array('changeset_id' => $ruleUpdate['changeset_id'], 'confirm' => true));
+check('access: undo of a context rule update', (int) $aRow('modAccessContext', $ruleId)['authority'] === 9999);
+$ruleCopy = $call($aAdmin, 'duplicate', array('kind' => 'context_access', 'id' => $ruleId, 'fields' => array('policy' => 11)));
+check('access: context rule duplicate with another policy', !array_key_exists('name', $ruleCopy) && $ruleCopy['source_id'] === $ruleId && $aRow('modAccessContext', $ruleCopy['id'])['policy'] === '11' && $aRow('modAccessContext', $ruleCopy['id'])['target'] === 'shop');
+$aRefuse('a copy that is identical is MODX\'s refusal', function () use ($call, $aAdmin, $ruleId) { $call($aAdmin, 'duplicate', array('kind' => 'context_access', 'id' => $ruleId)); });
+$flushBase = $aFlushes();
+$ruleDelete = $call($aAdmin, 'delete', array('kind' => 'context_access', 'id' => $ruleCopy['id']));
+check('access: context rule delete', $ruleDelete['deleted'] === true && $aRow('modAccessContext', $ruleCopy['id']) === null && $aFlushes() > $flushBase);
+$flushBase = $aFlushes();
+$call($aAdmin, 'undo', array('changeset_id' => $ruleDelete['changeset_id'], 'confirm' => true));
+check('access: undo of a context rule delete brings it back with its id', $aRow('modAccessContext', $ruleCopy['id'])['policy'] === '11' && $aFlushes() > $flushBase);
+// undo of the create takes MODX's Administrator rule away again (the one place an Administrator rule is removed)
+$call($aAdmin, 'undo', array('changeset_id' => $rule['changeset_id'], 'confirm' => true, 'force' => true));
+check('access: undo of a context rule create removes it and the Administrator rule MODX added', $aRow('modAccessContext', $ruleId) === null && $aSite->getCount('modAccessContext', array('principal' => 1, 'target' => 'shop')) === 0);
+// when the Administrator group already has a rule on the context, nothing extra is created or journaled
+$aPlantAcl('modAccessContext', 95, 1, 'shop', 11);
+$rule2 = $call($aAdmin, 'create', array('kind' => 'context_access', 'fields' => array('target' => 'shop', 'principal' => 3, 'authority' => 9999, 'policy' => 90)));
+check('access: no extra Administrator rule when one exists', count($call($aAdmin, 'history_diff', array('changeset_id' => $rule2['changeset_id']))['objects']) === 1 && $aSite->getCount('modAccessContext', array('principal' => 1, 'target' => 'shop')) === 1);
+$call($aAdmin, 'undo', array('changeset_id' => $rule2['changeset_id'], 'confirm' => true));
+check('access: and its undo leaves the existing Administrator rule alone', $aRow('modAccessContext', 95) !== null);
+$aSite->drop('modAccessContext', $aRow('modAccessContext', 95));
+
+// safety rule 1 for context rules, every write path
+$adminRule = $aRow('modAccessContext', 1);
+$ruleTwo = $call($aAdmin, 'create', array('kind' => 'context_access', 'fields' => array('target' => 'web', 'principal' => 2, 'authority' => 9999, 'policy' => 90)));
+$aRefuse('update of an Administrator context rule', function () use ($call, $aAdmin) { $call($aAdmin, 'update', array('kind' => 'context_access', 'id' => 1, 'fields' => array('authority' => 5))); });
+$aRefuse('dry-run update of an Administrator context rule', function () use ($call, $aAdmin) { $call($aAdmin, 'update', array('kind' => 'context_access', 'id' => 1, 'dry_run' => true, 'fields' => array('authority' => 5))); });
+$aRefuse('moving an Administrator context rule to another group', function () use ($call, $aAdmin) { $call($aAdmin, 'update', array('kind' => 'context_access', 'id' => 1, 'fields' => array('principal' => 2))); });
+$aRefuse('changing the policy of an Administrator context rule', function () use ($call, $aAdmin) { $call($aAdmin, 'update', array('kind' => 'context_access', 'id' => 1, 'fields' => array('policy' => 3))); });
+$aRefuse('delete of an Administrator context rule', function () use ($call, $aAdmin) { $call($aAdmin, 'delete', array('kind' => 'context_access', 'id' => 1)); });
+$aRefuse('dry-run delete of an Administrator context rule', function () use ($call, $aAdmin) { $call($aAdmin, 'delete', array('kind' => 'context_access', 'id' => 1, 'dry_run' => true)); });
+$aRefuse('duplicate of an Administrator context rule', function () use ($call, $aAdmin) { $call($aAdmin, 'duplicate', array('kind' => 'context_access', 'id' => 1, 'fields' => array('policy' => 3))); });
+$aRefuse('duplicate of an Administrator context rule giving it to another group', function () use ($call, $aAdmin) { $call($aAdmin, 'duplicate', array('kind' => 'context_access', 'id' => 1, 'fields' => array('principal' => 3))); });
+$aRefuse('create of a context rule for group 1', function () use ($call, $aAdmin) { $call($aAdmin, 'create', array('kind' => 'context_access', 'fields' => array('target' => 'shop', 'principal' => 1, 'authority' => 0, 'policy' => 90))); });
+$aRefuse('dry-run create of a context rule for group 1', function () use ($call, $aAdmin) { $call($aAdmin, 'create', array('kind' => 'context_access', 'dry_run' => true, 'fields' => array('target' => 'shop', 'principal' => 1, 'authority' => 0, 'policy' => 90))); });
+$aRefuse('giving a rule of another group to group 1 (update)', function () use ($call, $aAdmin, $ruleTwo) { $call($aAdmin, 'update', array('kind' => 'context_access', 'id' => $ruleTwo['id'], 'fields' => array('principal' => 1))); });
+$aRefuse('giving a rule of another group to group 1 (dry-run update)', function () use ($call, $aAdmin, $ruleTwo) { $call($aAdmin, 'update', array('kind' => 'context_access', 'id' => $ruleTwo['id'], 'dry_run' => true, 'fields' => array('principal' => 1))); });
+$aRefuse('copying a rule of another group to group 1', function () use ($call, $aAdmin, $ruleTwo) { $call($aAdmin, 'duplicate', array('kind' => 'context_access', 'id' => $ruleTwo['id'], 'fields' => array('principal' => 1, 'policy' => 3))); });
+$aRefuse('a rule that points a user group string at group 1', function () use ($call, $aAdmin, $ruleTwo) { $call($aAdmin, 'update', array('kind' => 'context_access', 'id' => $ruleTwo['id'], 'fields' => array('principal' => '1'))); });
+check('access: sending the current principal of an ordinary rule is fine', $call($aAdmin, 'update', array('kind' => 'context_access', 'id' => $ruleTwo['id'], 'fields' => array('principal' => 2, 'authority' => 7)))['changed'] === array('authority'));
+check('access: the Administrator rules are untouched', $aRow('modAccessContext', 1) === $adminRule);
+// undo doors
+$undoEdit = $call($aAdmin, 'update', array('kind' => 'context_access', 'id' => $ruleTwo['id'], 'fields' => array('authority' => 3)));
+$aSite->store('modAccessContext', array('principal' => '1') + $aRow('modAccessContext', $ruleTwo['id']));   // a person gave the rule to group 1 in the manager
+$aRefuse('undo of an edit of a rule that now belongs to group 1', function () use ($call, $aAdmin, $undoEdit) { $call($aAdmin, 'undo', array('changeset_id' => $undoEdit['changeset_id'], 'confirm' => true, 'force' => true)); }, 'not_reversible');
+$aSite->store('modAccessContext', array('principal' => '2') + $aRow('modAccessContext', $ruleTwo['id']));   // back to the ordinary group
+$forged = \ModxMCP\Journal\Snapshot::capture($aSite, $aAdmin->kinds->get('context_access'), $ruleTwo['id']);
+$forged['fields']['principal'] = '1';
+$aRefuse('restoring a state that belongs to group 1 over an ordinary rule', function () use ($aSite, $aAdmin, $ruleTwo, $forged) {
+    \ModxMCP\Journal\Snapshot::restore($aSite, $aAdmin->kinds->get('context_access'), $ruleTwo['id'], $forged);
+}, 'not_reversible');
+$aRefuse('recreating an Administrator rule through restore', function () use ($aSite, $aAdmin, $forged) {
+    \ModxMCP\Journal\Snapshot::restore($aSite, $aAdmin->kinds->get('context_access'), 777, $forged);
+}, 'not_reversible');
+
+// ---- resourcegroup_access ----
+$flushBase = $aFlushes();
+$gRule = $call($aAdmin, 'create', array('kind' => 'resourcegroup_access', 'fields' => array('target' => 1, 'principal' => 2, 'authority' => 9999, 'policy' => 90, 'context_key' => 'web')));
+$gRuleId = $gRule['id'];
+check('access: resource group rule create', is_int($gRuleId) && $gRule['changed'] === array('target', 'principal', 'authority', 'policy', 'context_key') && $aFlushes() > $flushBase
+    && $aRow('modAccessResourceGroup', $gRuleId)['principal_class'] === 'modUserGroup' && $aSite->getCount('modAccessContext', array('principal' => 1)) === 3);
+$gRuleGot = $call($aAdmin, 'get', array('kind' => 'resourcegroup_access', 'id' => $gRuleId));
+check('access: resource group rule get with the label naming the resource group', $gRuleGot['fields']['label'] === 'Редакторы → Закрытые (Читатель контекста, authority 9999)' && $gRuleGot['fields']['target'] === 1
+    && $gRuleGot['fields']['context_key'] === 'web');
+$gList = $call($aAdmin, 'list', array('kind' => 'resourcegroup_access', 'where' => array('target' => 1, 'principal' => 2, 'policy' => 90)));
+check('access: resource group rule list with where on target, principal and policy', $gList['total'] === 1 && $gList['items'][0]['label'] === 'Редакторы → Закрытые (Читатель контекста, authority 9999)'
+    && array_keys($gList['items'][0]) === array('id', 'target', 'principal', 'authority', 'policy', 'context_key', 'label'));
+$aRefuse('the same resource group rule twice', function () use ($call, $aAdmin) { $call($aAdmin, 'create', array('kind' => 'resourcegroup_access', 'fields' => array('target' => 1, 'principal' => 2, 'authority' => 1, 'policy' => 90, 'context_key' => 'web'))); });
+$aRefuse('a resource group rule for a resource group that does not exist', function () use ($call, $aAdmin) { $call($aAdmin, 'create', array('kind' => 'resourcegroup_access', 'fields' => array('target' => 99, 'principal' => 2, 'authority' => 1, 'policy' => 90))); });
+$gUpdate = $call($aAdmin, 'update', array('kind' => 'resourcegroup_access', 'id' => $gRuleId, 'fields' => array('authority' => 4, 'context_key' => 'shop')));
+check('access: resource group rule update', $gUpdate['changed'] === array('authority', 'context_key') && $aRow('modAccessResourceGroup', $gRuleId)['context_key'] === 'shop');
+$call($aAdmin, 'undo', array('changeset_id' => $gUpdate['changeset_id'], 'confirm' => true));
+check('access: undo of a resource group rule update', (int) $aRow('modAccessResourceGroup', $gRuleId)['authority'] === 9999 && $aRow('modAccessResourceGroup', $gRuleId)['context_key'] === 'web');
+$gCopy = $call($aAdmin, 'duplicate', array('kind' => 'resourcegroup_access', 'id' => $gRuleId, 'fields' => array('context_key' => 'shop')));
+check('access: resource group rule duplicate', $aRow('modAccessResourceGroup', $gCopy['id'])['context_key'] === 'shop' && $aRow('modAccessResourceGroup', $gCopy['id'])['target'] === '1');
+$gDelete = $call($aAdmin, 'delete', array('kind' => 'resourcegroup_access', 'id' => $gCopy['id']));
+$call($aAdmin, 'undo', array('changeset_id' => $gDelete['changeset_id'], 'confirm' => true));
+check('access: resource group rule delete and its undo', $aRow('modAccessResourceGroup', $gCopy['id'])['context_key'] === 'shop');
+$call($aAdmin, 'undo', array('changeset_id' => $gCopy['changeset_id'], 'confirm' => true, 'force' => true));
+check('access: undo of a resource group rule duplicate', $aRow('modAccessResourceGroup', $gCopy['id']) === null);
+// safety rule 1
+$adminGroupRule = $aRow('modAccessResourceGroup', 1);
+$aRefuse('update of an Administrator resource group rule', function () use ($call, $aAdmin) { $call($aAdmin, 'update', array('kind' => 'resourcegroup_access', 'id' => 1, 'fields' => array('authority' => 5))); });
+$aRefuse('moving an Administrator resource group rule to another group', function () use ($call, $aAdmin) { $call($aAdmin, 'update', array('kind' => 'resourcegroup_access', 'id' => 1, 'fields' => array('principal' => 3))); });
+$aRefuse('delete of an Administrator resource group rule', function () use ($call, $aAdmin) { $call($aAdmin, 'delete', array('kind' => 'resourcegroup_access', 'id' => 1)); });
+$aRefuse('duplicate of an Administrator resource group rule', function () use ($call, $aAdmin) { $call($aAdmin, 'duplicate', array('kind' => 'resourcegroup_access', 'id' => 1, 'fields' => array('policy' => 3))); });
+$aRefuse('create of a resource group rule for group 1', function () use ($call, $aAdmin) { $call($aAdmin, 'create', array('kind' => 'resourcegroup_access', 'fields' => array('target' => 2, 'principal' => 1, 'authority' => 0, 'policy' => 90))); });
+$aRefuse('giving a resource group rule to group 1', function () use ($call, $aAdmin, $gRuleId) { $call($aAdmin, 'update', array('kind' => 'resourcegroup_access', 'id' => $gRuleId, 'fields' => array('principal' => 1))); });
+$aRefuse('copying a resource group rule to group 1', function () use ($call, $aAdmin, $gRuleId) { $call($aAdmin, 'duplicate', array('kind' => 'resourcegroup_access', 'id' => $gRuleId, 'fields' => array('principal' => 1, 'context_key' => 'shop'))); });
+$gEdit = $call($aAdmin, 'update', array('kind' => 'resourcegroup_access', 'id' => $gRuleId, 'fields' => array('authority' => 8)));
+$aSite->store('modAccessResourceGroup', array('principal' => '1') + $aRow('modAccessResourceGroup', $gRuleId));
+$aRefuse('undo of an edit of a resource group rule that now belongs to group 1', function () use ($call, $aAdmin, $gEdit) { $call($aAdmin, 'undo', array('changeset_id' => $gEdit['changeset_id'], 'confirm' => true, 'force' => true)); }, 'not_reversible');
+check('access: the Administrator resource group rule is untouched', $aRow('modAccessResourceGroup', 1) === $adminGroupRule);
 
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));

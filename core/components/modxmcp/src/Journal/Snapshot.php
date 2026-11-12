@@ -170,6 +170,7 @@ final class Snapshot {
         // A kind may refuse to put an object back (or take it away) through the API.
         if ($state !== null) { $kind->assertRestorable($state); }
         elseif ($object) { $kind->assertRestorable(self::capture($modx, $kind, $key)); }
+        $kind->assertUndoable($modx, $key, $state);
 
         if ($state === null) {
             if (!$object) { return; }
