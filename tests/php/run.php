@@ -3637,6 +3637,420 @@ check('uninstall: a failure stops before remove, is reported with the log and re
 $pSite->failProcessor = null;
 check('package: nothing in the whole section ever put a package into the journal', $pAdmin->journal()->changesets(array('kind' => 'package'), 100) === array());
 
+// --- Escape hatches: run_processor and query_db (task 20) ---
+use ModxMCP\Action\QueryDbAction;
+use ModxMCP\Action\RunProcessorAction;
+
+$xDir = $siteDir . '/escape';
+foreach (array('core/model/modx/processors/resource', 'core/model/modx/processors/element/snippet', 'core/model/modx/processors/element/chunk', 'core/model/modx/processors/security/user',
+    'core/model/modx/processors/system/errorlog', 'core/components/mycomp/processors/mgr/item', 'core/components/mycomp/processors/security/user', 'core/components/other/processors/mgr',
+    'core/components/modxmcp/processors/mgr', 'elsewhere/processors/mgr', 'core/cache/logs') as $xSub) { mkdir($xDir . '/' . $xSub, 0700, true); }
+$xCore = $xDir . '/core/model/modx/processors/';
+foreach (array('resource/getlist', 'resource/biglist', 'resource/remove', 'resource/removemultiple', 'resource/emptyrecyclebin', 'element/snippet/get', 'element/chunk/fail', 'element/chunk/throws', 'element/chunk/noisy',
+    'element/chunk/delete', 'element/chunk/gone', 'security/user/update', 'system/refreshuris', 'system/errorlog/clear') as $xName) { file_put_contents($xCore . $xName . '.class.php', "<?php\n"); }
+file_put_contents($xCore . 'system/oldstyle.php', "<?php\n");
+file_put_contents($xCore . 'system/both.class.php', "<?php\n");
+file_put_contents($xCore . 'system/both.php', "<?php\n");
+foreach (array('mycomp/processors/mgr/item/update', 'mycomp/processors/mgr/item/remove', 'mycomp/processors/security/user/update', 'other/processors/mgr/x', 'modxmcp/processors/mgr/getstatus') as $xName) { file_put_contents($xDir . '/core/components/' . $xName . '.class.php', "<?php\n"); }
+file_put_contents($xDir . '/elsewhere/processors/mgr/x.class.php', "<?php\n");
+$xLinks = @symlink($xDir . '/core/components/other/processors', $xDir . '/core/components/mycomp/processors/link')
+    && @symlink($xDir . '/elsewhere/processors/mgr/x.class.php', $xDir . '/core/components/mycomp/processors/mgr/item/linked.class.php');
+$xSite = fakeSite($xDir, array('modxmcp.allow_run_processor' => true, 'modxmcp.allow_query_db' => true, 'base_path' => $xDir . '/', 'processors_path' => $xCore));
+$xSite->store('modNamespace', array('name' => 'mycomp', 'path' => '{core_path}components/mycomp/', 'assets_path' => ''));
+$xSite->store('modNamespace', array('name' => 'modxmcp', 'path' => '{core_path}components/modxmcp/', 'assets_path' => ''));
+// "other" has processors on disk but is not an installed namespace.
+$xActor = function ($scope, array $token = array()) use ($xSite, $dev) {
+    $c = new Context($xSite, $token + array('scope' => $scope) + $dev->token, $dev->corePath, function () {});
+    $c->sessionId = 'session-escape0001';
+    return $c;
+};
+$xAdmin = $xActor('admin');
+$xPlan = $xActor('admin', array('plan_only' => true));
+$xLogFile = $xSite->getCachePath() . 'logs/error.log';
+$xSite->stubProcessors['resource/getlist'] = function ($data, $options) use ($xLogFile) {
+    file_put_contents($xLogFile, "[2026-02-03 04:05:06] (ERROR @ /core/x.php : 1) Не удалось прочитать ресурс\n", FILE_APPEND);
+    $response = new FakeResponse(null);
+    $response->body = json_encode(array('success' => true, 'message' => '', 'total' => 2, 'results' => array(array('id' => 1, 'pagetitle' => 'Главная'), array('id' => 2, 'pagetitle' => 'About'))));
+    return $response;
+};
+$xSite->stubProcessors['resource/biglist'] = function ($data, $options) {
+    $response = new FakeResponse(null);
+    $rows = array();
+    for ($i = 0; $i < 200; $i++) { $rows[] = array('id' => $i, 'text' => str_repeat('x', 100)); }
+    $response->body = json_encode(array('success' => true, 'total' => 200, 'results' => $rows));
+    return $response;
+};
+$xSite->stubProcessors['element/snippet/get'] = function ($data, $options) { return new FakeResponse(null, array('id' => (int) $data['id'], 'name' => 'Сниппет', 'raw' => "bad\xff")); };
+$xSite->stubProcessors['element/chunk/fail'] = function ($data, $options) {
+    $response = new FakeResponse('Нельзя <b>так</b>');
+    $response->fieldErrors = array((object) array('field' => 'name', 'message' => 'Name is required.'));
+    return $response;
+};
+$xSite->stubProcessors['element/chunk/throws'] = function ($data, $options) { throw new RuntimeException('boom <i>inside</i>'); };
+$xSite->stubProcessors['element/chunk/noisy'] = function ($data, $options) { echo 'stray output that would break the JSON'; return new FakeResponse(null, array('ok' => 1)); };
+foreach (array('resource/remove', 'resource/removemultiple', 'element/chunk/delete', 'resource/emptyrecyclebin', 'system/errorlog/clear', 'system/oldstyle', 'system/both', 'mgr/item/update', 'item/update', 'security/user/update', 'system/refreshuris') as $xName) {
+    $xSite->stubProcessors[$xName] = function ($data, $options) { return new FakeResponse(null, array('done' => true)); };
+}
+$xSite->stubProcessors['element/chunk/gone'] = function ($data, $options) { return null; };
+$xLast = function () use ($xAdmin) { return $xAdmin->journal()->lastChangesetId(); };
+// A refused call: the right error and message, nothing run, no changeset.
+$xRefuse = function ($label, callable $fn, $code = 'validation_failed', $message = null) use ($xSite, $xLast) {
+    $calls = count($xSite->processorCalls);
+    $last = $xLast();
+    $e = throws("escape: {$label}", ApiException::class, $fn);
+    check("escape: {$label} is {$code}, runs nothing and records nothing", $e && $e->errorCode === $code && count($xSite->processorCalls) === $calls && $xLast() === $last
+        && ($message === null || strpos($e->getMessage(), $message) !== false));
+    return $e;
+};
+
+// ---- both tools are off by default ----
+$xSite->options['modxmcp.allow_run_processor'] = false;
+$xSite->options['modxmcp.allow_query_db'] = false;
+foreach (array('run_processor' => array('processor' => 'resource/getlist', 'confirm' => true), 'query_db' => array('sql' => 'SELECT 1')) as $xAction => $xArgs) {
+    $e = throws("escape: {$xAction} while off", ApiException::class, function () use ($call, $xAdmin, $xAction, $xArgs) { $call($xAdmin, $xAction, $xArgs); });
+    check("escape: {$xAction} is unavailable by default, with the reason", $e && $e->errorCode === 'unavailable' && $e->getMessage() === 'disabled_by_setting'
+        && $xAdmin->actions->blockReason($xAdmin->actions->get($xAction), $xAdmin) === 'disabled_by_setting'
+        && !in_array('modx_' . $xAction, array_column(Manifest::tools($xAdmin), 'name'), true));
+}
+check('escape: with both off the admin manifest is the old one', count(Manifest::tools($xAdmin)) === 34);
+$xSite->options['modxmcp.allow_run_processor'] = '0';
+check('escape: the setting as the string 0 is off', !in_array('modx_run_processor', array_column(Manifest::tools($xAdmin), 'name'), true));
+$xSite->options['modxmcp.allow_run_processor'] = '1';
+check('escape: the setting as the string 1 is on', in_array('modx_run_processor', array_column(Manifest::tools($xAdmin), 'name'), true));
+check('escape: turning one on does not turn the other on', !in_array('modx_query_db', array_column(Manifest::tools($xAdmin), 'name'), true));
+$xSite->options['modxmcp.allow_query_db'] = true;
+
+// ---- manifest and scopes ----
+$xTools = array_column(Manifest::tools($xAdmin), null, 'name');
+check('escape: with both on the admin sees 36 tools, the two after uninstall_package', count($xTools) === 36
+    && array_search('modx_run_processor', array_keys($xTools), true) === array_search('modx_uninstall_package', array_keys($xTools), true) + 1
+    && array_search('modx_query_db', array_keys($xTools), true) === array_search('modx_run_processor', array_keys($xTools), true) + 1);
+check('escape: run_processor is an admin, destructive, irreversible tool of the maintenance group', $xTools['modx_run_processor']['effect'] === array('read_only' => false, 'destructive' => true, 'reversible' => false, 'open_world' => false)
+    && $xTools['modx_run_processor']['scope'] === 'admin' && $xTools['modx_run_processor']['group'] === 'maintenance');
+check('escape: query_db is a read-only develop tool of the maintenance group', $xTools['modx_query_db']['effect']['read_only'] === true && $xTools['modx_query_db']['effect']['destructive'] === false
+    && $xTools['modx_query_db']['scope'] === 'develop' && $xTools['modx_query_db']['group'] === 'maintenance');
+foreach (array('read', 'content', 'develop') as $xScope) {
+    $e = throws("escape: {$xScope} token, run_processor", ApiException::class, function () use ($call, $xActor, $xScope) { $call($xActor($xScope), 'run_processor', array('processor' => 'resource/getlist', 'confirm' => true)); });
+    check("escape: {$xScope} token cannot run_processor and does not see it", $e && $e->errorCode === 'forbidden_scope' && !in_array('modx_run_processor', array_column(Manifest::tools($xActor($xScope)), 'name'), true));
+}
+foreach (array('read', 'content') as $xScope) {
+    $e = throws("escape: {$xScope} token, query_db", ApiException::class, function () use ($call, $xActor, $xScope) { $call($xActor($xScope), 'query_db', array('sql' => 'SELECT 1')); });
+    check("escape: {$xScope} token cannot query_db and does not see it", $e && $e->errorCode === 'forbidden_scope' && !in_array('modx_query_db', array_column(Manifest::tools($xActor($xScope)), 'name'), true));
+}
+check('escape: the develop token sees query_db and not run_processor', in_array('modx_query_db', array_column(Manifest::tools($xActor('develop')), 'name'), true));
+
+// ---- run_processor: the path ----
+foreach (array('Resource/GetList', 'resource/GETLIST', '/resource/getlist', 'resource/getlist/', 'resource//getlist', 'security//user/create', 'resource/../security/user/update', '../resource/getlist', './resource/getlist',
+    'resource/./getlist', 'resource\\getlist', 'resource/get list', "resource/getlist\n", "resource/getlist\0", 'resource/getlist.class', 'resource/getlist.php', ' resource/getlist', 'resource/getlist ', 'resource/%2e%2e/getlist', 'resource/getlist;x', '', 'ресурс/getlist') as $xBad) {
+    $xRefuse('the path ' . json_encode($xBad), function () use ($call, $xAdmin, $xBad) { $call($xAdmin, 'run_processor', array('processor' => $xBad, 'confirm' => true)); });
+}
+$xRefuse('a processor that does not exist', function () use ($call, $xAdmin) { $call($xAdmin, 'run_processor', array('processor' => 'resource/nothing', 'confirm' => true)); }, 'not_found');
+$xRefuse('a directory is not a processor', function () use ($call, $xAdmin) { $call($xAdmin, 'run_processor', array('processor' => 'resource', 'confirm' => true)); }, 'not_found');
+
+// ---- run_processor: what is refused, with the alternative ----
+$xRefused = array(
+    'security/user/update' => 'kind "user"', 'security/user/remove' => 'kind "user"', 'security/user' => 'kind "user"', 'security/users/getlist' => 'kind "user"',
+    'security/access/policy/update' => 'access_policy', 'security/access/flush' => 'flush_permissions', 'security/access/usergroup/context/create' => 'context_access',
+    'security/group/update' => 'user_group', 'security/group/user/create' => 'user_group', 'security/role/remove' => 'kind "role"',
+    'security/resourcegroup/create' => 'resource_group', 'security/documentgroup/getlist' => 'resource_group',
+    'security/login' => 'Logging in', 'security/logout' => 'Logging in', 'security/login/x' => 'Logging in',
+    'security/profile/update' => 'Security processors', 'security/message/getlist' => 'Security processors', 'security/forgotpassword' => 'Security processors', 'securityx/y' => 'Security processors',
+    'system/settings/update' => 'system_setting', 'system/settings/getlist' => 'system_setting', 'system/settings' => 'system_setting', 'system/settingsx/y' => 'system_setting',
+    'context/setting/create' => 'context_setting', 'context/setting/remove' => 'context_setting', 'context/settings/x' => 'context_setting',
+    'workspace/packages/install' => 'modx_install_package', 'workspace/packages/rest/download' => 'modx_install_package', 'workspace/packages' => 'modx_install_package', 'workspace/packagesx/y' => 'modx_install_package',
+    'workspace/providers/update' => 'kind "provider"', 'workspace/providers/remove' => 'kind "provider"',
+    'system/config' => 'system_setting', 'system/configuration/x' => 'system_setting',
+    'browser/file/remove' => 'modx_write_file', 'browser/directory/getlist' => 'modx_list_files',
+);
+foreach ($xRefused as $xName => $xInstead) {
+    foreach (array('' => array(), ' with confirm' => array('confirm' => true)) as $xSuffix => $xMore) {
+        $xRefuse("{$xName}{$xSuffix}", function () use ($call, $xAdmin, $xName, $xMore) { $call($xAdmin, 'run_processor', $xMore + array('processor' => $xName)); }, 'validation_failed', $xInstead);
+    }
+    $xRefuse("{$xName} for a plan-only token", function () use ($call, $xPlan, $xName) { $call($xPlan, 'run_processor', array('processor' => $xName, 'confirm' => true)); }, 'validation_failed', $xInstead);
+    check("escape: {$xName} is named in the refusal", strpos(RunProcessorAction::refusal($xName), $xInstead) !== false);
+}
+$xRefuse('a refused processor inside a namespace', function () use ($call, $xAdmin, $xDir) { $call($xAdmin, 'run_processor', array('processor' => 'security/user/update', 'confirm' => true, 'processors_path' => $xDir . '/core/components/mycomp/processors')); }, 'validation_failed', 'kind "user"');
+check('escape: nothing near the refused names slipped through the prefix list', RunProcessorAction::refusal('resource/getlist') === null && RunProcessorAction::refusal('element/snippet/get') === null
+    && RunProcessorAction::refusal('system/refreshuris') === null && RunProcessorAction::refusal('system/info') === null && RunProcessorAction::refusal('context/get') === null && RunProcessorAction::refusal('workspace/namespace/create') === null);
+
+// ---- run_processor: destructive names need confirm ----
+foreach (array('resource/remove', 'resource/removemultiple', 'element/chunk/delete', 'resource/emptyrecyclebin', 'system/errorlog/clear') as $xName) {
+    $xRefuse("{$xName} without confirm", function () use ($call, $xAdmin, $xName) { $call($xAdmin, 'run_processor', array('processor' => $xName)); }, 'validation_failed', 'confirm: true');
+    $xRefuse("{$xName} with confirm: false", function () use ($call, $xAdmin, $xName) { $call($xAdmin, 'run_processor', array('processor' => $xName, 'confirm' => false)); }, 'validation_failed', 'confirm: true');
+    $xRefuse("{$xName} for a plan-only token without confirm", function () use ($call, $xPlan, $xName) { $call($xPlan, 'run_processor', array('processor' => $xName)); }, 'validation_failed', 'confirm: true');
+    check("escape: {$xName} counts as destructive", RunProcessorAction::isDestructive($xName));
+}
+check('escape: ordinary names are not destructive', !RunProcessorAction::isDestructive('resource/getlist') && !RunProcessorAction::isDestructive('element/snippet/get') && !RunProcessorAction::isDestructive('system/refreshuris'));
+$xCalls = count($xSite->processorCalls);
+$xDelete = $call($xAdmin, 'run_processor', array('processor' => 'resource/remove', 'properties' => array('id' => 3), 'confirm' => true));
+check('escape: resource/remove runs with confirm: true', $xDelete['performed'] === true && $xDelete['success'] === true && count($xSite->processorCalls) === $xCalls + 1 && $xSite->processorCalls[$xCalls][0] === 'resource/remove'
+    && $xSite->processorCalls[$xCalls][1] === array('id' => 3));
+$xPlanDelete = $call($xPlan, 'run_processor', array('processor' => 'resource/remove', 'properties' => array('id' => 3), 'confirm' => true));
+check('escape: a plan-only token with confirm only gets the plan', $xPlanDelete['performed'] === false && $xPlanDelete['planned'] === true && count($xSite->processorCalls) === $xCalls + 1);
+
+// ---- run_processor: the plan ----
+$xCalls = count($xSite->processorCalls);
+$xLastBefore = $xLast();
+$xPlanOut = $call($xAdmin, 'run_processor', array('processor' => 'resource/getlist', 'properties' => array('limit' => 5)));
+check('escape: without confirm the plan names the processor file relative to the site root and the warning', $xPlanOut['performed'] === false && $xPlanOut['processor'] === 'resource/getlist'
+    && $xPlanOut['file'] === 'core/model/modx/processors/resource/getlist.class.php' && $xPlanOut['reversible'] === false && strpos($xPlanOut['warning'], 'not journaled') !== false && strpos($xPlanOut['warning'], 'cannot be undone') !== false
+    && !isset($xPlanOut['planned']));
+$xPlanToken = $call($xPlan, 'run_processor', array('processor' => 'resource/getlist', 'confirm' => true));
+check('escape: a plan-only token never runs a processor, even with confirm', $xPlanToken['performed'] === false && $xPlanToken['planned'] === true && $xPlanToken['file'] === $xPlanOut['file']
+    && count($xSite->processorCalls) === $xCalls && $xLast() === $xLastBefore);
+check('escape: old-style files are found, the class file first', $call($xAdmin, 'run_processor', array('processor' => 'system/oldstyle'))['file'] === 'core/model/modx/processors/system/oldstyle.php'
+    && $call($xAdmin, 'run_processor', array('processor' => 'system/both'))['file'] === 'core/model/modx/processors/system/both.class.php');
+
+// ---- run_processor: a confirmed run ----
+$xSite->processorCalls = array();
+$xBefore = $xLast();
+$xRun = $call($xAdmin, 'run_processor', array('processor' => 'resource/getlist', 'properties' => array('limit' => 5, 'query' => 'Главная'), 'confirm' => true));
+check('escape: confirm runs the processor with the properties and no options', count($xSite->processorCalls) === 1 && $xSite->processorCalls[0] === array('resource/getlist', array('limit' => 5, 'query' => 'Главная'), array()));
+check('escape: a get-list processor comes back as its list with the total', $xRun['performed'] === true && $xRun['success'] === true && $xRun['total'] === 2 && count($xRun['object']) === 2 && $xRun['object'][0]['pagetitle'] === 'Главная'
+    && $xRun['errors'] === array() && $xRun['message'] === '' && $xRun['reversible'] === false && $xRun['file'] === 'core/model/modx/processors/resource/getlist.class.php');
+check('escape: invalid UTF-8 in the object does not break the response', is_string(json_encode($xRun, JSON_THROW_ON_ERROR)) && is_string(json_encode($call($xAdmin, 'run_processor', array('processor' => 'element/snippet/get', 'properties' => array('id' => 1), 'confirm' => true)), JSON_THROW_ON_ERROR)));
+check('escape: the error-log entries written during the call come back', $xRun['log']['new_entries'] === 1 && $xRun['log']['entries'][0]['level'] === 'ERROR' && strpos($xRun['log']['entries'][0]['message'], 'Не удалось прочитать ресурс') !== false);
+check('escape: one changeset without changes, irreversible, in the history', $xRun['changeset_id'] === $xBefore + 1 && $xAdmin->journal()->changes(array($xRun['changeset_id'])) === array());
+$xHistory = array_column($call($xAdmin, 'history', array('limit' => 3))['changesets'], null, 'changeset_id')[$xRun['changeset_id']];
+check('escape: the history says run_processor resource/getlist', $xHistory['changeset_id'] === $xRun['changeset_id'] && $xHistory['summary'] === 'run_processor resource/getlist' && $xHistory['reversible'] === false
+    && $xHistory['tool'] === 'run_processor' && $xHistory['objects'] === array() && $call($xAdmin, 'history_diff', array('changeset_id' => $xRun['changeset_id']))['objects'] === array());
+check('escape: the warning says it was not journaled', in_array('The processor resource/getlist was run directly: it is not journaled and modx_undo cannot revert it.', $xAdmin->warnings, true));
+$xObject = $call($xAdmin, 'run_processor', array('processor' => 'element/snippet/get', 'properties' => array('id' => 7), 'confirm' => true));
+check('escape: a get processor comes back as its object', $xObject['success'] === true && $xObject['object']['name'] === 'Сниппет' && $xObject['object']['id'] === 7 && !isset($xObject['total']));
+check('escape: no properties means an empty array', $call($xAdmin, 'run_processor', array('processor' => 'resource/getlist', 'confirm' => true))['success'] === true && $xSite->processorCalls[count($xSite->processorCalls) - 1][1] === array());
+// modx_undo skips it, whatever the selection.
+$xA = $call($xAdmin, 'create', array('kind' => 'provider', 'fields' => array('name' => 'Before run', 'service_url' => 'https://before.example/')));
+$call($xAdmin, 'run_processor', array('processor' => 'resource/getlist', 'confirm' => true));
+$xB = $call($xAdmin, 'create', array('kind' => 'provider', 'fields' => array('name' => 'After run', 'service_url' => 'https://after.example/')));
+$xUndo = $call($xAdmin, 'undo', array('last' => 2, 'confirm' => true));
+check('escape: modx_undo last 2 skips the run_processor changeset', $xUndo['performed'] === true && $xUndo['changesets'] === array($xB['changeset_id'], $xA['changeset_id']));
+$xRefuse('undo of a run_processor changeset by id', function () use ($call, $xAdmin, $xRun) { $call($xAdmin, 'undo', array('changeset_id' => $xRun['changeset_id'], 'confirm' => true)); }, 'not_reversible');
+
+// ---- run_processor: errors are results ----
+$xBefore = $xLast();
+$xFail = $call($xAdmin, 'run_processor', array('processor' => 'element/chunk/fail', 'confirm' => true));
+check('escape: a processor error is success: false with the messages, not a tool error', $xFail['performed'] === true && $xFail['success'] === false && $xFail['message'] === 'Нельзя так' && $xFail['errors'] === array('name: Name is required.')
+    && $xFail['object'] === array());
+check('escape: a failed run still leaves its changeset', $xFail['changeset_id'] === $xBefore + 1 && $xAdmin->journal()->changeset($xFail['changeset_id'])['summary'] === 'run_processor element/chunk/fail (failed)'
+    && $xAdmin->journal()->changeset($xFail['changeset_id'])['reversible'] === false);
+$xThrown = $call($xAdmin, 'run_processor', array('processor' => 'element/chunk/throws', 'confirm' => true));
+check('escape: an exception inside a processor is reported without a stack', $xThrown['performed'] === true && $xThrown['success'] === false && $xThrown['message'] === 'The processor threw RuntimeException: boom inside' && is_int($xThrown['changeset_id']));
+$xGone = $call($xAdmin, 'run_processor', array('processor' => 'element/chunk/gone', 'confirm' => true));
+check('escape: a processor that gives no response is a failure result', $xGone['success'] === false && $xGone['message'] === 'The processor did not respond.');
+$xLevel = ob_get_level();
+$xNoisy = $call($xAdmin, 'run_processor', array('processor' => 'element/chunk/noisy', 'confirm' => true));
+check('escape: stray output of a processor is dropped', $xNoisy['success'] === true && ob_get_level() === $xLevel);
+// A big list is cut to half the response limit.
+$xSite->options['modxmcp.max_response_bytes'] = 4096;
+$xBig = $call($xAdmin, 'run_processor', array('processor' => 'resource/biglist', 'confirm' => true));
+check('escape: a huge object is cut at half the response limit and marked', $xBig['truncated'] === true && $xBig['total'] === 200 && count($xBig['object']) > 0 && count($xBig['object']) < 200 && strlen(json_encode($xBig['object'])) <= 2048
+    && in_array('The processor object was larger than half of the response limit and was cut.', $xAdmin->warnings, true));
+unset($xSite->options['modxmcp.max_response_bytes']);
+
+// ---- run_processor: processors_path ----
+$xMine = $xDir . '/core/components/mycomp/processors';
+$xRoot = realpath($xMine) . DIRECTORY_SEPARATOR;
+$xSite->processorCalls = array();
+$xPath = $call($xAdmin, 'run_processor', array('processor' => 'mgr/item/update', 'processors_path' => $xMine, 'properties' => array('id' => 1)));
+check('escape: a processors_path inside an installed namespace works (plan)', $xPath['performed'] === false && $xPath['file'] === 'core/components/mycomp/processors/mgr/item/update.class.php' && $xSite->processorCalls === array());
+$xPath = $call($xAdmin, 'run_processor', array('processor' => 'mgr/item/update', 'processors_path' => $xMine . '/', 'properties' => array('id' => 1), 'confirm' => true));
+check('escape: a confirmed run passes the resolved directory as the option', $xPath['success'] === true && $xSite->processorCalls === array(array('mgr/item/update', array('id' => 1), array('processors_path' => $xRoot))));
+$xPath = $call($xAdmin, 'run_processor', array('processor' => 'item/update', 'processors_path' => $xMine . '/mgr/../mgr/item/../', 'confirm' => true));
+check('escape: a path with .. that stays inside is resolved first', $xPath['success'] === true && $xSite->processorCalls[1][2] === array('processors_path' => $xRoot . 'mgr' . DIRECTORY_SEPARATOR));
+$xMessage = 'processors_path must be an absolute path inside core/components/<namespace>/processors/';
+foreach (array(
+    'a namespace that is not installed' => $xDir . '/core/components/other/processors',
+    'a directory outside the components' => $xDir . '/elsewhere/processors',
+    'the core processors by path' => $xCore,
+    'modxMCP itself' => $xDir . '/core/components/modxmcp/processors',
+    'a component directory above processors' => $xDir . '/core/components/mycomp',
+    'the site root' => $xDir,
+    '..' . ' out of the namespace' => $xMine . '/../../other/processors',
+    '..' . ' to the filesystem root' => $xMine . '/../../../../../../../../../../..',
+    'a relative path' => 'core/components/mycomp/processors',
+    'a relative path with ..' => '../escape/core/components/mycomp/processors',
+    'a missing directory' => $xMine . '/nowhere',
+    'a file' => $xMine . '/mgr/item/update.class.php',
+    'a sibling that merely starts with the same name' => $xDir . '/core/components/mycomp/processors-evil',
+    'a null byte' => $xMine . "\0/../../other/processors",
+) as $xLabel => $xBadPath) {
+    @mkdir($xDir . '/core/components/mycomp/processors-evil', 0700, true);
+    $xRefuse("processors_path: {$xLabel}", function () use ($call, $xAdmin, $xBadPath) { $call($xAdmin, 'run_processor', array('processor' => 'mgr/item/update', 'processors_path' => $xBadPath, 'confirm' => true)); }, 'validation_failed', $xMessage);
+}
+if ($xLinks) {
+    $xRefuse('processors_path: a symlink that leaves the namespace', function () use ($call, $xAdmin, $xMine) { $call($xAdmin, 'run_processor', array('processor' => 'mgr/x', 'processors_path' => $xMine . '/link', 'confirm' => true)); }, 'validation_failed', $xMessage);
+    $xRefuse('a processor file that is a symlink out of the directory', function () use ($call, $xAdmin, $xMine) { $call($xAdmin, 'run_processor', array('processor' => 'mgr/item/linked', 'processors_path' => $xMine, 'confirm' => true)); }, 'not_found');
+}
+$xRefuse('a processor missing from the given path', function () use ($call, $xAdmin, $xMine) { $call($xAdmin, 'run_processor', array('processor' => 'resource/getlist', 'processors_path' => $xMine, 'confirm' => true)); }, 'not_found');
+$xRefuse('a destructive name inside a namespace still needs confirm', function () use ($call, $xAdmin, $xMine) { $call($xAdmin, 'run_processor', array('processor' => 'mgr/item/remove', 'processors_path' => $xMine)); }, 'validation_failed');
+
+// ---- run_processor: replay protection and the lock are the kernel's; the action must be a write ----
+check('escape: run_processor is not read-only (the kernel puts it under request-ID replay protection)', $xAdmin->actions->get('run_processor')->readOnly() === false && $xAdmin->actions->get('query_db')->readOnly() === true);
+
+// ---- query_db: the guard ----
+foreach (array('items' => 'CREATE TABLE modx_test_items (id INTEGER PRIMARY KEY, name TEXT, body TEXT)',
+    'users' => 'CREATE TABLE modx_users (id INTEGER, username TEXT, password TEXT)', 'attr' => 'CREATE TABLE modx_user_attributes (id INTEGER, sessionid TEXT)',
+    'settings' => 'CREATE TABLE modx_system_settings (key TEXT, value TEXT)', 'csettings' => 'CREATE TABLE modx_context_settings (key TEXT, value TEXT)',
+    'session' => 'CREATE TABLE modx_session (id TEXT)', 'usettings' => 'CREATE TABLE modx_user_settings (key TEXT, value TEXT)',
+    'providers' => 'CREATE TABLE modx_transport_providers (id INTEGER, api_key TEXT)', 'sources' => 'CREATE TABLE modx_media_sources (id INTEGER, properties TEXT)',
+    'bare' => 'CREATE TABLE users (id INTEGER)') as $xSql) { $xSite->pdo->exec($xSql); }
+$xSite->pdo->exec("INSERT INTO modx_test_items (id, name, body) VALUES (1, 'один', 'a'), (2, 'two', 'b'), (3, 'three', 'c'), (4, 'four', 'd'), (5, 'five', 'e')");
+$xSite->pdo->exec("INSERT INTO modx_users VALUES (1, 'admin', 'secret-hash')");
+$xSite->pdo->exec("INSERT INTO modx_modxmcp_tokens (id, label, prefix, hash, scope) VALUES (1, 'x', 'mcp_x', 'tokenhash', 'admin')");
+$xDev = $xActor('develop');
+// PDO SQLite before PHP 8.1 returns numbers as strings (MySQL does the same with emulated prepares): cells are compared loosely.
+$xSql = function (Context $c, $sql, array $more = array()) use ($call) { return $call($c, 'query_db', array('sql' => $sql) + $more); };
+$xQuery = function ($label, $sql, $code = 'validation_failed', $actor = null) use ($xSql, $xDev) {
+    $actor = $actor ?: $xDev;
+    $e = throws("query_db: {$label}", ApiException::class, function () use ($xSql, $actor, $sql) { $xSql($actor, $sql); });
+    check("query_db: {$label} is {$code}", $e && $e->errorCode === $code);
+};
+
+$xNotSelect = array(
+    'DELETE' => 'DELETE FROM modx_test_items', 'lowercase delete' => 'delete from modx_test_items', 'UPDATE' => "UPDATE modx_test_items SET name = 'x'", 'INSERT' => "INSERT INTO modx_test_items (name) VALUES ('x')",
+    'REPLACE INTO' => "REPLACE INTO modx_test_items (id, name) VALUES (1, 'x')", 'DROP' => 'DROP TABLE modx_test_items', 'SHOW' => 'SHOW TABLES', 'EXPLAIN' => 'EXPLAIN SELECT 1', 'DESCRIBE' => 'DESCRIBE modx_test_items',
+    'a parenthesised select' => '(SELECT 1)', 'TABLE' => 'TABLE modx_test_items', 'VALUES' => 'VALUES ROW(1)', 'PRAGMA' => 'PRAGMA table_info(modx_test_items)', 'SET' => 'SET @a = 1', 'CALL' => 'CALL x()',
+    'leading whitespace and newlines' => "  \n\t DELETE FROM modx_test_items", 'a leading comment' => '/* select */ DELETE FROM modx_test_items', 'a leading line comment' => "-- select\nDELETE FROM modx_test_items",
+    'a leading hash comment' => "# select\nDELETE FROM modx_test_items", 'a name that starts like select' => 'SELECTED 1', 'a quoted select' => '`select` 1', 'a string first' => "'select' 1", 'an empty statement' => ';', 'only a comment' => '/* x */',
+    'WITH then DELETE' => 'WITH x AS (SELECT 1) DELETE FROM modx_test_items', 'WITH then INSERT' => 'WITH x AS (SELECT 1 AS a) INSERT INTO modx_test_items (id) SELECT a FROM x',
+    'WITH then UPDATE' => "with x as (select 1) update modx_test_items set name = 'x'", 'WITH then REPLACE' => 'with x as (select 1) replace into modx_test_items select 1, 2, 3', 'WITH without a select' => 'WITH x AS (SELECT 1)',
+    'WITH then a quoted select only' => 'WITH x AS (SELECT 1) `select`',
+);
+foreach ($xNotSelect as $xLabel => $xText) { $xQuery($xLabel, $xText); }
+$xHidden = array(
+    'a second statement' => 'SELECT 1; SELECT 2', 'a second statement that writes' => 'SELECT 1; DELETE FROM modx_test_items', 'two semicolons' => 'SELECT 1;;', 'a semicolon between' => 'SELECT 1 ; /* x */ DROP TABLE modx_test_items',
+    'a semicolon, a comment and a statement' => "SELECT 1 -- c\n; DELETE FROM modx_test_items", 'a semicolon after a hash comment line' => "SELECT 1 # c\n; DELETE FROM modx_test_items",
+    '-- without a space is not a comment' => 'SELECT 1 --;DELETE FROM modx_test_items', '-- then a tab' => "SELECT 1 --\t\n;DELETE FROM modx_test_items",
+    'a backslash that may or may not escape' => "SELECT 'a\\'; DELETE FROM modx_test_items; --'", 'a backslash and double quotes' => 'SELECT "a\\"; DELETE FROM modx_test_items; --"',
+    'INTO OUTFILE' => "SELECT 1 INTO OUTFILE '/tmp/x'", 'into outfile lowercase' => "select 1 into outfile '/tmp/x'", 'INTO with a comment between' => "SELECT 1 INTO/**/OUTFILE '/tmp/x'", 'INTO with newlines' => "SELECT 1 INTO\n\tDUMPFILE '/tmp/x'",
+    'INTO a variable' => 'SELECT 1 INTO @a', 'INTO with a line comment' => "SELECT 1 INTO -- x\n OUTFILE '/tmp/x'", 'an executable comment' => "SELECT 1 /*!50000 INTO OUTFILE '/tmp/x' */", 'an executable comment with a statement' => 'SELECT 1 /*! ; DELETE FROM modx_test_items */',
+    'a MariaDB executable comment' => "SELECT 1 /*M!100100 INTO OUTFILE '/tmp/x' */", 'an optimizer hint' => 'SELECT /*+ MAX_EXECUTION_TIME(1) */ 1', 'a hint after the keyword' => 'SELECT 1 /*+ SET_VAR(sql_mode=\'\') */',
+    'LOAD_FILE' => "SELECT LOAD_FILE('/etc/passwd')", 'load_file lowercase' => "select load_file('/etc/passwd')", 'LOAD_FILE with a space' => "SELECT LOAD_FILE ('/etc/passwd')", 'LOAD_FILE with a comment' => "SELECT LOAD_FILE/**/('/etc/passwd')",
+    'LOAD_FILE quoted' => "SELECT `load_file`('/etc/passwd')", 'LOAD_FILE with a schema' => "SELECT db.LOAD_FILE('/x')", 'SLEEP' => 'SELECT SLEEP(5)', 'sleep with a space' => 'SELECT sleep (5)', 'SLEEP in a subquery' => 'SELECT (SELECT SLEEP(5))',
+    'SLEEP in a WHERE' => 'SELECT 1 FROM modx_test_items WHERE SLEEP(1)', 'BENCHMARK' => "SELECT BENCHMARK(1000000, MD5('a'))", 'GET_LOCK' => "SELECT GET_LOCK('a', 1)", 'RELEASE_LOCK' => "SELECT RELEASE_LOCK('a')",
+    'IS_FREE_LOCK' => "SELECT IS_FREE_LOCK('a')", 'RELEASE_ALL_LOCKS' => 'SELECT RELEASE_ALL_LOCKS()', 'load_extension' => "SELECT load_extension('x')", 'FOR UPDATE' => 'SELECT * FROM modx_test_items FOR UPDATE',
+    'for update with a comment' => 'SELECT * FROM modx_test_items FOR/**/UPDATE', 'for update on a new line' => "SELECT * FROM modx_test_items\nFOR\nUPDATE", 'FOR SHARE' => 'SELECT * FROM modx_test_items FOR SHARE',
+    'LOCK IN SHARE MODE' => 'SELECT * FROM modx_test_items LOCK IN SHARE MODE', 'lock in share mode lowercase' => 'select * from modx_test_items lock in share mode', 'FOR UPDATE NOWAIT' => 'SELECT * FROM modx_test_items FOR UPDATE NOWAIT',
+    'an unterminated string' => "SELECT 'abc", 'an unterminated double-quoted string' => 'SELECT "abc', 'an unterminated comment' => 'SELECT 1 /* abc', 'an unterminated quoted name' => 'SELECT `abc',
+    'INSERT in a string-looking tail' => "SELECT 'a' ; INSERT INTO modx_test_items (id) VALUES (9)", 'a NUL byte' => "SELECT 1\0; DELETE FROM modx_test_items", 'invalid UTF-8' => "SELECT '\xff'",
+    'INSERT as a word' => 'SELECT 1 FROM modx_test_items WHERE 1 INSERT', 'DELETE inside a subquery' => 'SELECT * FROM (DELETE FROM modx_test_items) t', 'UPDATE in a WITH body' => 'WITH x AS (UPDATE modx_test_items SET name = 1) SELECT 1',
+);
+foreach ($xHidden as $xLabel => $xText) { $xQuery($xLabel, $xText); }
+$xFine = array(
+    'a semicolon in a string' => array("SELECT ';' AS a", array(';')), 'INTO OUTFILE in a string' => array("SELECT 'INTO OUTFILE ''x''' AS s", array("INTO OUTFILE 'x'")), 'a keyword in double quotes as a string' => array("SELECT \"; DROP TABLE x\" AS s", array('; DROP TABLE x')),
+    'a comment lookalike in a string' => array("SELECT '/* not a comment */ ; delete' AS s", array('/* not a comment */ ; delete')), 'a line comment after the statement' => array("SELECT 1 AS a -- trailing; DELETE\n", array(1)),
+    'a block comment inside' => array('SELECT /* the answer; DELETE */ 1 AS a', array(1)), 'one trailing semicolon' => array('SELECT 1 AS a;', array(1)),
+    'a trailing semicolon and a comment' => array('SELECT 1 AS a; -- done', array(1)), 'a trailing semicolon and spaces' => array("SELECT 1 AS a ;  \n ", array(1)), 'sleep in a string' => array("SELECT 'sleep(5)' AS s", array('sleep(5)')),
+    'load_file in a string' => array("SELECT 'LOAD_FILE(x)' AS s", array('LOAD_FILE(x)')), 'FOR UPDATE in a string' => array("SELECT 'FOR UPDATE' AS s", array('FOR UPDATE')), 'a quoted word that is a keyword' => array('SELECT 1 AS `into`', array(1)),
+    'a doubled quote' => array("SELECT 'it''s; ok' AS s", array("it's; ok")), 'REPLACE as a function' => array("SELECT REPLACE('abc', 'b', 'x') AS s", array('axc')), 'WITH ... SELECT' => array('WITH x AS (SELECT 41 AS a) SELECT a + 1 AS b FROM x', array(42)),
+    'WITH RECURSIVE' => array('WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 3) SELECT SUM(i) AS s FROM n', array(6)), 'lowercase and tabs' => array("select\t1 as a", array(1)),
+    'a string with the string looking like a table' => array("SELECT 'modx_users' AS s", array('modx_users')),
+);
+foreach ($xFine as $xLabel => $xCase) {
+    $xResult = $xSql($xDev, $xCase[0]);
+    check("query_db: {$xLabel} runs", $xResult['rows'] == array($xCase[1]) && $xResult['returned'] === 1 && $xResult['truncated'] === false);
+}
+check('query_db: a hash comment after the statement passes the guard (MySQL comment)', count(QueryDbAction::guard("SELECT 1 AS a # trailing; DELETE\n", 'modx_', false)) === 4);
+check('query_db: guard returns the tokens without the last semicolon', count(QueryDbAction::guard('SELECT 1;', 'modx_', true)) === 2);
+foreach (array('SELECT 1; SELECT 2', "SELECT 'a\\'; DELETE FROM t; --'") as $xText) {
+    $e = throws('query_db: the guard directly', ApiException::class, function () use ($xText) { QueryDbAction::guard($xText, 'modx_', true); });
+    check('query_db: the guard refuses the same for an admin', $e && $e->errorCode === 'validation_failed');
+}
+
+// ---- query_db: credential tables ----
+$xTables = array(
+    'modx_users', 'users', 'MODX_USERS', 'Modx_Users', '`modx_users`', '`MODX_USERS`', '`users`', 'db.modx_users', '`db`.`modx_users`', '`db.modx_users`', ' `modx_users ` ',
+    'modx_user_attributes', 'user_attributes', 'modx_system_settings', 'system_settings', 'modx_context_settings', 'context_settings', 'modx_modxmcp_tokens', 'modxmcp_tokens', '`modx_modxmcp_tokens`',
+    '"modx_users"', '"MODX_USERS"', '"db"."modx_users"', '"modx_modxmcp_tokens"',
+    'modx_session', 'modx_user_settings', 'modx_transport_providers', 'transport_providers', 'modx_media_sources', 'information_schema.tables', 'INFORMATION_SCHEMA.PROCESSLIST', '`information_schema`.`tables`', 'mysql.user', '`mysql`.`user`',
+    'performance_schema.threads', 'sys.session',
+);
+foreach ($xTables as $xTable) {
+    foreach (array(
+        "SELECT * FROM {$xTable}", "select 1 from {$xTable}", "SELECT * FROM modx_test_items JOIN {$xTable} ON 1", "SELECT * FROM modx_test_items JOIN /* c */ {$xTable} ON 1", "SELECT * FROM (SELECT * FROM {$xTable}) AS t",
+        "SELECT * FROM modx_test_items WHERE id IN (SELECT id FROM {$xTable})", "WITH x AS (SELECT * FROM {$xTable}) SELECT * FROM x", "SELECT 1 UNION SELECT 1 FROM {$xTable}", "SELECT (SELECT COUNT(*) FROM {$xTable}) AS n",
+        "SELECT *\nFROM\n{$xTable}\n",
+    ) as $xText) { $xQuery("below admin, {$xText}", $xText, 'forbidden_scope'); }
+}
+foreach (array('read', 'content') as $xScope) { $xQuery("{$xScope} token", 'SELECT 1', 'forbidden_scope', $xActor($xScope)); }
+$xQuery('an alias named like a credential table', 'SELECT name AS users FROM modx_test_items', 'forbidden_scope');
+$e = throws('query_db: custom prefix', ApiException::class, function () { QueryDbAction::guard('SELECT * FROM site_users', 'site_', false); });
+check('query_db: a custom table prefix is recognised', $e && $e->errorCode === 'forbidden_scope');
+$e = throws('query_db: custom prefix of the token table', ApiException::class, function () { QueryDbAction::guard('SELECT * FROM site_modxmcp_tokens', 'site_', true); });
+check('query_db: the token table with a custom prefix is refused for an admin', $e && $e->errorCode === 'forbidden_scope');
+$e = throws('query_db: the {prefix} placeholder', ApiException::class, function () use ($xSql, $xDev) { $xSql($xDev, 'SELECT * FROM {prefix}users'); });
+check('query_db: {prefix}users is refused like modx_users', $e && $e->errorCode === 'forbidden_scope');
+$e = throws('query_db: the {prefix} placeholder, tokens', ApiException::class, function () use ($xSql, $xAdmin) { $xSql($xAdmin, 'SELECT hash FROM `{prefix}modxmcp_tokens`'); });
+check('query_db: {prefix}modxmcp_tokens is refused for an admin', $e && $e->errorCode === 'forbidden_scope' && strpos($e->getMessage(), 'no token may query it') !== false);
+foreach (array('modx_modxmcp_tokens', 'modxmcp_tokens', '`MODX_MODXMCP_TOKENS`', '"modx_modxmcp_tokens"', 'db.modx_modxmcp_tokens', 'mysql.user', 'performance_schema.threads') as $xTable) {
+    foreach (array("SELECT * FROM {$xTable}", "SELECT * FROM (SELECT hash FROM {$xTable}) t", "SELECT * FROM modx_test_items, {$xTable}") as $xText) { $xQuery("admin, {$xText}", $xText, 'forbidden_scope', $xAdmin); }
+}
+$xAdminUsers = $xSql($xAdmin, 'SELECT username, password FROM {prefix}users');
+check('query_db: an admin may read the users table as it is', $xAdminUsers['rows'] == array(array('admin', 'secret-hash')) && $xAdminUsers['columns'] === array('username', 'password'));
+check('query_db: an admin may read the other credential tables', $xSql($xAdmin, 'SELECT COUNT(*) AS n FROM modx_system_settings')['rows'] == array(array(0)));
+$xTokens = $xSite->pdo->query('SELECT COUNT(*) FROM modx_modxmcp_tokens')->fetchColumn();
+check('query_db: nothing in this section touched the token table', (int) $xTokens === 1);
+
+// ---- query_db: results ----
+$xAll = $xSql($xDev, 'SELECT id, name FROM {prefix}test_items ORDER BY id');
+check('query_db: {prefix}, columns, rows as lists, counts', $xAll['columns'] === array('id', 'name') && $xAll['rows'] == array(array(1, 'один'), array(2, 'two'), array(3, 'three'), array(4, 'four'), array(5, 'five'))
+    && $xAll['returned'] === 5 && $xAll['truncated'] === false && is_int($xAll['time_ms']) && $xAll['time_ms'] >= 0);
+check('query_db: the same query with the prefix written out', $xSql($xDev, 'SELECT id, name FROM modx_test_items ORDER BY id')['rows'] == $xAll['rows']);
+$xWith = $xSql($xDev, 'WITH t AS (SELECT id, name FROM {prefix}test_items WHERE id > 3) SELECT name FROM t ORDER BY id');
+check('query_db: WITH ... SELECT works', $xWith['rows'] == array(array('four'), array('five')) && $xWith['columns'] === array('name'));
+$xParams = $xSql($xDev, 'SELECT ? AS a, ? AS b, ? AS c, ? AS d, ? AS e', array('params' => array('текст', 5, true, null, 1.5)));
+check('query_db: params of every type are bound in order', $xParams['rows'] == array(array('текст', 5, 1, null, 1.5)));
+check('query_db: params in a WHERE clause', $xSql($xDev, 'SELECT name FROM {prefix}test_items WHERE id = ? OR name = ? ORDER BY id', array('params' => array(2, 'один')))['rows'] == array(array('один'), array('two')));
+check('query_db: a ? inside a string literal is not a placeholder', $xSql($xDev, "SELECT '?' AS q, ? AS p", array('params' => array('x')))['rows'] == array(array('?', 'x')));
+check('query_db: an injection through a param stays a value', $xSql($xDev, 'SELECT ? AS v', array('params' => array("1'; DELETE FROM modx_test_items; --")))['rows'] == array(array("1'; DELETE FROM modx_test_items; --"))
+    && (int) $xSite->pdo->query('SELECT COUNT(*) FROM modx_test_items')->fetchColumn() === 5);
+$xLimited = $xSql($xDev, 'SELECT id FROM {prefix}test_items ORDER BY id', array('limit' => 2));
+check('query_db: limit cuts the rows and says so', $xLimited['rows'] == array(array(1), array(2)) && $xLimited['returned'] === 2 && $xLimited['truncated'] === true);
+$xExact = $xSql($xDev, 'SELECT id FROM {prefix}test_items ORDER BY id', array('limit' => 5));
+check('query_db: exactly limit rows is not truncated', $xExact['returned'] === 5 && $xExact['truncated'] === false);
+check('query_db: the default limit is 100', $xSql($xDev, 'WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 250) SELECT i FROM n')['returned'] === 100
+    && $xSql($xDev, 'WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 250) SELECT i FROM n')['truncated'] === true);
+check('query_db: limit 1000 is the most', $xSql($xDev, 'WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1500) SELECT i FROM n', array('limit' => 1000))['returned'] === 1000);
+foreach (array(0, -1, 1001, 5000) as $xBadLimit) {
+    $e = throws("query_db: limit {$xBadLimit}", ApiException::class, function () use ($xSql, $xDev, $xBadLimit) { $xSql($xDev, 'SELECT 1', array('limit' => $xBadLimit)); });
+    check("query_db: limit {$xBadLimit} is refused", $e && $e->errorCode === 'validation_failed');
+}
+$xEmpty = $xSql($xDev, 'SELECT id, name FROM {prefix}test_items WHERE id > 99');
+check('query_db: no rows still names the columns', $xEmpty['rows'] == array() && $xEmpty['columns'] === array('id', 'name') && $xEmpty['returned'] === 0 && $xEmpty['truncated'] === false);
+$xLong = $xSql($xDev, "SELECT ? AS ascii, ? AS cyrillic, ? AS exact, ? AS short", array('params' => array(str_repeat('a', 2001), str_repeat('я', 3000), str_repeat('я', 2000), 'ok')));
+check('query_db: values longer than 2000 characters are cut with an ellipsis, counting characters', $xLong['rows'][0][0] === str_repeat('a', 2000) . '…' && $xLong['rows'][0][1] === str_repeat('я', 2000) . '…'
+    && $xLong['rows'][0][2] === str_repeat('я', 2000) && $xLong['rows'][0][3] === 'ok');
+$xBinary = $xSql($xDev, "SELECT x'FFFE00' AS b, x'48656C6C6F' AS h, 'plain' AS p");
+check('query_db: binary values become a marker, valid text stays', $xBinary['rows'][0][0] === '[binary 3 bytes]' && $xBinary['rows'][0][1] === 'Hello' && $xBinary['rows'][0][2] === 'plain' && is_string(json_encode($xBinary, JSON_THROW_ON_ERROR)));
+$xSite->options['modxmcp.max_response_bytes'] = 4096;
+$xBytes = $xSql($xDev, 'WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 500) SELECT i, printf(\'%0500d\', i) AS pad FROM n', array('limit' => 500));
+check('query_db: the rows are also bounded by half the response limit', $xBytes['truncated'] === true && $xBytes['returned'] >= 1 && $xBytes['returned'] < 500 && strlen(json_encode($xBytes['rows'])) <= 2048 + 520);
+unset($xSite->options['modxmcp.max_response_bytes']);
+
+// ---- query_db: database errors ----
+foreach (array('a missing table' => array('SELECT * FROM modx_nothing_here', 'no such table'), 'a syntax error' => array('SELECT FROM WHERE', 'syntax error'), 'a missing column' => array('SELECT nonexistent_col FROM modx_test_items', 'no such column')) as $xLabel => $xCase) {
+    $e = throws("query_db: {$xLabel}", ApiException::class, function () use ($xSql, $xDev, $xCase) { $xSql($xDev, $xCase[0]); });
+    check("query_db: {$xLabel} is validation_failed with the driver message and no stack", $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'Database error: ') === 0 && stripos($e->getMessage(), $xCase[1]) !== false
+        && strpos($e->getMessage(), '#0') === false && strpos($e->getMessage(), '.php') === false);
+}
+$e = throws('query_db: too few params', ApiException::class, function () use ($xSql, $xDev) { $xSql($xDev, 'SELECT ? AS a, ? AS b', array('params' => array(1))); });
+check('query_db: too few params is validation_failed and says how many', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), '2 ? placeholders but params has 1 value') !== false);
+$e = throws('query_db: too many params', ApiException::class, function () use ($xSql, $xDev) { $xSql($xDev, 'SELECT ? AS a', array('params' => array(1, 2))); });
+check('query_db: too many params is validation_failed', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), '1 ? placeholder but params has 2 values') !== false);
+foreach (array(array('x' => 1), 'text', array(array(1)), array(new stdClass())) as $xBadParams) {
+    $e = throws('query_db: params of a wrong shape', ApiException::class, function () use ($xSql, $xDev, $xBadParams) { $xSql($xDev, 'SELECT ?', array('params' => $xBadParams)); });
+    check('query_db: params of a wrong shape are refused', $e && $e->errorCode === 'validation_failed');
+}
+check('query_db: the site is as it was after every refused and failed query', (int) $xSite->pdo->query('SELECT COUNT(*) FROM modx_test_items')->fetchColumn() === 5 && $xSite->pdo->query('SELECT name FROM modx_test_items WHERE id = 1')->fetchColumn() === 'один');
+$xSite->options['table_prefix'] = 'we ird';
+$e = throws('query_db: an unusual prefix', ApiException::class, function () use ($xSql, $xDev) { $xSql($xDev, 'SELECT 1'); });
+check('query_db: a table prefix with unusual characters is refused', $e && $e->errorCode === 'validation_failed');
+$xSite->options['table_prefix'] = 'modx_';
+$xSite->options['modxmcp.allow_query_db'] = false;
+$xQuery('after the setting is turned off again', 'SELECT 1', 'unavailable');
+$xSite->options['modxmcp.allow_run_processor'] = false;
+$xRefuse('run_processor after the setting is turned off again', function () use ($call, $xAdmin) { $call($xAdmin, 'run_processor', array('processor' => 'resource/getlist', 'confirm' => true)); }, 'unavailable');
+
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));
 check('canonical: list order is kept', Kernel::canonical(array(3, 1, 2)) === array(3, 1, 2));

@@ -41,6 +41,8 @@ final class Registry {
         MaintenanceAction::class,
         InstallPackageAction::class,
         UninstallPackageAction::class,
+        RunProcessorAction::class,
+        QueryDbAction::class,
         RequestStatusAction::class,
     );
 

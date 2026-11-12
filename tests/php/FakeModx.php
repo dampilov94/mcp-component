@@ -130,6 +130,9 @@ class FakeResponse {
     /** The raw response body of list processors (a JSON string), as modProcessorResponse::getResponse() returns it. */
     public $body = null;
     public function getResponse() { return $this->body; }
+    /** Field errors as modProcessorResponseError objects (field, message). */
+    public $fieldErrors = array();
+    public function getFieldErrors() { return $this->fieldErrors; }
 }
 class FakeCache {
     public $refreshes = 0;
@@ -319,6 +322,8 @@ class modX extends xPDO {
     const LOG_LEVEL_ERROR = 1;
     public $user;
     public $events = array();
+    public $stubProcessors = array();
+    public $processorCalls = array();
     public $failProcessor = null;      // set to a processor path to make it fail after saving
     public static $cascades = array(
         array('modPlugin', 'modPluginEvent', 'pluginid', array()),
@@ -849,7 +854,12 @@ class modX extends xPDO {
     }
 
     /** Minimal create / update / remove processors with the validation the real ones have. */
-    public function runProcessor($path, array $data = array()) {
+    public function runProcessor($path, array $data = array(), array $options = array()) {
+        // Stub processors of the escape-hatch tests: callables that get (data, options) and return a FakeResponse.
+        if (isset($this->stubProcessors[$path])) {
+            $this->processorCalls[] = array($path, $data, $options);
+            return call_user_func($this->stubProcessors[$path], $data, $options);
+        }
         if ($path === 'security/group/user/create' || $path === 'security/group/user/remove') {
             $where = array('user_group' => $data['usergroup'], 'member' => $data['user']);
             $member = $this->getObject('modUserGroupMember', $where);

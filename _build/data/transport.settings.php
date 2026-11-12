@@ -25,6 +25,7 @@ $defs = array(
     array('modxmcp.history_retention_days', 30, 'textfield', 'modxmcp:limits'),
     array('modxmcp.history_max_bytes', 209715200, 'textfield', 'modxmcp:limits'),
     array('modxmcp.allow_run_processor', 0, 'combo-boolean', 'modxmcp:security'),
+    array('modxmcp.allow_query_db', 0, 'combo-boolean', 'modxmcp:security'),
     array('modxmcp.max_payload_bytes', 1048576, 'textfield', 'modxmcp:limits'),
     array('modxmcp.max_response_bytes', 4194304, 'textfield', 'modxmcp:limits'),
     array('modxmcp.request_retention_seconds', 86400, 'textfield', 'modxmcp:limits'),
