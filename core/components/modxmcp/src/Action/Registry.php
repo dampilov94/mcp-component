@@ -22,6 +22,9 @@ final class Registry {
         BulkResourcesAction::class,
         ViewCodeAction::class,
         EditCodeAction::class,
+        SearchAction::class,
+        ReplaceAction::class,
+        FindUsagesAction::class,
         ListFilesAction::class,
         ReadFileAction::class,
         WriteFileAction::class,
@@ -31,6 +34,8 @@ final class Registry {
         HistoryDiffAction::class,
         UndoAction::class,
         CheckpointAction::class,
+        ReadLogAction::class,
+        MaintenanceAction::class,
         RequestStatusAction::class,
     );
 

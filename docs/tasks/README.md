@@ -39,12 +39,12 @@ below) or append a `## Review` section to the brief with numbered change request
 |---|---|---|---|
 | 01 | [modx_duplicate](01-duplicate.md) | `task/01-duplicate` | merged |
 | 02 | [Journal retention](02-journal-retention.md) | `task/02-journal-retention` | merged |
-| 03 | [modx_search](03-search.md) | `task/03-search` | ready for the executor |
-| 04 | [modx_replace](04-replace.md) | `task/04-replace` | ready for the executor |
-| 05 | [modx_find_usages](05-find-usages.md) | `task/05-find-usages` | ready for the executor |
-| 06 | [modx_read_log](06-read-log.md) | `task/06-read-log` | ready for the executor |
-| 07 | [modx_maintenance](07-maintenance.md) | `task/07-maintenance` | ready for the executor |
-| 08 | [Access kinds](08-access-kinds.md) | `task/08-access-kinds` | ready for the executor |
+| 03 | [modx_search](03-search.md) | `task/03-search` | merged |
+| 04 | [modx_replace](04-replace.md) | `task/04-replace` | merged |
+| 05 | [modx_find_usages](05-find-usages.md) | `task/05-find-usages` | merged |
+| 06 | [modx_read_log](06-read-log.md) | `task/06-read-log` | merged |
+| 07 | [modx_maintenance](07-maintenance.md) | `task/07-maintenance` | merged |
+| 08 | [Access kinds](08-access-kinds.md) | `task/08-access-kinds` | merged |
 
 ## Doing several briefs in a row
 

@@ -169,6 +169,7 @@ trait FakeResourceProcessors {
 
 class modX extends xPDO {
     use FakeResourceProcessors;
+    public $maintenanceProcessors = array();
     const LOG_LEVEL_ERROR = 1;
     public $user;
     public $events = array();
@@ -178,6 +179,8 @@ class modX extends xPDO {
         array('modTemplateVar', 'modTemplateVarTemplate', 'tmplvarid', array()),
         array('modTemplateVar', 'modTemplateVarResource', 'tmplvarid', array()),
         array('modResource', 'modTemplateVarResource', 'contentid', array()),
+        array('modUserGroup', 'modUserGroupMember', 'user_group', array()),
+        array('modResourceGroup', 'modResourceGroupResource', 'document_group', array()),
     );
     private static $processors = array(
         'element/chunk/' => array('modChunk', 'name'), 'element/snippet/' => array('modSnippet', 'name'),
@@ -227,7 +230,14 @@ class modX extends xPDO {
         $this->persist();
     }
     private static function likes($row, $key, $value) {
-        return stripos((string) $row[substr($key, 0, -5)], trim($value, '%')) !== false;
+        $pattern = '';
+        for ($i = 0; $i < strlen($value); $i++) {
+            if ($value[$i] === '\\' && $i + 1 < strlen($value)) { $pattern .= preg_quote($value[++$i], '/'); }
+            elseif ($value[$i] === '%') { $pattern .= '.*'; }
+            elseif ($value[$i] === '_') { $pattern .= '.'; }
+            else { $pattern .= preg_quote($value[$i], '/'); }
+        }
+        return preg_match('/^' . $pattern . '$/is', (string) $row[substr($key, 0, -5)]) === 1;
     }
     private function match($class, $criteria) {
         $groups = $criteria instanceof FakeQuery ? $criteria->groups : array();
@@ -243,7 +253,7 @@ class modX extends xPDO {
             }
             foreach ($criteria as $key => $value) {
                 if (substr($key, -5) === ':LIKE') {
-                    if (stripos((string) $row[substr($key, 0, -5)], trim($value, '%')) === false) { continue 2; }
+                    if (!self::likes($row, $key, $value)) { continue 2; }
                 } elseif (!array_key_exists($key, $row) || (string) $row[$key] !== (string) $value) { continue 2; }
             }
             $out[] = $row;
@@ -278,14 +288,67 @@ class modX extends xPDO {
         return true;
     }
     public function invokeEvent($name, array $params = array()) { $this->events[] = $name; }
+    public function getCachePath() { return $this->getOption('core_path') . 'cache/'; }
     public function getCacheManager() { return $this->cache; }
     public function log($level, $message) { error_log($message); }
     public function getVersionData() { return array('full_version' => '2.8.8-pl'); }
 
+    /** Security processors: model defaults and core refusals from MODX 2.8.8. */
+    private function accessProcessor($base, $action, array $data) {
+        $classes = array('security/group/' => 'modUserGroup', 'security/role/' => 'modUserGroupRole', 'security/resourcegroup/' => 'modResourceGroup');
+        $class = $classes[$base];
+        $object = $action === 'create' ? $this->newObject($class) : $this->getObject($class, array('id' => $data['id']));
+        if (!$object) { return new FakeResponse('Object not found.'); }
+        if ($action === 'remove') {
+            if ($class === 'modUserGroup' && ((int) $object->get('id') === 1 || $object->get('name') === 'Administrator')) {
+                return new FakeResponse('You cannot remove the Administrator group.');
+            }
+            if ($class === 'modUserGroupRole') {
+                if (in_array($object->get('name'), array('Member', 'Super User'), true)) {
+                    return new FakeResponse('The role you are trying to delete is the admin role. This role cannot be deleted!');
+                }
+                if ($this->getCount('modUserGroupMember', array('role' => $object->get('id')))) {
+                    return new FakeResponse('There are users with this role. It cannot be deleted.');
+                }
+            }
+            $object->remove();
+            return new FakeResponse(null, array('id' => $data['id']));
+        }
+        // The group update processor checks uniqueness, but does not reject an empty name.
+        if (($class !== 'modUserGroup' || $action === 'create') && empty($data['name'])) { return new FakeResponse('Please specify a name.'); }
+        foreach ($this->getCollection($class, array('name' => $data['name'])) as $existing) {
+            if ($action === 'create' || (int) $existing->get('id') !== (int) $data['id']) {
+                return new FakeResponse('An object with that name already exists.');
+            }
+        }
+        if ($action === 'create') {
+            if ($class === 'modUserGroup') { $data += array('description' => null, 'parent' => 0, 'rank' => 0, 'dashboard' => 1); }
+            elseif ($class === 'modUserGroupRole') { $data += array('description' => null, 'authority' => 9999); }
+            else { $data += array('private_memgroup' => 0, 'private_webgroup' => 0); }
+        }
+        $object->fromArray($data, '', false, true);
+        $object->save();
+        return new FakeResponse(null, array('id' => $object->get('id')));
+    }
+
     /** Minimal create / update / remove processors with the validation the real ones have. */
     public function runProcessor($path, array $data = array()) {
+        if (in_array($path, array('system/refreshuris', 'system/remove_locks', 'security/access/flush', 'resource/emptyrecyclebin'), true)) {
+            $this->maintenanceProcessors[] = $path;
+            if ($this->failProcessor === $path) { return new FakeResponse('Maintenance processor refused.'); }
+            if ($path === 'resource/emptyrecyclebin') {
+                $this->invokeEvent('OnBeforeEmptyTrash');
+                foreach ($this->getCollection('modResource', array('deleted' => 1)) as $resource) {
+                    $this->removeCollection('modResourceGroupResource', array('document' => $resource->get('id')));
+                    $resource->remove();
+                }
+                $this->invokeEvent('OnEmptyTrash');
+            }
+            return new FakeResponse(null);
+        }
         $action = basename($path);
         $base = substr($path, 0, -strlen($action));
+        if (in_array($base, array('security/group/', 'security/role/', 'security/resourcegroup/'), true)) { return $this->accessProcessor($base, $action, $data); }
         if ($base === 'resource/') { return $this->resourceProcessor($action, $data, $path); }
         if (!isset(self::$processors[$base])) { return null; }
         list($class, $nameColumn) = self::$processors[$base];

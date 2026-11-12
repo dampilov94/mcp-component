@@ -76,3 +76,28 @@ Update tool lists/counts in both test files.
 
 `npm run check`, `npm test`. Files: `src/Action/FindUsagesAction.php`, `src/Action/Registry.php`,
 `src/Code/*` helper if needed, tests, `tests/php/FakeModx.php` only if needed.
+
+## Report
+
+Based on: task/04-replace at b3307cb
+
+- `FindUsagesAction.php`: supported target lookup, escaped textual patterns with name/id
+  boundaries, tag/API/property/Fenom classification, effective-code scans through
+  CodeSearch, target exclusion, bounded excerpts and structural extras.
+- `Registry.php` and both test files: added the read tool (27 tools total). Isolated fake
+  fixtures cover all supported targets and via types, cached/uncached tags, prefix false
+  positives, static files, self-exclusion, ordering, limits, extras and read access.
+- `npm run check` and `npm test` passed: 444 PHP checks and 24 Node/HTTP tests.
+
+Interpretation: match_count counts textual occurrences, including different via types on
+one line; matches contains the first five occurrences in source order. Truncated results
+use the same scanned-subset ordering as search. No changes to delete or dependency graphs.
+Only fake MODX/local files were exercised; verify real xPDO relation counts, resource
+prefiltering and static reads on the stand. No blocking questions, deployment or push.
+
+## Review
+
+Accepted and merged with the rest of the stack (03–08). Verified on the stand with
+`scripts/stand/check-code-tools.cjs`.
+
+No changes.

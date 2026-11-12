@@ -15,6 +15,9 @@ final class KindRegistry {
         CategoryKind::class,
         ResourceKind::class,
         MediaSourceKind::class,
+        UserGroupKind::class,
+        RoleKind::class,
+        ResourceGroupKind::class,
     );
 
     private $kinds = null;

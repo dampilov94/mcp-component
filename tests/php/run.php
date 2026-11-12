@@ -113,14 +113,14 @@ $context = function ($scope, array $denied = array(), array $options = array()) 
 $read = $context('read');
 $tools = Manifest::tools($read);
 $names = array_column($tools, 'name');
-check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_resource_tree', 'modx_view_code', 'modx_list_files', 'modx_read_file', 'modx_history', 'modx_history_diff', 'modx_request_status'));
+check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_resource_tree', 'modx_view_code', 'modx_search', 'modx_find_usages', 'modx_list_files', 'modx_read_file', 'modx_history', 'modx_history_diff', 'modx_request_status'));
 check('manifest: protocol action is not a tool', !in_array('modx_manifest', $names, true));
 check('manifest: hash is stable', Manifest::hash($tools) === Manifest::hash(Manifest::tools($context('read'))));
 foreach ($tools as $tool) {
     check("manifest: {$tool['name']} is read-only", $tool['effect']['read_only'] === true && $tool['effect']['destructive'] === false);
 }
 $all = array_column(Manifest::tools($context('admin')), null, 'name');
-check('manifest: full tool count', count($all) === 24);
+check('manifest: full tool count', count($all) === 29);
 check('manifest: duplicate is a reversible write after delete', $all['modx_duplicate']['effect']['read_only'] === false
     && $all['modx_duplicate']['effect']['reversible'] === true && $all['modx_duplicate']['effect']['destructive'] === false
     && array_search('modx_duplicate', array_keys($all), true) === array_search('modx_delete', array_keys($all), true) + 1);
@@ -133,7 +133,7 @@ check('manifest: encodes', is_string(json_encode($tools, JSON_THROW_ON_ERROR)));
 
 $describe = $read->actions->get('describe');
 $list = $describe->run(array(), $read);
-check('describe: lists element kinds', array_column($list['kinds'], 'kind') === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source'));
+check('describe: lists element kinds', array_column($list['kinds'], 'kind') === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source', 'user_group', 'role', 'resource_group'));
 $chunk = $describe->run(array('kind' => 'chunk'), $read);
 $fields = array_column($chunk['fields'], null, 'name');
 check('describe: chunk exposes content as code', !empty($fields['content']['code']) && $fields['name']['required'] === true && $fields['id']['read_only'] === true);
@@ -188,6 +188,47 @@ check('lint: valid snippet code', PhpLint::check("\$a = 1;\nreturn \$a;") === nu
 check('lint: opening tag accepted', PhpLint::check("<?php\nreturn 1;") === null);
 $lint = PhpLint::check("\$a = 1;\nreturn \$a +;\n");
 check('lint: error line refers to the stored source', $lint && $lint['line'] === 2 && strpos($lint['message'], 'syntax error') === 0);
+
+// Pure bounded log reader: multiline entries, cursors and byte/character boundaries.
+$logPath = sys_get_temp_dir() . '/modxmcp-log-' . bin2hex(random_bytes(6));
+$logOne = "[2026-01-01 10:00:00] (ERROR @ /core/test.php : 7) first\ntrace one\ntrace two\n";
+$logTwo = "[2026-01-01 10:01:00] (INFO @ /core/next.php) second\n";
+$logThree = "[2026-01-01 10:02:00] odd header\ncontinued\n";
+file_put_contents($logPath, "startup\n" . $logOne . $logTwo . $logThree);
+$log = ModxMCP\Verify\LogReader::tail($logPath);
+check('log: multiline entries, prologue and fallback headers', $log['returned'] === 4 && !$log['truncated'] && !$log['reset']
+    && $log['entries'][0] === array('message' => 'startup')
+    && $log['entries'][1] === array('time' => '2026-01-01 10:00:00', 'level' => 'ERROR', 'location' => '/core/test.php : 7', 'message' => "first\ntrace one\ntrace two")
+    && $log['entries'][3] === array('time' => '2026-01-01 10:02:00', 'message' => "odd header\ncontinued"));
+$limitedLog = ModxMCP\Verify\LogReader::tail($logPath, 1);
+check('log: limit keeps newest matching entry', $limitedLog['truncated'] && $limitedLog['entries'] === array($log['entries'][3]));
+$filteredLog = ModxMCP\Verify\LogReader::tail($logPath, 1, 262144, 'TRACE TWO');
+check('log: filter covers whole entry before limit', !$filteredLog['truncated'] && $filteredLog['entries'] === array($log['entries'][1]));
+check('log: cursor at end is empty', ModxMCP\Verify\LogReader::tail($logPath, 50, 262144, '', $log['end_offset'])['returned'] === 0);
+file_put_contents($logPath, $logTwo, FILE_APPEND);
+$newLog = ModxMCP\Verify\LogReader::tail($logPath, 50, 262144, '', $log['end_offset']);
+check('log: appended entries and new end cursor', $newLog['entries'] === array($log['entries'][2]) && $newLog['end_offset'] === $log['size'] + strlen($logTwo));
+$midLog = ModxMCP\Verify\LogReader::tail($logPath, 50, 262144, '', 40);
+check('log: cursor inside an entry drops its tail', $midLog['returned'] === 3 && $midLog['entries'][0]['message'] === 'second');
+file_put_contents($logPath, $logTwo);
+$resetLog = ModxMCP\Verify\LogReader::tail($logPath, 50, 262144, '', $newLog['end_offset']);
+check('log: rotation resets cursor', $resetLog['reset'] && $resetLog['returned'] === 1 && $resetLog['end_offset'] === strlen($logTwo));
+file_put_contents($logPath, $logOne . str_repeat('old continuation x', 1000) . "\n" . $logTwo . $logThree);
+$boundedLog = ModxMCP\Verify\LogReader::tail($logPath, 50, 12000);
+check('log: reverse byte window drops partial entry', $boundedLog['truncated'] && $boundedLog['returned'] === 2
+    && $boundedLog['entries'][0]['message'] === 'second' && $boundedLog['entries'][1]['message'] === "odd header\ncontinued");
+$boundaryLog = ModxMCP\Verify\LogReader::tail($logPath, 50, strlen($logTwo . $logThree) + 1);
+check('log: byte window on a line boundary keeps complete entry', $boundaryLog['returned'] === 2);
+file_put_contents($logPath, str_replace("\n", "\r\n", $logOne . $logTwo));
+check('log: CRLF normalized', ModxMCP\Verify\LogReader::tail($logPath)['entries'][0]['message'] === "first\ntrace one\ntrace two");
+file_put_contents($logPath, "[2026-01-01 10:00:00] (ERROR @ place) bad\xff" . str_repeat('Ж', 2100) . 'needle');
+$utfLog = ModxMCP\Verify\LogReader::tail($logPath, 50, 262144, 'needle');
+check('log: invalid UTF-8 replaced and long message clipped after filtering', $utfLog['returned'] === 1
+    && mb_strlen($utfLog['entries'][0]['message'], 'UTF-8') === 2001 && strpos($utfLog['entries'][0]['message'], "\xef\xbf\xbd") !== false
+    && preg_match('//u', $utfLog['entries'][0]['message']) === 1);
+unlink($logPath);
+$emptyLog = ModxMCP\Verify\LogReader::tail($logPath);
+check('log: missing file is empty', $emptyLog === array('size' => 0, 'end_offset' => 0, 'entries' => array(), 'returned' => 0, 'truncated' => false, 'reset' => false));
 
 $blobDir = sys_get_temp_dir() . '/modxmcp-blob-' . bin2hex(random_bytes(6));
 $blobs = new BlobStore($blobDir, 2048);
@@ -318,6 +359,198 @@ check('list: paging', count($page['items']) === 2 && $page['next_start'] === 2);
 check('list: name query', array_column($call($dev, 'list', array('kind' => 'chunk', 'query' => 'head'))['items'], 'name') === array('head_meta', 'header'));
 check('list: exact filter', array_column($call($dev, 'list', array('kind' => 'chunk', 'where' => array('category' => 3)))['items'], 'name') === array('footer'));
 throws('list: code cannot be listed', ApiException::class, function () use ($call, $dev) { $call($dev, 'list', array('kind' => 'chunk', 'fields' => array('content'))); });
+
+// Search: temporary fixtures do not disturb the journal/history checks below.
+$searchFile = $siteDir . '/search.tpl';
+file_put_contents($searchFile, "  Needle one  \nno\nNeedle two Needle\nneedle lower");
+$searchRows = array(
+    array('modChunk', array('id' => 1001, 'name' => 'Z search', 'snippet' => 'stale', 'static' => 1, 'static_file' => $searchFile)),
+    array('modChunk', array('id' => 1002, 'name' => 'A search', 'snippet' => 'Needle chunk')),
+    array('modSnippet', array('id' => 1001, 'name' => 'S search', 'snippet' => 'return "needle";')),
+    array('modResource', array('id' => 1001, 'pagetitle' => 'Page search', 'content' => 'needle %_\\ literal')),
+);
+foreach ($searchRows as $row) { $site->store($row[0], $row[1]); }
+$searchBefore = $site->row('modChunk', 1001);
+$found = $call($actor('read'), 'search', array('query' => 'needle', 'kinds' => array('snippet', 'chunk'), 'max_matches' => 1));
+check('search: exact counts, requested kind/name order', $found['objects'] === 3 && !$found['truncated']
+    && array_column($found['results'], 'name') === array('S search', 'A search', 'Z search')
+    && $found['results'][2]['match_count'] === 3 && $found['results'][2]['matches'] === array(array('line' => 1, 'text' => 'Needle one')));
+$exact = $call($dev, 'search', array('query' => 'Needle', 'case_sensitive' => true));
+check('search: case sensitivity and line numbers', $exact['objects'] === 2 && $exact['results'][1]['matches'] === array(
+    array('line' => 1, 'text' => 'Needle one'), array('line' => 3, 'text' => 'Needle two Needle')));
+check('search: static file and database are untouched', $site->row('modChunk', 1001) === $searchBefore
+    && file_get_contents($searchFile) === "  Needle one  \nno\nNeedle two Needle\nneedle lower");
+$limited = $call($dev, 'search', array('query' => 'needle', 'limit' => 1));
+check('search: limit reports truncation', $limited['objects'] === 1 && $limited['truncated']);
+$nameOnly = $call($dev, 'search', array('query' => 'A search'))['results'][0];
+check('search: name-only hit', $nameOnly['name_match'] && $nameOnly['match_count'] === 0 && $nameOnly['matches'] === array());
+check('search: resources are opt-in', $call($dev, 'search', array('query' => 'needle'))['objects'] === 3
+    && $call($dev, 'search', array('query' => 'needle', 'kinds' => array('resource')))['objects'] === 1);
+check('search: SQL wildcard escaping stays literal', $call($dev, 'search', array('query' => '%_\\', 'kinds' => array('resource')))['objects'] === 1
+    && $call($dev, 'search', array('query' => '%x', 'kinds' => array('resource')))['objects'] === 0);
+foreach (array('tv' => 'validation_failed', 'unknown' => 'not_found') as $badKind => $code) {
+    $e = throws('search: invalid kind', ApiException::class, function () use ($call, $dev, $badKind) { $call($dev, 'search', array('query' => 'needle', 'kinds' => array($badKind))); });
+    check('search: kind error code', $e && $e->errorCode === $code);
+}
+file_put_contents($searchFile, str_repeat('Ж', 400) . 'needle' . str_repeat('я', 400));
+$window = $call($dev, 'search', array('query' => 'needle'))['results'][1]['matches'][0]['text'];
+check('search: long UTF-8 window keeps match visible', preg_match('//u', $window) === 1 && mb_strlen($window, 'UTF-8') <= 301 && strpos($window, 'needle') !== false);
+unlink($searchFile);
+$missing = $call($dev, 'search', array('query' => 'Z search'))['results'][0];
+check('search: missing static file permits name-only hit', $missing['name_match'] && $missing['match_count'] === 0);
+foreach ($searchRows as $row) { $site->removeCollection($row[0], array('id' => $row[1]['id'])); }
+
+// Replace uses its own fake site so the history assertions below remain independent.
+$replaceDir = $siteDir . '/replace';
+mkdir($replaceDir . '/core', 0700, true);
+$replaceSite = fakeSite($replaceDir);
+$replaceDev = new Context($replaceSite, $dev->token, $dev->corePath, function () { throw new RuntimeException('no store'); });
+$replaceDev->sessionId = 'replace-session-0001';
+$replaceFile = $replaceDir . '/static.tpl';
+file_put_contents($replaceFile, 'replA replA');
+$replaceSite->store('modChunk', array('id' => 1, 'name' => 'replace a', 'snippet' => "replA\nreplA repla"));
+$replaceSite->store('modChunk', array('id' => 2, 'name' => 'replace static', 'snippet' => 'stale', 'static' => 1, 'static_file' => $replaceFile));
+$replaceSite->store('modSnippet', array('id' => 1, 'name' => 'replace php', 'snippet' => "return 'replA';"));
+foreach (array('chunk', 'snippet') as $kindName) {
+    $kind = $replaceDev->kinds->get($kindName);
+    $defaults = array();
+    foreach ($kind->fields() as $field => $definition) { $defaults[$kind->column($field)] = $definition['type'] === 'string' ? '' : 0; }
+    foreach ($replaceSite->getCollection($kind->modelClass()) as $object) { $replaceSite->store($kind->modelClass(), $object->toArray() + $defaults); }
+}
+$replaceArgs = array('find' => 'replA', 'replacement' => 'done');
+$plan = $call($replaceDev, 'replace', $replaceArgs + array('dry_run' => true));
+check('replace: dry run counts occurrences and supplies revisions', count($plan['objects']) === 3 && $plan['total_occurrences'] === 5
+    && !$plan['truncated'] && array_keys($plan['revisions']) === array('chunk:1', 'chunk:2', 'snippet:1')
+    && $plan['objects'][0]['matches'] === array(array('line' => 1, 'text' => 'replA'), array('line' => 2, 'text' => 'replA repla'))
+    && $replaceDev->journal()->lastChangesetId() === 0 && file_get_contents($replaceFile) === 'replA replA');
+check('replace: case-insensitive preview counts all casings', $call($replaceDev, 'replace', $replaceArgs + array('dry_run' => true, 'case_sensitive' => false))['total_occurrences'] === 6);
+check('replace: bounded preview', $call($replaceDev, 'replace', $replaceArgs + array('dry_run' => true, 'limit' => 1))['truncated']);
+$e = throws('replace: real run requires a reviewed map', ApiException::class, function () use ($call, $replaceDev, $replaceArgs) { $call($replaceDev, 'replace', $replaceArgs); });
+check('replace: missing map error', $e && $e->errorCode === 'validation_failed');
+$applied = $call($replaceDev, 'replace', $replaceArgs + array('expected_revisions' => $plan['revisions']));
+check('replace: one changeset replaces all reviewed objects', $applied['total_occurrences'] === 5 && $applied['changeset_id'] === 1
+    && count($replaceDev->journal()->changes(array(1))) === 3 && file_get_contents($replaceFile) === 'done done'
+    && $replaceSite->row('modChunk', 1)['snippet'] === "done\ndone repla");
+$call($replaceDev, 'undo', array('changeset_id' => 1, 'confirm' => true));
+check('replace: undo restores all objects including static file', file_get_contents($replaceFile) === 'replA replA'
+    && $call($replaceDev, 'get', array('kind' => 'chunk', 'id' => 1))['revision'] === $plan['revisions']['chunk:1']
+    && $call($replaceDev, 'get', array('kind' => 'snippet', 'id' => 1))['revision'] === $plan['revisions']['snippet:1']);
+$e = throws('replace: lint preflights every object', ApiException::class, function () use ($call, $replaceDev, $plan) {
+    $call($replaceDev, 'replace', array('find' => 'replA', 'replacement' => "'", 'expected_revisions' => $plan['revisions']));
+});
+check('replace: lint identifies object and leaves chunks untouched', $e && $e->errorCode === 'lint_failed' && $e->details['object'] === 'snippet:1'
+    && file_get_contents($replaceFile) === 'replA replA' && $replaceSite->row('modChunk', 1)['snippet'] === "replA\nreplA repla");
+$call($replaceDev, 'update', array('kind' => 'snippet', 'id' => 1, 'fields' => array('description' => 'changed since preview')));
+$e = throws('replace: stale revision refuses the whole batch', ApiException::class, function () use ($call, $replaceDev, $replaceArgs, $plan) {
+    $call($replaceDev, 'replace', $replaceArgs + array('expected_revisions' => $plan['revisions']));
+});
+check('replace: conflict names changed object', $e && $e->errorCode === 'revision_conflict' && $e->details['changed'] === array('snippet:1')
+    && file_get_contents($replaceFile) === 'replA replA');
+foreach (array('bad' => 'validation_failed', 'resource:1' => 'validation_failed', 'chunk:999' => 'not_found') as $key => $error) {
+    $e = throws('replace: invalid selection', ApiException::class, function () use ($call, $replaceDev, $replaceArgs, $key) {
+        $call($replaceDev, 'replace', $replaceArgs + array('expected_revisions' => array($key => str_repeat('0', 64))));
+    });
+    check('replace: selection error code', $e && $e->errorCode === $error);
+}
+$replacePlanOnly = new Context($replaceSite, array('plan_only' => true) + $dev->token, $dev->corePath, function () {});
+check('replace: plan-only forces preview', $call($replacePlanOnly, 'replace', $replaceArgs)['planned']);
+$e = throws('replace: content cannot write chunks', ApiException::class, function () use ($call, $actor, $replaceArgs) { $call($actor('content'), 'replace', $replaceArgs + array('dry_run' => true)); });
+check('replace: scope enforced during preview', $e && $e->errorCode === 'forbidden_scope');
+$insensitive = $call($replaceDev, 'replace', $replaceArgs + array('dry_run' => true, 'case_sensitive' => false));
+$done = $call($replaceDev, 'replace', $replaceArgs + array('expected_revisions' => $insensitive['revisions'], 'case_sensitive' => false));
+check('replace: insensitive real run', $done['total_occurrences'] === 6 && $replaceSite->row('modChunk', 1)['snippet'] === "done\ndone done");
+$zeroPlan = $call($replaceDev, 'replace', array('find' => 'done', 'replacement' => 'x', 'dry_run' => true));
+$zero = $call($replaceDev, 'replace', $replaceArgs + array('expected_revisions' => $zeroPlan['revisions']));
+check('replace: zero occurrences are returned without a changeset', $zero['total_occurrences'] === 0 && $zero['changeset_id'] === null && count($zero['objects']) === 3);
+unlink($replaceFile);
+$missingRevision = $call($replaceDev, 'get', array('kind' => 'chunk', 'id' => 2))['revision'];
+$e = throws('replace: missing static file is refused', ApiException::class, function () use ($call, $replaceDev, $replaceArgs, $missingRevision) {
+    $call($replaceDev, 'replace', $replaceArgs + array('expected_revisions' => array('chunk:2' => $missingRevision)));
+});
+check('replace: missing file identifies object', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'chunk:2') !== false);
+
+// Find usages: textual references and structural extras on an independent site.
+$usageDir = $siteDir . '/usages';
+mkdir($usageDir . '/core', 0700, true);
+$usageSite = fakeSite($usageDir);
+$usageRead = new Context($usageSite, array('scope' => 'read') + $dev->token, $dev->corePath, function () {});
+$usageSite->store('modChunk', array('id' => 12, 'name' => 'header', 'snippet' => '[[$header]]', 'category' => 3));
+$usageSite->store('modSnippet', array('id' => 13, 'name' => 'worker', 'snippet' => '[[worker]]', 'category' => 3));
+$usageSite->store('modTemplateVar', array('id' => 14, 'name' => 'image', 'category' => 3));
+$usageSite->store('modResource', array('id' => 12, 'pagetitle' => 'Target', 'content' => '[[~12]]', 'template' => 0, 'deleted' => 0, 'parent' => 0));
+$usageSite->store('modTemplate', array('id' => 2, 'templatename' => 'Base usages', 'content' => '', 'category' => 3));
+$usageSite->store('modCategory', array('id' => 3, 'category' => 'Parent', 'parent' => 0));
+$usageSite->store('modCategory', array('id' => 4, 'category' => 'Child', 'parent' => 3));
+$usageCode = <<<'CODE'
+[[$header]]
+[[!$header]]
+getChunk('header')
+&tpl=`header`
+{include 'header'}
+'header' | chunk
+[[$header_top]] getChunk('header_top') `header_top` {include 'header_top'}
+[[worker]]
+[[!worker]]
+runSnippet("worker")
+&snippet=`worker`
+'worker' | snippet
+[[worker.extra]] runSnippet('worker-extra') `worker_more`
+[[*image]]
+[[!*image]]
+getTVValue('image')
+resource.image
+&includeTVs=`other,image`
+&processTVs=`image,other`
+&tvFilters=`image==yes`
+[[*image_more]] resource.image_more &includeTVs=`image_more`
+[[~12]]
+[[!~12]]
+makeUrl(12)
+12 | url
+[[~123]] makeUrl(123) 123 | url 112 | url
+CODE;
+$usageSite->store('modChunk', array('id' => 100, 'name' => 'A calls', 'snippet' => $usageCode, 'category' => 3));
+$usageFile = $usageDir . '/uses.tpl';
+file_put_contents($usageFile, "[[\$header]]\n[[worker]]\n[[*image]]\n[[~12]]");
+$usageSite->store('modChunk', array('id' => 101, 'name' => 'Z static', 'snippet' => 'no references', 'static' => 1, 'static_file' => $usageFile, 'category' => 0));
+$usageSite->store('modPlugin', array('id' => 100, 'name' => 'Event', 'plugincode' => '', 'category' => 3));
+$usageSite->store('modResource', array('id' => 13, 'pagetitle' => 'Page calls', 'content' => "[[\$header]] [[worker]] [[*image]] [[~12]]", 'template' => 2, 'deleted' => 0, 'parent' => 12));
+for ($i = 20; $i <= 41; $i++) { $usageSite->store('modResource', array('id' => $i, 'pagetitle' => 'Page ' . $i, 'content' => '', 'template' => 2, 'deleted' => 0, 'parent' => 0)); }
+$usageSite->store('modResource', array('id' => 19, 'pagetitle' => 'Trashed', 'content' => '', 'template' => 2, 'deleted' => 1, 'parent' => 0));
+$usageSite->store('modTemplateVarTemplate', array('templateid' => 2, 'tmplvarid' => 14));
+$usageSite->store('modTemplateVarResource', array('contentid' => 13, 'tmplvarid' => 14, 'value' => 'one'));
+$usageSite->store('modTemplateVarResource', array('contentid' => 20, 'tmplvarid' => 14, 'value' => 'two'));
+foreach (array('chunk' => array(12, 6, 1), 'snippet' => array(13, 5, 8), 'tv' => array(14, 7, 14), 'resource' => array(12, 4, 22)) as $kindName => $expected) {
+    $usage = $call($usageRead, 'find_usages', array('kind' => $kindName, 'id' => $expected[0]));
+    check('usages: exact count and ordering for ' . $kindName, $usage['objects'] === 3 && !$usage['truncated']
+        && array_column($usage['usages'], 'name') === array('A calls', 'Z static', 'Page calls')
+        && $usage['usages'][0]['match_count'] === $expected[1] && $usage['usages'][0]['matches'][0]['line'] === $expected[2]);
+    check('usages: tags, API and Fenom classified for ' . $kindName,
+        array_column($usage['usages'][0]['matches'], 'via') === ($kindName === 'resource' ? array('tag', 'tag', 'api', 'fenom')
+        : ($kindName === 'tv' ? array('tag', 'tag', 'api', 'fenom', 'property') : array('tag', 'tag', 'api', 'property', 'fenom'))));
+    check('usages: static content read for ' . $kindName, $usage['usages'][1]['static'] && $usage['usages'][1]['match_count'] === 1);
+    $capped = $call($usageRead, 'find_usages', array('kind' => $kindName, 'id' => $expected[0], 'limit' => 1));
+    check('usages: object limit for ' . $kindName, $capped['objects'] === 1 && $capped['truncated']);
+}
+check('usages: template extras count live pages and cap ids', $call($usageRead, 'find_usages', array('kind' => 'template', 'id' => 2))['extra']
+    === array('resources' => 23, 'resource_ids' => array_merge(array(13), range(20, 38)), 'tvs' => array(14)));
+check('usages: TV extras', $call($usageRead, 'find_usages', array('kind' => 'tv', 'name' => 'image'))['extra'] === array('templates' => array(2), 'resources_with_value' => 2));
+check('usages: category extras', $call($usageRead, 'find_usages', array('kind' => 'category', 'id' => 3))['extra']
+    === array('chunks' => 2, 'snippets' => 1, 'templates' => 1, 'plugins' => 1, 'tvs' => 1, 'subcategories' => 1));
+check('usages: resource children and empty chunk extra', $call($usageRead, 'find_usages', array('kind' => 'resource', 'id' => 12))['extra'] === array('children' => 1)
+    && $call($usageRead, 'find_usages', array('kind' => 'chunk', 'id' => 12))['extra'] instanceof stdClass);
+$e = throws('usages: unsupported target', ApiException::class, function () use ($call, $usageRead) { $call($usageRead, 'find_usages', array('kind' => 'plugin', 'id' => 100)); });
+check('usages: unsupported lists supported targets', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'category') !== false);
+
+// Read log is developer-only and reads the configured MODX cache path.
+mkdir($site->getCachePath() . 'logs', 0700, true);
+file_put_contents($site->getCachePath() . 'logs/error.log', "[2026-01-01 10:00:00] (ERROR @ fake) action log\n");
+check('read_log: develop token can read', $call($dev, 'read_log')['entries'][0]['message'] === 'action log');
+foreach (array('read', 'content') as $scope) {
+    $e = throws('read_log: lesser scope refused', ApiException::class, function () use ($call, $actor, $scope) { $call($actor($scope), 'read_log'); });
+    check('read_log: forbidden and absent from manifest', $e && $e->errorCode === 'forbidden_scope'
+        && !in_array('modx_read_log', array_column(Manifest::tools($actor($scope)), 'name'), true));
+}
 
 // History and diff
 $history = $call($dev, 'history', array('kind' => 'chunk', 'id' => 1));
@@ -614,6 +847,164 @@ $warned = $actor('content');
 $call($warned, 'update', array('kind' => 'resource', 'id' => $news['id'], 'fields' => array('longtitle' => 'Product')));
 check('resource: extended classes get a journaling warning', count($warned->warnings) === 1 && strpos($warned->warnings[0], 'msProduct') !== false);
 
+// Maintenance operations use a separate site; irreversible cleanup must not affect other tests.
+$maintenanceDir = $siteDir . '/maintenance';
+mkdir($maintenanceDir . '/core', 0700, true);
+$maintenanceSite = fakeSite($maintenanceDir);
+$maintenanceAdmin = new Context($maintenanceSite, array('scope' => 'admin') + $dev->token, $dev->corePath, function () {});
+$maintenancePlan = new Context($maintenanceSite, array('scope' => 'admin', 'plan_only' => true) + $dev->token, $dev->corePath, function () {});
+$trashParent = $call($maintenanceAdmin, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Parent')));
+$trashChild = $call($maintenanceAdmin, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Child', 'parent' => $trashParent['id'])));
+$trashOther = $call($maintenanceAdmin, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Other')));
+$keepPage = $call($maintenanceAdmin, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Keep')));
+$maintenanceSite->store('modTemplateVarResource', array('contentid' => $trashChild['id'], 'tmplvarid' => 20, 'value' => 'trash'));
+$maintenanceSite->store('modResourceGroupResource', array('document' => $trashChild['id'], 'document_group' => 2));
+$call($maintenanceAdmin, 'delete', array('kind' => 'resource', 'id' => $trashParent['id']));
+$call($maintenanceAdmin, 'delete', array('kind' => 'resource', 'id' => $trashOther['id']));
+$maintenanceHistory = $maintenanceAdmin->journal()->lastChangesetId();
+$trashPlan = $call($maintenanceAdmin, 'maintenance', array('operation' => 'empty_trash'));
+check('maintenance: unconfirmed trash previews descendants too', !$trashPlan['performed'] && $trashPlan['would_remove'] === 3
+    && array_column($trashPlan['resources'], 'id') === array($trashParent['id'], $trashChild['id'], $trashOther['id'])
+    && $maintenanceSite->getCount('modResource') === 4);
+$refreshes = $maintenanceSite->getCacheManager()->refreshes;
+foreach (array('clear_cache', 'refresh_uris', 'remove_locks', 'flush_permissions', 'empty_trash') as $operation) {
+    check('maintenance: plan-only never performs ' . $operation, !$call($maintenancePlan, 'maintenance', array('operation' => $operation, 'confirm' => true))['performed']);
+}
+check('maintenance: plans cause no cache/processor work', $maintenanceSite->getCacheManager()->refreshes === $refreshes && $maintenanceSite->maintenanceProcessors === array());
+check('maintenance: clear cache calls refresh', $call($maintenanceAdmin, 'maintenance', array('operation' => 'clear_cache'))['performed']
+    && $maintenanceSite->getCacheManager()->refreshes === $refreshes + 1);
+foreach (array('refresh_uris' => 'system/refreshuris', 'remove_locks' => 'system/remove_locks', 'flush_permissions' => 'security/access/flush') as $operation => $path) {
+    check('maintenance: correct processor for ' . $operation, $call($maintenanceAdmin, 'maintenance', array('operation' => $operation))['performed']
+        && end($maintenanceSite->maintenanceProcessors) === $path);
+}
+$maintenanceSite->failProcessor = 'system/refreshuris';
+$e = throws('maintenance: processor refusal', ApiException::class, function () use ($call, $maintenanceAdmin) { $call($maintenanceAdmin, 'maintenance', array('operation' => 'refresh_uris')); });
+check('maintenance: processor message passes through', $e && $e->errorCode === 'validation_failed' && $e->getMessage() === 'Maintenance processor refused.');
+$maintenanceSite->failProcessor = null;
+foreach (array('read', 'content', 'develop') as $scope) {
+    $e = throws('maintenance: non-admin refused', ApiException::class, function () use ($call, $actor, $scope) { $call($actor($scope), 'maintenance', array('operation' => 'clear_cache')); });
+    check('maintenance: forbidden scope and hidden tool', $e && $e->errorCode === 'forbidden_scope'
+        && !in_array('modx_maintenance', array_column(Manifest::tools($actor($scope)), 'name'), true));
+}
+$maintenanceTool = array_column(Manifest::tools($maintenanceAdmin), null, 'name')['modx_maintenance'];
+check('maintenance: admin manifest marks irreversible destructive write', !$maintenanceTool['effect']['read_only'] && !$maintenanceTool['effect']['reversible'] && $maintenanceTool['effect']['destructive']);
+$emptied = $call($maintenanceAdmin, 'maintenance', array('operation' => 'empty_trash', 'confirm' => true));
+check('maintenance: confirmed purge removes exactly trashed pages and relations', $emptied['performed'] && $emptied['removed'] === 3
+    && $maintenanceSite->getCount('modResource') === 1 && $maintenanceSite->row('modResource', $keepPage['id']) !== null
+    && $maintenanceSite->getCount('modTemplateVarResource') === 0 && $maintenanceSite->getCount('modResourceGroupResource') === 0
+    && end($maintenanceSite->maintenanceProcessors) === 'resource/emptyrecyclebin');
+check('maintenance: purge warns and never journals', $maintenanceAdmin->warnings === array('Resources removed from the trash cannot be restored by modx_undo.')
+    && $maintenanceAdmin->journal()->lastChangesetId() === $maintenanceHistory);
+
+// Access kinds: only admin writes; ordinary read scopes and group gates still apply.
+$accessDir = $siteDir . '/access';
+mkdir($accessDir . '/core', 0700, true);
+$accessSite = fakeSite($accessDir);
+$accessContext = function ($scope = 'admin', array $extra = array()) use ($accessSite, $dev) {
+    $context = new Context($accessSite, $extra + array('scope' => $scope) + $dev->token, $dev->corePath, function () {});
+    $context->sessionId = 'access-session-0001';
+    return $context;
+};
+$accessAdmin = $accessContext();
+$accessSite->store('modUserGroup', array('id' => 1, 'name' => 'Renamed core group', 'description' => '', 'parent' => 0, 'rank' => 0, 'dashboard' => 1));
+$accessSite->store('modUserGroupRole', array('id' => 1, 'name' => 'Super User', 'description' => '', 'authority' => 0));
+$accessSite->store('modUserGroupRole', array('id' => 2, 'name' => 'Member', 'description' => '', 'authority' => 9999));
+$accessCreated = array();
+foreach (array('user_group', 'role', 'resource_group') as $kindName) {
+    $fields = array('name' => 'Test ' . $kindName);
+    if ($kindName === 'user_group') { $fields += array('description' => 'group description', 'parent' => 0, 'rank' => 7, 'dashboard' => 2); }
+    if ($kindName === 'role') { $fields += array('description' => 'role description', 'authority' => 500); }
+    $made = $call($accessAdmin, 'create', array('kind' => $kindName, 'fields' => $fields));
+    $accessCreated[$kindName] = $made;
+    $gotAccess = $call($accessAdmin, 'get', array('kind' => $kindName, 'id' => $made['id']));
+    check('access: create/get ' . $kindName, $gotAccess['fields']['name'] === $fields['name'] && $gotAccess['revision'] === $made['revision']
+        && $made['changeset_id'] !== null);
+    foreach ($fields as $field => $value) { check('access: field ' . $kindName . '.' . $field, $gotAccess['fields'][$field] === $value); }
+    $changedAccess = $call($accessAdmin, 'update', array('kind' => $kindName, 'id' => $made['id'], 'fields' => array('name' => 'Updated ' . $kindName)));
+    check('access: update/list ' . $kindName, $changedAccess['changeset_id'] !== null
+        && $call($accessAdmin, 'list', array('kind' => $kindName, 'query' => 'Updated'))['items'][0]['name'] === 'Updated ' . $kindName);
+    $duplicatedAccess = $call($accessAdmin, 'duplicate', array('kind' => $kindName, 'id' => $made['id']));
+    check('access: duplicate ' . $kindName, $duplicatedAccess['name'] === 'Updated ' . $kindName . ' copy' && $duplicatedAccess['id'] !== $made['id']);
+    $call($accessAdmin, 'delete', array('kind' => $kindName, 'id' => $duplicatedAccess['id']));
+    check('access: delete ' . $kindName, $accessSite->row($accessAdmin->kinds->get($kindName)->modelClass(), $duplicatedAccess['id']) === null);
+    $beforeError = $accessAdmin->journal()->lastChangesetId();
+    $e = throws('access: duplicate names rejected', ApiException::class, function () use ($call, $accessAdmin, $kindName) {
+        $call($accessAdmin, 'create', array('kind' => $kindName, 'fields' => array('name' => 'Updated ' . $kindName)));
+    });
+    check('access: duplicate error journals nothing', $e && $e->errorCode === 'validation_failed' && $accessAdmin->journal()->lastChangesetId() === $beforeError);
+    foreach (array('read', 'content', 'develop') as $scope) {
+        $reader = $accessContext($scope);
+        check('access: lower scope reads ' . $kindName, $call($reader, 'list', array('kind' => $kindName))['total'] > 0
+            && $call($reader, 'get', array('kind' => $kindName, 'id' => $made['id']))['id'] === $made['id']);
+        foreach (array('create', 'update', 'delete', 'duplicate') as $action) {
+            $e = throws('access: lower scope write refused', ApiException::class, function () use ($call, $reader, $kindName, $made, $action) {
+                $args = array('kind' => $kindName, 'id' => $made['id']);
+                if ($action === 'create') { $args = array('kind' => $kindName, 'fields' => array('name' => 'Forbidden')); }
+                if ($action === 'update') { $args['fields'] = array('name' => 'Forbidden'); }
+                $call($reader, $action, $args);
+            });
+            check('access: write scope is forbidden_scope', $e && $e->errorCode === 'forbidden_scope');
+        }
+    }
+}
+foreach (array('disabled_group', 'denied_for_token') as $reason) {
+    $accessSite->options['modxmcp.disabled_groups'] = $reason === 'disabled_group' ? 'access' : '';
+    $blockedAccess = $accessContext('admin', array('denied_groups' => $reason === 'denied_for_token' ? array('access') : array()));
+    $visible = array_column($call($blockedAccess, 'describe')['kinds'], 'kind');
+    $capsAccess = $call($blockedAccess, 'capabilities');
+    $unavailableAccess = array_column($capsAccess['unavailable_kinds'], 'reason', 'name');
+    foreach ($accessCreated as $kindName => $made) {
+        check('access: hidden kind and reason ' . $reason, !in_array($kindName, $visible, true)
+            && !in_array($kindName, $capsAccess['kinds'], true) && $unavailableAccess[$kindName] === $reason);
+        foreach (array('describe', 'list', 'get', 'create', 'update', 'delete', 'duplicate', 'view_code', 'edit_code', 'find_usages', 'search', 'replace') as $action) {
+            $args = array('kind' => $kindName, 'id' => $made['id']);
+            if ($action === 'describe' || $action === 'list') { unset($args['id']); }
+            if ($action === 'create') { $args = array('kind' => $kindName, 'fields' => array('name' => 'Blocked')); }
+            if ($action === 'update') { $args['fields'] = array('name' => 'Blocked'); }
+            if ($action === 'edit_code') { $args['edits'] = array(array('start_line' => 1, 'replacement' => 'Blocked')); }
+            if ($action === 'search') { $args = array('query' => 'Blocked', 'kinds' => array($kindName)); }
+            if ($action === 'replace') { $args = array('find' => 'Blocked', 'replacement' => '', 'kinds' => array($kindName), 'dry_run' => true); }
+            $e = throws('access: blocked kind tool ' . $action, ApiException::class, function () use ($call, $blockedAccess, $action, $args) { $call($blockedAccess, $action, $args); });
+            check('access: blocked kind is unavailable', $e && $e->errorCode === 'unavailable');
+        }
+    }
+}
+$accessSite->options['modxmcp.disabled_groups'] = '';
+$groupId = $accessCreated['user_group']['id'];
+$roleId = $accessCreated['role']['id'];
+$resourceGroupId = $accessCreated['resource_group']['id'];
+$memberRows = array(array('id' => 11, 'user_group' => $groupId, 'member' => 101, 'role' => $roleId, 'rank' => 2),
+    array('id' => 12, 'user_group' => $groupId, 'member' => 102, 'role' => 2, 'rank' => 3));
+$resourceRows = array(array('id' => 21, 'document_group' => $resourceGroupId, 'document' => 201), array('id' => 22, 'document_group' => $resourceGroupId, 'document' => 202));
+foreach ($memberRows as $row) { $accessSite->store('modUserGroupMember', $row); }
+foreach ($resourceRows as $row) { $accessSite->store('modResourceGroupResource', $row); }
+foreach (array('user_group' => array('members', $groupId, 'modUserGroupMember'), 'resource_group' => array('resources', $resourceGroupId, 'modResourceGroupResource')) as $kindName => $info) {
+    list($relationName, $objectId, $relationClass) = $info;
+    $withRelations = $call($accessAdmin, 'get', array('kind' => $kindName, 'id' => $objectId));
+    check('access: related rows exposed ' . $kindName, $withRelations['relations'][$relationName] === ($kindName === 'user_group'
+        ? array(array('member' => 101, 'role' => $roleId), array('member' => 102, 'role' => 2)) : array(201, 202)));
+    $e = throws('access: relations remain read-only', ApiException::class, function () use ($call, $accessAdmin, $kindName, $objectId, $relationName) {
+        $call($accessAdmin, 'update', array('kind' => $kindName, 'id' => $objectId, 'relations' => array($relationName => array())));
+    });
+    check('access: relation write refused', $e && $e->errorCode === 'validation_failed');
+    $removedAccess = $call($accessAdmin, 'delete', array('kind' => $kindName, 'id' => $objectId));
+    check('access: delete cascades links', $accessSite->getCount($relationClass) === 0);
+    $call($accessAdmin, 'undo', array('changeset_id' => $removedAccess['changeset_id'], 'confirm' => true));
+    check('access: undo restores id and complete relation state', $call($accessAdmin, 'get', array('kind' => $kindName, 'id' => $objectId))['revision'] === $withRelations['revision']
+        && $accessSite->getCount($relationClass) === 2);
+}
+$namedAdmin = $call($accessAdmin, 'create', array('kind' => 'user_group', 'fields' => array('name' => 'Administrator')));
+foreach (array(array('user_group', 1), array('user_group', $namedAdmin['id']), array('role', 1), array('role', 2), array('role', $roleId)) as $protectedAccess) {
+    $lastAccess = $accessAdmin->journal()->lastChangesetId();
+    $e = throws('access: MODX protected/assigned object refusal', ApiException::class, function () use ($call, $accessAdmin, $protectedAccess) {
+        $call($accessAdmin, 'delete', array('kind' => $protectedAccess[0], 'id' => $protectedAccess[1]));
+    });
+    check('access: refusal is validation_failed with no changeset', $e && $e->errorCode === 'validation_failed' && $accessAdmin->journal()->lastChangesetId() === $lastAccess);
+}
+$call($accessAdmin, 'update', array('kind' => 'role', 'id' => 1, 'fields' => array('name' => 'Renamed ordinary role')));
+$call($accessAdmin, 'delete', array('kind' => 'role', 'id' => 1));
+check('access: role protection follows names, not id, as in MODX', $accessSite->row('modUserGroupRole', 1) === null);
+
 // --- Files ---
 use ModxMCP\Files\FileRoot;
 
@@ -888,6 +1279,27 @@ touch($reusedPath, time() - 7200);
 $graceContext->blobs()->put('reused content');
 clearstatcache(true, $reusedPath);
 check('blobs: storing existing content again refreshes its age', filemtime($reusedPath) > time() - 60);
+
+// Review additions: case-insensitive matching must work for non-ASCII text.
+use ModxMCP\Code\CodeSearch;
+check('search: Cyrillic is matched regardless of case', CodeSearch::position('<h1>Привет, мир</h1>', 'привет', false) === 4
+    && CodeSearch::position('<h1>Привет</h1>', 'привет', true) === false && CodeSearch::position('abc DEF', 'def', false) === 4);
+list($cyrSite, $cyrContext) = $retentionSite();
+$call($cyrContext, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'cyr', 'content' => "ЗАГОЛОВОК и заголовок\nЦена: \$1")));
+$cyrDry = $call($cyrContext, 'replace', array('find' => 'заголовок', 'replacement' => 'Title \\1 $0', 'case_sensitive' => false, 'dry_run' => true));
+check('replace: Cyrillic case-insensitive preview', $cyrDry['total_occurrences'] === 2);
+$call($cyrContext, 'replace', array('find' => 'заголовок', 'replacement' => 'Title \\1 $0', 'case_sensitive' => false, 'expected_revisions' => (array) $cyrDry['revisions']));
+check('replace: the replacement text is literal', $cyrSite->row('modChunk', 1)['snippet'] === "Title \\1 \$0 и Title \\1 \$0\nЦена: \$1");
+check('search: Cyrillic through the tool', $call($cyrContext, 'search', array('query' => 'ЦЕНА'))['objects'] === 1);
+
+$inLog = sys_get_temp_dir() . '/modxmcp-log-' . bin2hex(random_bytes(6)) . '.log';
+file_put_contents($inLog, "[2026-11-11 20:06:18] (ERROR in modRestCurlClient::__construct @ /var/www/site/core/model/modx/rest/modrestcurlclient.class.php : 26) cURL is missing\n"
+    . "[2026-11-11 20:06:19] (ERROR @ /var/www/site/index.php : 5) plain\n");
+$inEntries = ModxMCP\Verify\LogReader::tail($inLog)['entries'];
+check('log: the "LEVEL in Class::method @ file : line" header is parsed', $inEntries[0] === array('time' => '2026-11-11 20:06:18', 'level' => 'ERROR',
+    'in' => 'modRestCurlClient::__construct', 'location' => '/var/www/site/core/model/modx/rest/modrestcurlclient.class.php : 26', 'message' => 'cURL is missing')
+    && $inEntries[1] === array('time' => '2026-11-11 20:06:19', 'level' => 'ERROR', 'location' => '/var/www/site/index.php : 5', 'message' => 'plain'));
+unlink($inLog);
 
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));

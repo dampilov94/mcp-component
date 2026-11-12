@@ -93,3 +93,35 @@ Update the expected tool lists/counts in `tests/php/run.php` and `tests/endpoint
 
 `npm run check` and `npm test` pass. Changes limited to `src/Action/SearchAction.php`,
 `src/Action/Registry.php`, the two test files and, if needed, `tests/php/FakeModx.php`.
+
+## Report
+
+Based on: main at 490ec2c
+
+- `SearchAction.php`: literal effective-code/name search, paged reads, resource LIKE
+  prefilter with escaping, matching-line counts, bounded UTF-8 excerpts and truncation.
+- `Registry.php`: registered search after edit_code. Both test files include the new read
+  tool (25 tools total). `run.php` covers the requested search cases; `FakeModx.php` now
+  interprets escaped LIKE patterns, including literal percent, underscore and backslash.
+- Validation: `npm run check` and `npm test` passed; 393 PHP checks, 24 Node/HTTP tests.
+
+Interpretation: id-paged scanning stops at the first extra hit, then sorts the selected
+results by requested kind and name. With truncation this is a sorted scanned subset, not
+necessarily the alphabetically earliest subset: globally selecting by name would contradict
+stopping as soon as one extra hit is known. Long queries exceeding 300 characters cannot
+fit entirely in the specified excerpt; the window includes their start. No other deviation.
+
+Only fake MODX/local files were exercised. Check real xPDO paging, MySQL LIKE escaping and
+static-file reads on the stand. No site operations or pushes. Open question: confirm the
+truncated-subset ordering interpretation above.
+
+## Review
+
+Accepted and merged with the rest of the stack (03–08). Verified on the stand with
+`scripts/stand/check-code-tools.cjs`.
+
+The truncated-subset ordering in the report is confirmed.
+
+Change by the architect: case-insensitive matching used `stripos`, which folds ASCII only,
+so a Russian query did not match the same word in another case. `CodeSearch::position()` is
+now Unicode-aware. Only real content showed this; the fake's test data was ASCII.

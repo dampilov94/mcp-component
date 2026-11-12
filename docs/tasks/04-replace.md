@@ -79,3 +79,33 @@ Update tool lists/counts in both test files.
 
 `npm run check`, `npm test`. Files: `src/Action/ReplaceAction.php`, `src/Action/SearchAction.php`,
 new `src/Code/CodeSearch.php`, `src/Action/Registry.php`, tests, `tests/php/FakeModx.php` only if needed.
+
+## Report
+
+Based on: task/03-search at 749358d
+
+- `Code/CodeSearch.php`: extracted shared kind validation, effective-code iteration,
+  literal matching and excerpt formatting. Search delegates to it; its tests are unchanged.
+- `ReplaceAction.php` / `Registry.php`: reviewed-map protocol, write scope checks, previews,
+  all-object revision/lint preflight, single Writer transaction, standard processor saves
+  and reversible results. No second search during application; zero-hit selections remain
+  in the result. Manifest counts are 26 in both test files.
+- `run.php`: isolated fixtures cover previews, case sensitivity, revision conflicts, lint
+  failure before writes, static files and undo, invalid/missing selections, scopes,
+  plan-only mode, zero occurrences and missing static files.
+- `npm run check` and `npm test` passed: 419 PHP checks and 24 Node/HTTP tests.
+
+Interpretation: `objects` is the per-object array in both preview and real results;
+`revisions` is `{}` when empty. The real selection is capped at 100, independently of the
+preview's limit. No other deviations or changes to the previous task's behavior.
+Only fake MODX and local files were checked; verify real processor events, static file
+writes, batch rollback and undo on the stand. No open blocking questions, deployment or push.
+
+## Review
+
+Accepted and merged with the rest of the stack (03–08). Verified on the stand with
+`scripts/stand/check-code-tools.cjs`.
+
+Change by the architect: the case-insensitive replace used `str_ireplace` (ASCII only). It
+now uses a Unicode-aware literal pattern; the replacement text stays literal (`$0`, `\1`
+are not interpreted).

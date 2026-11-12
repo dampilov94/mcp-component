@@ -84,3 +84,51 @@ Update the expected kind lists/counts in `tests/php/run.php` and `tests/endpoint
 
 `npm run check`, `npm test`. Files: three new kind classes, `src/Kind/KindRegistry.php`,
 `src/Kind/Kind.php` only for a hook the processors force, tests, `tests/php/FakeModx.php`.
+
+## Report
+
+Based on: task/07-maintenance at c13df06
+
+- `UserGroupKind.php`, `RoleKind.php`, `ResourceGroupKind.php`: declared the exact API
+  fields, admin write scope, access group, processor paths and the two specified read-only
+  relations. Base read scope/remove processor/empty events apply; processor extras are empty.
+- `KindRegistry.php`: registered all three after MediaSourceKind. No generic hook was needed:
+  MODX processors accept the column names directly and omitted users leave membership intact.
+- `FakeModx.php`: added security processor outlines with model defaults, required/unique
+  names, protected-group/core-role/assigned-role refusals and the two declared cascades.
+- `run.php`: isolated admin CRUD/duplicate/history/undo, all lower-scope reads and write
+  refusals, disabled/denied access-group checks across generic/code tools, relation restore
+  with original row ids/ranks, protected objects and duplicate-name cases. Both test files
+  expect 11 kinds; tool lists stay at 29.
+- Read the local MODX 2.8.8 processors, maps and model code before implementation.
+  `npm run check` and `npm test` passed: 766 PHP checks and 24 Node/HTTP tests.
+
+Source-driven details / deviations:
+
+- The real role removal processor protects names `Member` and `Super User`, not id 1.
+  The fake follows that rule, including a check that a renamed unassigned id-1 role can be
+  removed. User groups are protected by id 1 OR the localized Administrator name; the fake
+  uses the bundled English name. No protection checks were added to production kind code.
+- Group update does not explicitly reject an empty name in MODX (group create does).
+  The fake mirrors that difference. Other name uniqueness failures also reflect database
+  unique indexes. No processor-property remapping or additional production relations.
+
+Only fake MODX/local SQLite were exercised. Check real xPDO defaults, processor permissions
+and events, name validation, visibility with access enabled, and delete/undo on the stand.
+Real group/resource-group deletion also cascades ACLs and other relations (including form
+customization or TV access links); these were deliberately not added to snapshots because
+this brief explicitly excludes them. Their restoration remains outside this task.
+No blocking questions, deployments, pushes or main changes after the initial pull.
+
+## Review
+
+Accepted and merged with the rest of the stack (03–08). Verified on the stand with
+`scripts/stand/check-code-tools.cjs`.
+
+The source-driven deviations in the report are confirmed.
+
+Change by the architect: the report rightly noted that deleting a group also removes access
+rules that are not in the snapshot. They are now kept as delete-only relations, so an undo
+restores them: for `user_group` the ACL rows of contexts, resource groups, categories,
+media sources and namespaces; for `resource_group` its ACL rows and TV access rows. Verified
+on the stand only for groups without such rows.
