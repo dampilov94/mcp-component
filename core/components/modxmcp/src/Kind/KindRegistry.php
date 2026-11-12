@@ -22,6 +22,7 @@ final class KindRegistry {
         ContextKind::class,
         ContextSettingKind::class,
         NamespaceKind::class,
+        UserKind::class,
     );
 
     private $kinds = null;

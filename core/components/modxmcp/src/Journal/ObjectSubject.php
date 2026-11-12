@@ -53,8 +53,13 @@ final class ObjectSubject implements Subject {
         }
         foreach (Snapshot::changed($kind, $before, $after) as $name) {
             $column = isset($definitions[$name]) ? $kind->column($name) : $name;
-            $old = $before !== null && array_key_exists($column, $before['fields']) ? $before['fields'][$column] : null;
-            $new = $after !== null && array_key_exists($column, $after['fields']) ? $after['fields'][$column] : null;
+            if (isset($definitions[$name])) {
+                $old = Snapshot::stateValue($kind, $before, $name);
+                $new = Snapshot::stateValue($kind, $after, $name);
+            } else {
+                $old = $before !== null && array_key_exists($column, $before['fields']) ? $before['fields'][$column] : null;
+                $new = $after !== null && array_key_exists($column, $after['fields']) ? $after['fields'][$column] : null;
+            }
             if (($before !== null && isset($before['relations'][$name])) || ($after !== null && isset($after['relations'][$name]))) {
                 $out[$name] = array(
                     'old' => $kind->maskRelationRows($name, $before !== null && isset($before['relations'][$name]) ? $before['relations'][$name] : array()),

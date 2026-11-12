@@ -37,7 +37,8 @@ final class DuplicateAction extends WriteAction {
         $kind->assertKeepsSecret($context, $source, Objects::normalize($kind, $overrides, false), 'duplicate');
         $values = array();
         foreach ($kind->fields() as $field => $definition) {
-            if (empty($definition['read_only']) && empty($definition['derived'])) {
+            // A write-only field (a password) is never copied: the copy must be given its own.
+            if (empty($definition['read_only']) && empty($definition['derived']) && empty($definition['write_only'])) {
                 $values[$field] = $kind->value($source, $field);
             }
         }
@@ -65,7 +66,7 @@ final class DuplicateAction extends WriteAction {
                 $relations[$name] = !empty($spec['map'])
                     ? (array) $kind->storedRelation($context->modx, $source, $name)
                     : $kind->presentRelation($context->modx, $source, $name);
-            } elseif (empty($spec['delete_only'])) {
+            } elseif (empty($spec['delete_only']) && empty($spec['hidden'])) {
                 $criteria = array($spec['fk'] => $sourceId) + (isset($spec['where']) ? $spec['where'] : array());
                 if ($context->modx->getCount($spec['class'], $criteria)) { $notCopied[] = $name; }
             }

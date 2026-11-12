@@ -140,7 +140,12 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
     assert.equal(caps.body.result.integrations.length, 3);
 
     const kinds = await call(read, "describe");
+    // The user kind needs the admin scope even to be read, so a read token sees 15 of the 16 kinds.
     assert.equal(kinds.body.result.kinds.length, 15);
+    assert.ok(!kinds.body.result.kinds.some((kind) => kind.kind === "user"));
+    const adminKinds = await call(admin, "describe");
+    assert.equal(adminKinds.body.result.kinds.length, 16);
+    assert.ok(adminKinds.body.result.kinds.some((kind) => kind.kind === "user"));
     const plugin = await call(read, "describe", { kind: "plugin" });
     assert.ok(plugin.body.result.fields.some((field) => field.name === "content" && field.code));
     const missing = await call(read, "describe", { kind: "nope" });

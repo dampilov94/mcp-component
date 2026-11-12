@@ -35,6 +35,7 @@ final class UpdateAction extends WriteAction {
         $columns = Objects::normalize($kind, isset($args['fields']) ? $args['fields'] : array(), false);
         Objects::assertImmutable($kind, $object, $columns);
         $kind->assertObjectWritable($context->modx, $object, 'update');
+        $kind->assertUpdatable($context->modx, $object, $columns);
         $kind->assertKeepsSecret($context, $object, $columns, 'update');
         $relations = isset($args['relations']) ? $args['relations'] : array();
         Objects::assertWritableRelations($kind, $relations);
@@ -49,7 +50,7 @@ final class UpdateAction extends WriteAction {
             if ($dry) {
                 $would = array();
                 foreach (isset($args['fields']) ? $args['fields'] : array() as $name => $value) {
-                    $current = $before['fields'][$kind->column($name)];
+                    $current = Snapshot::stateValue($kind, $before, $name);
                     if ((string) $current !== (string) (is_bool($value) ? (int) $value : $value)) { $would[] = $name; }
                 }
                 return array('result' => array(

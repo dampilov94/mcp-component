@@ -1045,7 +1045,7 @@ check('invoke: validated dry run does not call handler', $invokeDry['validated']
 check('invoke: plan-only forces dry run', $call($accessContext('admin', array('plan_only' => true)), 'invoke', $opBase + array('op' => 'add_member', 'args' => array('user' => 501)))['planned']);
 $addedMember = $call($accessAdmin, 'invoke', $opBase + array('op' => 'add_member', 'args' => array('user' => 501)));
 check('invoke: member addition is journaled with default role zero', $addedMember['changed'] === array('members') && $addedMember['changeset_id'] !== null
-    && count($accessAdmin->journal()->changes(array($addedMember['changeset_id']))) === 1
+    && count($accessAdmin->journal()->changes(array($addedMember['changeset_id']))) === 2   // the group and, since task 17, the member
     && $accessSite->getObject('modUserGroupMember', array('member' => 501))->get('role') === '0');
 check('invoke: read member_count works and tool is visible', $call($accessContext('read'), 'invoke', $opBase + array('op' => 'member_count'))['members'] === $beforeMemberCount + 1
     && in_array('modx_invoke', array_column(Manifest::tools($accessContext('read')), 'name'), true));
@@ -2405,6 +2405,388 @@ $qAdmin = new Context($qSite, array('scope' => 'admin') + $qDev->token, $qDev->c
 foreach (array('site_name', 'siteXname', 'site%name') as $qKey) { $call($qAdmin, 'create', array('kind' => 'system_setting', 'fields' => array('key' => $qKey, 'value' => 'v'))); }
 check('list: query treats _ and % literally', array_column($call($qAdmin, 'list', array('kind' => 'system_setting', 'query' => 'site_'))['items'], 'key') === array('site_name')
     && array_column($call($qAdmin, 'list', array('kind' => 'system_setting', 'query' => 'site%'))['items'], 'key') === array('site%name'));
+
+// --- Kind user (task 17) ---
+$userDir = $siteDir . '/users';
+mkdir($userDir . '/core', 0700, true);
+$uSite = fakeSite($userDir);
+$uActor = function ($scope, array $token = array()) use ($uSite, $dev) {
+    $c = new Context($uSite, $token + array('scope' => $scope) + $dev->token, $dev->corePath, function () {});
+    $c->sessionId = 'session-users00001';
+    return $c;
+};
+$uAdmin = $uActor('admin');
+$uSite->options['fake_permissions'] = array('settings' => true, 'set_sudo' => true);
+$secretPw = 'Пароль-Секрет-123';
+$secretPw2 = 'Новый-Пароль-456';
+$secretHashes = function () use ($uSite) {
+    $hashes = array();
+    foreach ($uSite->tableDump('modUser') as $row) { foreach (array('password', 'salt') as $column) { if (!empty($row[$column])) { $hashes[] = $row[$column]; } } }
+    return $hashes;
+};
+// Nothing a tool answered may carry a password, a hash or a salt, in either JSON spelling.
+$leaks = function ($data, array $plain = array()) use ($secretPw, $secretPw2, $secretHashes) {
+    foreach (array(JSON_UNESCAPED_UNICODE, 0) as $flags) {
+        $text = json_encode($data, $flags);
+        foreach (array_merge(array($secretPw, $secretPw2, 'fakehash'), $secretHashes(), $plain) as $needle) {
+            if ($needle !== '' && strpos($text, $flags ? $needle : trim(json_encode($needle), '"')) !== false) { return true; }
+        }
+    }
+    return false;
+};
+$plantUser = function ($id, $name, $email, array $more = array(), array $profile = array()) use ($uSite) {
+    $uSite->store('modUser', $more + array('id' => $id, 'username' => $name, 'password' => modX::fakeHash('planted' . $id, 'salt' . $id), 'cachepwd' => '',
+        'class_key' => 'modUser', 'active' => 1, 'remote_key' => null, 'remote_data' => null, 'hash_class' => 'hashing.modNative', 'salt' => 'salt' . $id,
+        'primary_group' => 0, 'session_stale' => null, 'sudo' => 0, 'createdon' => 1700000000));
+    $uSite->store('modUserProfile', $profile + array('id' => $id, 'internalKey' => $id, 'fullname' => '', 'email' => $email, 'phone' => '', 'mobilephone' => '',
+        'blocked' => 0, 'blockeduntil' => 0, 'blockedafter' => 0, 'logincount' => 0, 'lastlogin' => 0, 'thislogin' => 0, 'failedlogincount' => 0,
+        'sessionid' => 'sess' . $id, 'dob' => 0, 'gender' => 0, 'address' => '', 'country' => '', 'city' => '', 'state' => '', 'zip' => '', 'fax' => '',
+        'photo' => '', 'comment' => '', 'website' => '', 'extended' => null));
+};
+$plantUser(1, 'service', 'service@example.com', array('sudo' => 1));
+$plantUser(700, 'суперпользователь', 'super@example.com', array('sudo' => 1));
+foreach (array(1 => 'Administrator', 2 => 'Редакторы') as $groupKey => $groupName) {
+    $uSite->store('modUserGroup', array('id' => $groupKey, 'name' => $groupName, 'description' => '', 'parent' => 0, 'rank' => 0, 'dashboard' => 1));
+}
+$uSite->store('modUserGroupRole', array('id' => 2, 'name' => 'Member', 'description' => '', 'authority' => 9999));
+$userRow = function ($id) use ($uSite) { return $uSite->row('modUser', $id); };
+$profileRow = function ($id) use ($uSite) { $rows = $uSite->getCollection('modUserProfile', array('internalKey' => $id)); return $rows ? $rows[0]->toArray() : null; };
+
+// describe
+$uDescribed = $call($uAdmin, 'describe', array('kind' => 'user'));
+$uFieldInfo = array_column($uDescribed['fields'], null, 'name');
+check('user: describe', $uDescribed['group'] === 'access' && $uDescribed['read_scope'] === 'admin' && $uDescribed['write_scope'] === 'admin' && $uDescribed['name_field'] === 'username'
+    && $uDescribed['key_type'] === 'integer' && $uFieldInfo['password']['write_only'] === true && $uFieldInfo['password']['required'] === true
+    && $uFieldInfo['sudo']['read_only'] === true && $uFieldInfo['class_key']['read_only'] === true && $uFieldInfo['lastlogin']['read_only'] === true
+    && $uFieldInfo['blockeduntil']['format'] === 'datetime' && $uFieldInfo['username']['required'] === true
+    && array_column($uDescribed['relations'], 'name') === array('groups') && !isset($uFieldInfo['salt']) && !isset($uFieldInfo['cachepwd']) && !isset($uFieldInfo['sessionid']));
+check('user: only an admin token sees the kind', !in_array('user', array_column($call($uActor('develop'), 'describe')['kinds'], 'kind'), true)
+    && in_array('user', array_column($call($uAdmin, 'describe')['kinds'], 'kind'), true));
+
+// create
+$uHistoryBefore = $uAdmin->journal()->lastChangesetId();
+$uCreateDry = $call($uAdmin, 'create', array('kind' => 'user', 'dry_run' => true, 'fields' => array('username' => 'иван', 'password' => $secretPw, 'email' => 'ivan@example.com')));
+check('user: create dry run changes nothing and says nothing secret', $uCreateDry['dry_run'] && $uSite->getCount('modUser', array('username' => 'иван')) === 0
+    && $uAdmin->journal()->lastChangesetId() === $uHistoryBefore && !$leaks($uCreateDry));
+$ivan = $call($uAdmin, 'create', array('kind' => 'user', 'fields' => array('username' => 'иван', 'password' => $secretPw, 'email' => 'ivan@example.com',
+    'fullname' => 'Иван Петров', 'phone' => '+7 900 000-00-00', 'comment' => 'Редактор сайта', 'active' => true)));
+$ivanId = $ivan['id'];
+check('user: create result', is_int($ivanId) && $ivan['changeset_id'] !== null && $ivan['reversible'] === true && !$leaks($ivan)
+    && in_array('password', $ivan['changed'], true) && in_array('email', $ivan['changed'], true) && in_array('username', $ivan['changed'], true) && !in_array('profile', $ivan['changed'], true));
+check('user: the kind list of an admin token ends with user', array_slice(array_column($call($uAdmin, 'describe')['kinds'], 'kind'), -2) === array('namespace', 'user'));
+check('user: create stored the user and its profile', $userRow($ivanId)['username'] === 'иван' && $userRow($ivanId)['active'] === '1' && $userRow($ivanId)['sudo'] === '0'
+    && $userRow($ivanId)['class_key'] === 'modUser' && $userRow($ivanId)['password'] === modX::fakeHash($secretPw, $userRow($ivanId)['salt'])
+    && $profileRow($ivanId)['email'] === 'ivan@example.com' && $profileRow($ivanId)['fullname'] === 'Иван Петров' && $profileRow($ivanId)['comment'] === 'Редактор сайта');
+check('user: the summary of the journal has no secret', !$leaks($call($uAdmin, 'history', array('kind' => 'user', 'id' => $ivanId))));
+$ivanCreateDiff = $call($uAdmin, 'history_diff', array('changeset_id' => $ivan['changeset_id']));
+check('user: the diff of a create hides the hash and shows the contact data', !$leaks($ivanCreateDiff)
+    && $ivanCreateDiff['objects'][0]['changed']['password'] === array('old' => '[hidden]', 'new' => '[hidden]')
+    && $ivanCreateDiff['objects'][0]['changed']['email']['new'] === 'ivan@example.com' && $ivanCreateDiff['objects'][0]['changed']['fullname']['new'] === 'Иван Петров');
+check('user: no password, no profile row-leak in the diff', !isset($ivanCreateDiff['objects'][0]['changed']['profile']) && !strpos(json_encode($ivanCreateDiff), 'sessionid'));
+foreach (array(
+    array('class_key and sudo cannot be set on create', array('username' => 'x1', 'password' => $secretPw, 'email' => 'a@b.c', 'sudo' => true)),
+    array('class_key cannot be set on create', array('username' => 'x2', 'password' => $secretPw, 'email' => 'a@b.c', 'class_key' => 'modUser')),
+    array('password is required on create', array('username' => 'x3', 'email' => 'a@b.c')),
+    array('username is required on create', array('password' => $secretPw, 'email' => 'a@b.c')),
+    array('the derived login data cannot be written', array('username' => 'x4', 'password' => $secretPw, 'email' => 'a@b.c', 'logincount' => 3)),
+    array('the hash columns are not fields', array('username' => 'x5', 'password' => $secretPw, 'email' => 'a@b.c', 'salt' => 'x')),
+    array('the password must be a string', array('username' => 'x6', 'password' => 12345678, 'email' => 'a@b.c')),
+) as $case) {
+    $lastUser = $uAdmin->journal()->lastChangesetId();
+    $e = throws('user: ' . $case[0], ApiException::class, function () use ($call, $uAdmin, $case) { $call($uAdmin, 'create', array('kind' => 'user', 'fields' => $case[1])); });
+    check('user: ' . $case[0] . ' is validation_failed without a changeset', $e && $e->errorCode === 'validation_failed' && $uAdmin->journal()->lastChangesetId() === $lastUser && !$leaks($e->getMessage()));
+}
+// MODX's own refusals pass through, and the password never shows in them
+$passThrough = array(
+    'duplicate username' => array(array('username' => 'иван', 'password' => $secretPw, 'email' => 'other@example.com'), 'already exists'),
+    'password too short' => array(array('username' => 'короткий', 'password' => 'Ab1', 'email' => 'short@example.com'), 'too short'),
+    'invalid password characters' => array(array('username' => 'скобки', 'password' => 'Пароль-(скобки)-123', 'email' => 'br@example.com'), 'invalid characters'),
+    'no e-mail' => array(array('username' => 'безпочты', 'password' => $secretPw), 'e-mail'),
+);
+foreach ($passThrough as $label => $case) {
+    $lastUser = $uAdmin->journal()->lastChangesetId();
+    $e = throws("user: MODX refuses {$label}", ApiException::class, function () use ($call, $uAdmin, $case) { $call($uAdmin, 'create', array('kind' => 'user', 'fields' => $case[0])); });
+    check("user: {$label} is passed through", $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), $case[1]) !== false
+        && $uAdmin->journal()->lastChangesetId() === $lastUser && strpos($e->getMessage(), 'Пароль') === false && $uSite->getCount('modUser', array('username' => $case[0]['username'])) === (int) ($label === 'duplicate username'));
+}
+$uSite->options['allow_multiple_emails'] = false;
+$e = throws('user: duplicate e-mail', ApiException::class, function () use ($call, $uAdmin, $secretPw) { $call($uAdmin, 'create', array('kind' => 'user', 'fields' => array('username' => 'двойник', 'password' => $secretPw, 'email' => 'ivan@example.com'))); });
+check('user: MODX refuses a duplicate e-mail when it is configured so', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'e-mail') !== false);
+$uSite->options['allow_multiple_emails'] = true;
+$uSite->options['password_min_length'] = 40;
+$e = throws('user: password_min_length', ApiException::class, function () use ($call, $uAdmin, $secretPw) { $call($uAdmin, 'create', array('kind' => 'user', 'fields' => array('username' => 'длинный', 'password' => $secretPw, 'email' => 'long@example.com'))); });
+check('user: password_min_length passes through as its own error', $e && strpos($e->getMessage(), 'too short') !== false && !$leaks($e->getMessage()));
+unset($uSite->options['password_min_length']);
+
+// get, list
+$ivanGot = $call($uAdmin, 'get', array('kind' => 'user', 'id' => $ivanId));
+check('user: get', $ivanGot['fields']['username'] === 'иван' && $ivanGot['fields']['email'] === 'ivan@example.com' && $ivanGot['fields']['fullname'] === 'Иван Петров'
+    && $ivanGot['fields']['active'] === true && $ivanGot['fields']['blocked'] === false && $ivanGot['fields']['sudo'] === false && $ivanGot['fields']['blockeduntil'] === ''
+    && $ivanGot['fields']['logincount'] === 0 && !array_key_exists('password', $ivanGot['fields']) && array_keys((array) $ivanGot['relations']) === array('groups')
+    && $ivanGot['relations']['groups'] === array() && !$leaks($ivanGot) && !strpos(json_encode($ivanGot), 'sess'));
+check('user: get by name', $call($uAdmin, 'get', array('kind' => 'user', 'name' => 'иван'))['id'] === $ivanId);
+$e = throws('user: password cannot be asked for', ApiException::class, function () use ($call, $uAdmin, $ivanId) { $call($uAdmin, 'get', array('kind' => 'user', 'id' => $ivanId, 'fields' => array('username', 'password'))); });
+check('user: asking for the password is refused', $e && $e->errorCode === 'validation_failed');
+$ivanSelected = $call($uAdmin, 'get', array('kind' => 'user', 'id' => $ivanId, 'fields' => array('email', 'username')));
+check('user: get selected profile and user fields', $ivanSelected['fields'] === array('email' => 'ivan@example.com', 'username' => 'иван'));
+$plantUser(710, 'мария', 'maria@example.com', array('active' => 0), array('fullname' => 'Мария Иванова', 'blocked' => 1));
+$userList = $call($uAdmin, 'list', array('kind' => 'user'));
+check('user: list default fields', $userList['total'] === 4 && array_keys($userList['items'][0]) === array('id', 'username', 'active', 'sudo', 'primary_group', 'fullname', 'email', 'blocked') && !$leaks($userList));
+$byUser = array_column($userList['items'], null, 'username');
+check('user: list shows profile fields', $byUser['мария']['email'] === 'maria@example.com' && $byUser['мария']['blocked'] === true && $byUser['мария']['active'] === false && $byUser['иван']['fullname'] === 'Иван Петров');
+check('user: list query is Unicode-aware', array_column($call($uAdmin, 'list', array('kind' => 'user', 'query' => 'мар'))['items'], 'username') === array('мария'));
+check('user: list where on a user column', array_column($call($uAdmin, 'list', array('kind' => 'user', 'where' => array('active' => false)))['items'], 'username') === array('мария'));
+foreach (array('email' => 'ivan@example.com', 'blocked' => true, 'password' => 'x', 'lastlogin' => '2020-01-01 00:00:00', 'logincount' => 0) as $profileField => $profileValue) {
+    $e = throws("user: where on {$profileField}", ApiException::class, function () use ($call, $uAdmin, $profileField, $profileValue) { $call($uAdmin, 'list', array('kind' => 'user', 'where' => array($profileField => $profileValue))); });
+    check("user: where on {$profileField} is refused", $e && $e->errorCode === 'validation_failed');
+}
+$e = throws('user: list fields password', ApiException::class, function () use ($call, $uAdmin) { $call($uAdmin, 'list', array('kind' => 'user', 'fields' => array('password'))); });
+check('user: listing the password is refused', $e && $e->errorCode === 'validation_failed');
+check('user: list can select profile fields', $call($uAdmin, 'list', array('kind' => 'user', 'fields' => array('phone', 'comment'), 'query' => 'иван'))['items'] === array(array('phone' => '+7 900 000-00-00', 'comment' => 'Редактор сайта')));
+
+// update: profile and user fields; the whole record goes to the processor
+$ivanRevision = $ivanGot['revision'];
+$updateDry = $call($uAdmin, 'update', array('kind' => 'user', 'id' => $ivanId, 'dry_run' => true, 'fields' => array('email' => 'ivan.new@example.com', 'password' => $secretPw2)));
+check('user: update dry run', $updateDry['dry_run'] && $updateDry['would_change'] === array('email', 'password') && $profileRow($ivanId)['email'] === 'ivan@example.com' && !$leaks($updateDry));
+$updated = $call($uAdmin, 'update', array('kind' => 'user', 'id' => $ivanId, 'fields' => array('email' => 'ivan.new@example.com', 'fullname' => 'Иван Сергеевич'), 'expected_revision' => $ivanRevision));
+check('user: an update that does not touch the password keeps the stored hash', $userRow($ivanId)['password'] === modX::fakeHash($secretPw, $userRow($ivanId)['salt']));
+check('user: a profile change is named by its fields, not as "profile"', $updated['changed'] === array('fullname', 'email') && $updated['revision'] !== $ivanRevision
+    && $profileRow($ivanId)['email'] === 'ivan.new@example.com' && $userRow($ivanId)['active'] === '1' && $userRow($ivanId)['username'] === 'иван');
+$e = throws('user: stale revision', ApiException::class, function () use ($call, $uAdmin, $ivanId, $ivanRevision) { $call($uAdmin, 'update', array('kind' => 'user', 'id' => $ivanId, 'fields' => array('phone' => '1'), 'expected_revision' => $ivanRevision)); });
+check('user: the revision covers the profile', $e && $e->errorCode === 'revision_conflict');
+$updateDiff = $call($uAdmin, 'history_diff', array('changeset_id' => $updated['changeset_id']))['objects'][0]['changed'];
+check('user: update diff names profile fields with old and new values', $updateDiff === array('fullname' => array('old' => 'Иван Петров', 'new' => 'Иван Сергеевич'),
+    'email' => array('old' => 'ivan@example.com', 'new' => 'ivan.new@example.com')));
+$userFields = $call($uAdmin, 'update', array('kind' => 'user', 'id' => $ivanId, 'fields' => array('username' => 'иван2', 'active' => false, 'primary_group' => 2, 'phone' => '', 'blocked' => true)));
+check('user: update of user and profile fields', $userFields['changed'] === array('username', 'active', 'primary_group', 'phone', 'blocked') && $userRow($ivanId)['username'] === 'иван2'
+    && $userRow($ivanId)['active'] === '0' && $profileRow($ivanId)['blocked'] === '1' && $profileRow($ivanId)['phone'] === '');
+$blockedUntil = '2031-05-06 07:08:09';
+$call($uAdmin, 'update', array('kind' => 'user', 'id' => $ivanId, 'fields' => array('blockeduntil' => $blockedUntil)));
+check('user: blockeduntil is written as a date string and read back', $call($uAdmin, 'get', array('kind' => 'user', 'id' => $ivanId))['fields']['blockeduntil'] === $blockedUntil
+    && $profileRow($ivanId)['blockeduntil'] === (string) strtotime(str_replace('-', '/', $blockedUntil)));
+$call($uAdmin, 'update', array('kind' => 'user', 'id' => $ivanId, 'fields' => array('email' => 'ivan.again@example.com')));
+check('user: an unrelated update keeps the block dates', $call($uAdmin, 'get', array('kind' => 'user', 'id' => $ivanId))['fields']['blockeduntil'] === $blockedUntil);
+$call($uAdmin, 'update', array('kind' => 'user', 'id' => $ivanId, 'fields' => array('blockeduntil' => '')));
+check('user: blockeduntil can be cleared', $call($uAdmin, 'get', array('kind' => 'user', 'id' => $ivanId))['fields']['blockeduntil'] === '' && $profileRow($ivanId)['blockeduntil'] === '0');
+$e = throws('user: bad date', ApiException::class, function () use ($call, $uAdmin, $ivanId) { $call($uAdmin, 'update', array('kind' => 'user', 'id' => $ivanId, 'fields' => array('blockedafter' => 'не дата'))); });
+check('user: MODX date refusal passes through', $e && $e->errorCode === 'validation_failed');
+foreach (array(array('sudo', true), array('class_key', 'modUser'), array('logincount', 3), array('lastlogin', '2020-01-01 00:00:00'), array('id', 5), array('salt', 'x')) as $readOnly) {
+    $e = throws("user: {$readOnly[0]} cannot be updated", ApiException::class, function () use ($call, $uAdmin, $ivanId, $readOnly) { $call($uAdmin, 'update', array('kind' => 'user', 'id' => $ivanId, 'fields' => array($readOnly[0] => $readOnly[1]))); });
+    check("user: {$readOnly[0]} is read-only", $e && $e->errorCode === 'validation_failed');
+}
+$e = throws('user: username taken', ApiException::class, function () use ($call, $uAdmin, $ivanId) { $call($uAdmin, 'update', array('kind' => 'user', 'id' => $ivanId, 'fields' => array('username' => 'мария'))); });
+check('user: duplicate username on update passes through', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'already exists') !== false && $userRow($ivanId)['username'] === 'иван2');
+
+// the checkbox trap: update processors reset an absent checkbox (sudo included) in some MODX versions; the whole record is always sent
+$superBefore = $call($uAdmin, 'get', array('kind' => 'user', 'id' => 700));
+foreach (array(false, true) as $unconditional) {
+    $uSite->options['fake_unconditional_checkbox'] = $unconditional;
+    $mail = $call($uAdmin, 'update', array('kind' => 'user', 'id' => 700, 'fields' => array('email' => 'super' . (int) $unconditional . '@example.com', 'comment' => 'Администратор ' . (int) $unconditional)));
+    check('user: updating the e-mail of a sudo user keeps sudo' . ($unconditional ? ' (processor resets absent checkboxes)' : ''),
+        $userRow(700)['sudo'] === '1' && $userRow(700)['active'] === '1' && $call($uAdmin, 'get', array('kind' => 'user', 'id' => 700))['fields']['sudo'] === true && $mail['changed'] === array('email', 'comment'));
+    $call($uAdmin, 'update', array('kind' => 'user', 'id' => 710, 'fields' => array('fullname' => 'Мария ' . (int) $unconditional)));
+    check('user: updating a profile field keeps active and blocked' . ($unconditional ? ' (processor resets absent checkboxes)' : ''),
+        $userRow(710)['active'] === '0' && $profileRow(710)['blocked'] === '1');
+    $call($uAdmin, 'update', array('kind' => 'user', 'id' => $ivanId, 'fields' => array('comment' => 'Проверка ' . (int) $unconditional)));
+    check('user: updating a comment keeps a blocked inactive user as it was' . ($unconditional ? ' (processor resets absent checkboxes)' : ''),
+        $userRow($ivanId)['active'] === '0' && $profileRow($ivanId)['blocked'] === '1');
+}
+$uSite->options['fake_unconditional_checkbox'] = false;
+
+// password
+$hashBefore = $userRow($ivanId)['password'];
+$revisionBeforePassword = $call($uAdmin, 'get', array('kind' => 'user', 'id' => $ivanId))['revision'];
+$changedPassword = $call($uAdmin, 'update', array('kind' => 'user', 'id' => $ivanId, 'fields' => array('password' => $secretPw2)));
+check('user: password change', $changedPassword['changed'] === array('password') && $userRow($ivanId)['password'] !== $hashBefore
+    && $userRow($ivanId)['password'] === modX::fakeHash($secretPw2, $userRow($ivanId)['salt']) && !$leaks($changedPassword) && $changedPassword['revision'] !== $revisionBeforePassword);
+$passwordDiff = $call($uAdmin, 'history_diff', array('changeset_id' => $changedPassword['changeset_id']));
+check('user: the diff of a password change shows password as hidden', $passwordDiff['objects'][0]['changed'] === array('password' => array('old' => '[hidden]', 'new' => '[hidden]')) && !$leaks($passwordDiff));
+check('user: the history after a password change is clean', !$leaks($call($uAdmin, 'history', array('kind' => 'user', 'id' => $ivanId, 'limit' => 20))));
+$lastUser = $uAdmin->journal()->lastChangesetId();
+$e = throws('user: short password on update', ApiException::class, function () use ($call, $uAdmin, $ivanId) { $call($uAdmin, 'update', array('kind' => 'user', 'id' => $ivanId, 'fields' => array('password' => 'Ab1'))); });
+check('user: MODX password rule on update passes through', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'too short') !== false && $uAdmin->journal()->lastChangesetId() === $lastUser
+    && $userRow($ivanId)['password'] === modX::fakeHash($secretPw2, $userRow($ivanId)['salt']));
+$undoPassword = $call($uAdmin, 'undo', array('changeset_id' => $changedPassword['changeset_id'], 'confirm' => true));
+check('user: undo restores the old hash', $userRow($ivanId)['password'] === $hashBefore && $call($uAdmin, 'get', array('kind' => 'user', 'id' => $ivanId))['revision'] === $revisionBeforePassword && !$leaks($undoPassword));
+$ivanLater = $call($uAdmin, 'update', array('kind' => 'user', 'id' => $ivanId, 'fields' => array('email' => 'ivan.final@example.com')));
+$undoLater = $call($uAdmin, 'undo', array('changeset_id' => $ivanLater['changeset_id'], 'confirm' => true));
+check('user: undo of a profile-only change restores the e-mail and is not a conflict', $undoLater['performed'] && $undoLater['conflicts'] === 0 && $profileRow($ivanId)['email'] === 'ivan.again@example.com');
+
+// groups relation and membership through user_group
+$uSite->store('modUserGroup', array('id' => 3, 'name' => 'Авторы', 'description' => '', 'parent' => 0, 'rank' => 0, 'dashboard' => 1));
+$ivanBeforeMember = $call($uAdmin, 'get', array('kind' => 'user', 'id' => $ivanId));
+$added = $call($uAdmin, 'invoke', array('kind' => 'user_group', 'id' => 2, 'op' => 'add_member', 'args' => array('user' => $ivanId, 'role' => 2)));
+$addedChanges = $uAdmin->journal()->changes(array($added['changeset_id']));
+check('user: add_member journals the group and the user', count($addedChanges) === 2 && array_column($addedChanges, 'kind') !== array() && in_array('user', array_column($addedChanges, 'kind'), true)
+    && in_array('user_group', array_column($addedChanges, 'kind'), true));
+$ivanMember = $call($uAdmin, 'get', array('kind' => 'user', 'id' => $ivanId));
+check('user: groups relation lists the membership and the primary group follows', $ivanMember['relations']['groups'] === array(array('user_group' => 2, 'role' => 2))
+    && $ivanMember['fields']['primary_group'] === 2 && $ivanMember['revision'] !== $ivanBeforeMember['revision']);
+$e = throws('user: groups are read-only', ApiException::class, function () use ($call, $uAdmin, $ivanId) { $call($uAdmin, 'update', array('kind' => 'user', 'id' => $ivanId, 'relations' => array('groups' => array()))); });
+check('user: groups relation write refused', $e && $e->errorCode === 'validation_failed');
+$e = throws('user: profile relation is hidden', ApiException::class, function () use ($call, $uAdmin, $ivanId) { $call($uAdmin, 'update', array('kind' => 'user', 'id' => $ivanId, 'relations' => array('profile' => array()))); });
+check('user: the profile relation is not writable either', $e && $e->errorCode === 'validation_failed');
+$memberDiff = $call($uAdmin, 'history_diff', array('changeset_id' => $added['changeset_id']));
+$memberDiffUser = array_values(array_filter($memberDiff['objects'], function ($item) { return $item['kind'] === 'user'; }))[0];
+check('user: the diff of a membership shows the groups of the user', array_keys((array) $memberDiffUser['changed']) === array('groups') && !$leaks($memberDiff));
+$uSite->store('modUserSetting', array('user' => $ivanId, 'key' => 'manager_theme', 'value' => 'darkly', 'xtype' => 'textfield', 'namespace' => 'core', 'area' => '', 'editedon' => null));
+$ivanFull = $call($uAdmin, 'get', array('kind' => 'user', 'id' => $ivanId));
+$deleteDry = $call($uAdmin, 'delete', array('kind' => 'user', 'id' => $ivanId, 'dry_run' => true));
+check('user: delete dry run counts what goes with the user', $deleteDry['dry_run'] && $deleteDry['would_delete']['name'] === 'иван2' && $deleteDry['would_delete']['related_rows']['groups'] === 1
+    && $deleteDry['would_delete']['related_rows']['settings'] === 1 && $userRow($ivanId) !== null);
+$deleted = $call($uAdmin, 'delete', array('kind' => 'user', 'id' => $ivanId));
+check('user: delete removes the user, profile, memberships and settings', $deleted['deleted'] === true && $userRow($ivanId) === null && $profileRow($ivanId) === null
+    && $uSite->getCount('modUserGroupMember', array('member' => $ivanId)) === 0 && $uSite->getCount('modUserSetting', array('user' => $ivanId)) === 0);
+$undoDelete = $call($uAdmin, 'undo', array('changeset_id' => $deleted['changeset_id'], 'confirm' => true));
+$ivanRestored = $call($uAdmin, 'get', array('kind' => 'user', 'id' => $ivanId));
+check('user: undo of the delete restores user, profile, memberships and settings', $undoDelete['performed'] && $ivanRestored['revision'] === $ivanFull['revision'] && $ivanRestored['fields'] === $ivanFull['fields']
+    && $ivanRestored['relations']['groups'] === array(array('user_group' => 2, 'role' => 2)) && $uSite->getCount('modUserSetting', array('user' => $ivanId, 'key' => 'manager_theme')) === 1
+    && $userRow($ivanId)['password'] === $hashBefore);
+$removedMember = $call($uAdmin, 'invoke', array('kind' => 'user_group', 'id' => 2, 'op' => 'remove_member', 'args' => array('user' => $ivanId)));
+check('user: remove_member journals both and resets the primary group', count($uAdmin->journal()->changes(array($removedMember['changeset_id']))) === 2 && $userRow($ivanId)['primary_group'] === '0'
+    && $call($uAdmin, 'get', array('kind' => 'user', 'id' => $ivanId))['relations']['groups'] === array());
+$call($uAdmin, 'undo', array('changeset_id' => $removedMember['changeset_id'], 'confirm' => true));
+check('user: undo of remove_member puts the user back too', $call($uAdmin, 'get', array('kind' => 'user', 'id' => $ivanId))['revision'] === $ivanFull['revision']);
+$call($uAdmin, 'undo', array('changeset_id' => $added['changeset_id'], 'confirm' => true));
+check('user: undo of add_member restores both sides', $call($uAdmin, 'get', array('kind' => 'user', 'id' => $ivanId))['revision'] === $ivanBeforeMember['revision'] && $uSite->getCount('modUserGroupMember', array('member' => $ivanId)) === 0);
+
+// create, then undo, then redo: the user is removed with its profile
+$ephemeral = $call($uAdmin, 'create', array('kind' => 'user', 'fields' => array('username' => 'временный', 'password' => $secretPw, 'email' => 'tmp@example.com')));
+$call($uAdmin, 'undo', array('changeset_id' => $ephemeral['changeset_id'], 'confirm' => true));
+check('user: undo of a create removes the user and its profile', $userRow($ephemeral['id']) === null && $profileRow($ephemeral['id']) === null);
+
+// duplicate: the password hash is never copied
+$lastUser = $uAdmin->journal()->lastChangesetId();
+$e = throws('user: duplicate needs a password', ApiException::class, function () use ($call, $uAdmin, $ivanId) { $call($uAdmin, 'duplicate', array('kind' => 'user', 'id' => $ivanId, 'new_name' => 'копия')); });
+check('user: duplicate without a password is refused', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'password') !== false && $uAdmin->journal()->lastChangesetId() === $lastUser);
+$uSite->options['allow_multiple_emails'] = false;
+$e = throws('user: duplicate with the same e-mail', ApiException::class, function () use ($call, $uAdmin, $ivanId, $secretPw) { $call($uAdmin, 'duplicate', array('kind' => 'user', 'id' => $ivanId, 'new_name' => 'копия', 'fields' => array('password' => $secretPw))); });
+check('user: MODX refuses the same e-mail on a copy', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'e-mail') !== false && !$leaks($e->getMessage()));
+$uSite->options['allow_multiple_emails'] = true;
+$copyDry = $call($uAdmin, 'duplicate', array('kind' => 'user', 'id' => $ivanId, 'new_name' => 'копия', 'dry_run' => true, 'fields' => array('password' => $secretPw)));
+check('user: duplicate dry run', $copyDry['dry_run'] && $copyDry['would_create'] === array('name' => 'копия') && $uSite->getCount('modUser', array('username' => 'копия')) === 0 && !$leaks($copyDry));
+$copy = $call($uAdmin, 'duplicate', array('kind' => 'user', 'id' => $ivanId, 'new_name' => 'копия', 'fields' => array('password' => $secretPw2, 'email' => 'copy@example.com')));
+check('user: duplicate creates a user with its own password and the copied profile', $copy['id'] !== $ivanId && !$leaks($copy) && $userRow($copy['id'])['username'] === 'копия'
+    && $userRow($copy['id'])['password'] === modX::fakeHash($secretPw2, $userRow($copy['id'])['salt']) && $userRow($copy['id'])['password'] !== $userRow($ivanId)['password']
+    && $profileRow($copy['id'])['email'] === 'copy@example.com' && $profileRow($copy['id'])['comment'] === $profileRow($ivanId)['comment'] && $userRow($copy['id'])['sudo'] === '0'
+    && $userRow($copy['id'])['primary_group'] === '0' && $userRow($copy['id'])['class_key'] === 'modUser');
+check('user: duplicate warns about what it did not copy and nothing about the profile', !strpos(json_encode($uAdmin->warnings), 'profile'));
+$e = throws('user: duplicate name taken', ApiException::class, function () use ($call, $uAdmin, $ivanId, $secretPw) { $call($uAdmin, 'duplicate', array('kind' => 'user', 'id' => $ivanId, 'new_name' => 'копия', 'fields' => array('password' => $secretPw, 'email' => 'x@example.com'))); });
+check('user: duplicate username is refused', $e && $e->errorCode === 'validation_failed');
+$call($uAdmin, 'undo', array('changeset_id' => $copy['changeset_id'], 'confirm' => true));
+check('user: undo of a duplicate removes it', $userRow($copy['id']) === null);
+
+// safety rules
+$serviceRow = $userRow(1);
+$serviceProfile = $profileRow(1);
+foreach (array(
+    array('update', array('kind' => 'user', 'id' => 1, 'fields' => array('comment' => 'x'))),
+    array('update', array('kind' => 'user', 'id' => 1, 'fields' => array('email' => 'x@example.com'), 'dry_run' => true)),
+    array('delete', array('kind' => 'user', 'id' => 1)),
+    array('delete', array('kind' => 'user', 'id' => 1, 'dry_run' => true)),
+    array('duplicate', array('kind' => 'user', 'id' => 1, 'new_name' => 'service2', 'fields' => array('password' => $secretPw, 'email' => 'x@example.com'))),
+) as $serviceCase) {
+    $lastUser = $uAdmin->journal()->lastChangesetId();
+    $e = throws("user: service user {$serviceCase[0]}", ApiException::class, function () use ($call, $uAdmin, $serviceCase) { $call($uAdmin, $serviceCase[0], $serviceCase[1]); });
+    check("user: service user {$serviceCase[0]} is refused", $e && $e->errorCode === 'validation_failed' && $uAdmin->journal()->lastChangesetId() === $lastUser && $userRow(1) === $serviceRow && $profileRow(1) === $serviceProfile);
+}
+$uSite->options['modxmcp.service_user_id'] = 700;
+$e = throws('user: the configured service user is protected', ApiException::class, function () use ($call, $uAdmin) { $call($uAdmin, 'update', array('kind' => 'user', 'id' => 700, 'fields' => array('comment' => 'x'))); });
+check('user: the service user is the configured one, not id 1', $e && $e->errorCode === 'validation_failed');
+$call($uAdmin, 'update', array('kind' => 'user', 'id' => 1, 'fields' => array('comment' => 'теперь обычный sudo')));
+check('user: a former service user is an ordinary sudo user', $profileRow(1)['comment'] === 'теперь обычный sudo' && $userRow(1)['sudo'] === '1');
+$uSite->options['modxmcp.service_user_id'] = 1;
+foreach (array(
+    array('delete', array('kind' => 'user', 'id' => 700)),
+    array('delete', array('kind' => 'user', 'id' => 700, 'dry_run' => true)),
+    array('duplicate', array('kind' => 'user', 'id' => 700, 'new_name' => 'копия-super', 'fields' => array('password' => $secretPw, 'email' => 'x2@example.com'))),
+    array('update', array('kind' => 'user', 'id' => 700, 'fields' => array('username' => 'другое-имя'))),
+    array('update', array('kind' => 'user', 'id' => 700, 'fields' => array('active' => false))),
+    array('update', array('kind' => 'user', 'id' => 700, 'fields' => array('blocked' => true))),
+    array('update', array('kind' => 'user', 'id' => 700, 'fields' => array('password' => $secretPw2))),
+    array('update', array('kind' => 'user', 'id' => 700, 'fields' => array('password' => $secretPw2), 'dry_run' => true)),
+) as $sudoCase) {
+    $before700 = array($userRow(700), $profileRow(700));
+    $lastUser = $uAdmin->journal()->lastChangesetId();
+    $e = throws("user: sudo user {$sudoCase[0]}", ApiException::class, function () use ($call, $uAdmin, $sudoCase) { $call($uAdmin, $sudoCase[0], $sudoCase[1]); });
+    check("user: sudo user {$sudoCase[0]} " . json_encode(array_diff_key($sudoCase[1], array('kind' => 1, 'id' => 1)), JSON_UNESCAPED_UNICODE) . ' is refused',
+        $e && $e->errorCode === 'validation_failed' && !$leaks($e->getMessage()) && $uAdmin->journal()->lastChangesetId() === $lastUser && $before700 === array($userRow(700), $profileRow(700)));
+}
+$same = $call($uAdmin, 'update', array('kind' => 'user', 'id' => 700, 'fields' => array('active' => true, 'blocked' => false, 'username' => 'суперпользователь', 'fullname' => 'Суперпользователь')));
+check('user: the same login values on a sudo user are no change, contact data may change', $same['changed'] === array('fullname') && $userRow(700)['sudo'] === '1');
+$undoSuper = $call($uAdmin, 'undo', array('changeset_id' => $same['changeset_id'], 'confirm' => true));
+check('user: a sudo user\'s contact change can be undone', $undoSuper['performed'] && $profileRow(700)['fullname'] === '');
+// MODX refuses to delete oneself
+$uSite->user = $uSite->getObject('modUser', 710);
+$e = throws('user: deleting oneself', ApiException::class, function () use ($call, $uAdmin) { $call($uAdmin, 'delete', array('kind' => 'user', 'id' => 710)); });
+check('user: MODX refusal to delete oneself passes through', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'own user') !== false && $userRow(710) !== null);
+$uSite->user = null;
+// MODX refuses to delete the last Administrator
+$uSite->store('modUserGroupMember', array('id' => 91, 'user_group' => 1, 'member' => 710, 'role' => 2, 'rank' => 0));
+$e = throws('user: last administrator', ApiException::class, function () use ($call, $uAdmin) { $call($uAdmin, 'delete', array('kind' => 'user', 'id' => 710)); });
+check('user: MODX refusal to delete the last administrator passes through', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'Administrator') !== false && $userRow(710) !== null);
+$uSite->removeCollection('modUserGroupMember', array('id' => 91));
+
+// side doors: undo of a change to a protected user, and unknown fields
+$e = throws('user: unknown field', ApiException::class, function () use ($call, $uAdmin, $ivanId) { $call($uAdmin, 'update', array('kind' => 'user', 'id' => $ivanId, 'fields' => array('cachepwd' => 'x'))); });
+check('user: hash columns other than password are unknown fields', $e && $e->errorCode === 'validation_failed');
+
+// scopes and groups
+foreach (array('read', 'content', 'develop') as $scopeName) {
+    $actor = $uActor($scopeName);
+    foreach (array(
+        array('list', array('kind' => 'user')), array('get', array('kind' => 'user', 'id' => $ivanId)),
+        array('create', array('kind' => 'user', 'fields' => array('username' => 'z', 'password' => $secretPw, 'email' => 'z@example.com'))),
+        array('update', array('kind' => 'user', 'id' => $ivanId, 'fields' => array('comment' => 'z'))), array('delete', array('kind' => 'user', 'id' => $ivanId)),
+        array('duplicate', array('kind' => 'user', 'id' => $ivanId, 'fields' => array('password' => $secretPw))),
+    ) as $scopeCase) {
+        $e = throws("user: {$scopeName} token {$scopeCase[0]}", ApiException::class, function () use ($call, $actor, $scopeCase) { $call($actor, $scopeCase[0], $scopeCase[1]); });
+        check("user: {$scopeName} token cannot {$scopeCase[0]} users", $e && $e->errorCode === 'forbidden_scope');
+    }
+    $e = throws("user: {$scopeName} token describe", ApiException::class, function () use ($call, $actor) { $call($actor, 'describe', array('kind' => 'user')); });
+    check("user: {$scopeName} token cannot describe users", $e && in_array($e->errorCode, array('unavailable', 'forbidden_scope'), true));
+}
+$readDiff = $call($uActor('read'), 'history_diff', array('changeset_id' => $changedPassword['changeset_id']));
+check('user: a read token does not get the diff of a user', !isset($readDiff['objects'][0]['changed']) && !$leaks($readDiff));
+$uSite->options['modxmcp.disabled_groups'] = 'access';
+foreach (array('list', 'get', 'create') as $groupAction) {
+    $args = array('create' => array('kind' => 'user', 'fields' => array('username' => 'z', 'password' => $secretPw)), 'get' => array('kind' => 'user', 'id' => $ivanId), 'list' => array('kind' => 'user'))[$groupAction];
+    $e = throws("user: access group off, {$groupAction}", ApiException::class, function () use ($call, $uAdmin, $groupAction, $args) { $call($uAdmin, $groupAction, $args); });
+    check("user: {$groupAction} is unavailable when the access group is off", $e && $e->errorCode === 'unavailable');
+}
+$e = throws('user: access group off, describe', ApiException::class, function () use ($call, $uAdmin) { $call($uAdmin, 'describe', array('kind' => 'user')); });
+check('user: describe is unavailable when the access group is off', $e && $e->errorCode === 'unavailable');
+$uSite->options['modxmcp.disabled_groups'] = '';
+$planOnly = $call($uActor('admin', array('plan_only' => true)), 'create', array('kind' => 'user', 'fields' => array('username' => 'план', 'password' => $secretPw, 'email' => 'plan@example.com')));
+check('user: a plan-only token creates nothing', !empty($planOnly['planned']) && $uSite->getCount('modUser', array('username' => 'план')) === 0 && !$leaks($planOnly));
+// no secret in the whole journal summary and the stored changeset summaries of this section
+$journalDump = json_encode($uAdmin->journal()->changesets(array(), 100), JSON_UNESCAPED_UNICODE);
+check('user: no changeset summary of the journal holds a password', strpos($journalDump, $secretPw) === false && strpos($journalDump, $secretPw2) === false && strpos($journalDump, 'fakehash') === false);
+
+// Review additions: logins do not change a user's revision; the service user keeps its groups.
+list($loginSite, $loginDev) = $retentionSite();
+$loginAdmin = new Context($loginSite, array('scope' => 'admin') + $loginDev->token, $loginDev->corePath, function () {});
+$loginSite->options['modxmcp.service_user_id'] = 99;
+$loginUser = $call($loginAdmin, 'create', array('kind' => 'user', 'fields' => array('username' => 'ivan', 'password' => 'Пароль-123456', 'email' => 'ivan@example.ru', 'fullname' => 'Иван')));
+$loginBefore = $call($loginAdmin, 'get', array('kind' => 'user', 'id' => $loginUser['id']))['revision'];
+$profileRow = null;
+foreach ($loginSite->getCollection('modUserProfile', array('internalKey' => $loginUser['id'])) as $row) { $profileRow = $row; }
+$profileRow->fromArray(array('lastlogin' => 1700000000, 'thislogin' => 1700000500, 'logincount' => 7, 'sessionid' => 'abc', 'failedlogincount' => 1), '', false, true);
+$profileRow->save();
+$loginSite->store('modUser', array('session_stale' => 'a:1:{i:0;s:3:"web";}') + $loginSite->row('modUser', $loginUser['id']));
+check('users: a login does not change the revision', $call($loginAdmin, 'get', array('kind' => 'user', 'id' => $loginUser['id']))['revision'] === $loginBefore);
+$loginEdit = $call($loginAdmin, 'update', array('kind' => 'user', 'id' => $loginUser['id'], 'fields' => array('fullname' => 'Иван Петров')));
+check('users: no outside change was recorded for the login', $call($loginAdmin, 'history', array('source' => 'external'))['changesets'] === array());
+$call($loginAdmin, 'undo', array('changeset_id' => $loginEdit['changeset_id'], 'confirm' => true));
+$profileAfter = null;
+foreach ($loginSite->getCollection('modUserProfile', array('internalKey' => $loginUser['id'])) as $row) { $profileAfter = $row; }
+check('users: undo keeps the login statistics', (int) $profileAfter->get('logincount') === 7 && (int) $profileAfter->get('lastlogin') === 1700000000
+    && $call($loginAdmin, 'get', array('kind' => 'user', 'id' => $loginUser['id']))['fields']['fullname'] === 'Иван');
+$loginSite->store('modUserGroup', array('id' => 1, 'name' => 'Administrator', 'description' => '', 'parent' => 0, 'rank' => 0, 'dashboard' => 1));
+$e = throws('users: the service user cannot leave a group', ApiException::class, function () use ($call, $loginAdmin) {
+    $call($loginAdmin, 'invoke', array('kind' => 'user_group', 'id' => 1, 'op' => 'remove_member', 'args' => array('user' => 99)));
+});
+check('users: the refusal names the service user', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'service user') !== false);
 
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));

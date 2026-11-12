@@ -36,6 +36,10 @@ abstract class Kind {
      *   required    required on create
      *   immutable   cannot be changed after creation
      *   no_filter   cannot be used in the `where` of modx_list
+     *   via         name of a relation (see relationSpecs()): the value lives in the one related row, read
+     *               through viaRow(); sent to the processors like any field, never filterable, not a column
+     *               of the model class (snapshots keep it in the relation's rows)
+     *   write_only  accepted on write, never read, listed or sent back (a password)
      */
     abstract public function fields();
 
@@ -152,6 +156,11 @@ abstract class Kind {
 
     // ---- hooks of kinds that need extra care; the defaults change nothing ----
 
+    /** The one related row that holds the `via` fields of this relation, or null when there is none. */
+    public function viaRow($object, $relation) {
+        return null;
+    }
+
     /** Called after a successful write or delete through the processors, and after an undo has restored an object. */
     public function afterWrite(\modX $modx) {
     }
@@ -189,6 +198,12 @@ abstract class Kind {
      * Refuse a change to an existing object. $op is update, delete or duplicate.
      */
     public function assertObjectWritable(\modX $modx, $object, $op) {
+    }
+
+    /**
+     * Refuse an update that must not go through, from the normalised columns sent. Runs before anything is touched.
+     */
+    public function assertUpdatable(\modX $modx, $object, array $columns) {
     }
 
     /**
@@ -257,6 +272,9 @@ abstract class Kind {
      *   present      column, or list of columns, shown by the API
      *   description  meaning, for describe
      *   delete_only  captured only before a delete (data another object owns, e.g. TV values)
+     *   ignore_columns columns of the rows that MODX changes by itself (e.g. login statistics):
+     *                not part of the state, kept as they are on restore of a one-row relation
+     *   hidden       not shown by modx_get and modx_describe (rows that only back `via` fields)
      *   in_state     false: shown by modx_get but not part of the snapshot, because the rows are
      *                objects of another kind, journaled as such (see deleteCascade())
      *   writable     can be replaced through the API
@@ -289,6 +307,25 @@ abstract class Kind {
     public function column($field) {
         $fields = $this->fields();
         return isset($fields[$field]['column']) ? $fields[$field]['column'] : $field;
+    }
+
+    /** Names of the relations that back `via` fields. */
+    public function viaRelations() {
+        $out = array();
+        foreach ($this->fields() as $definition) {
+            if (!empty($definition['via'])) { $out[$definition['via']] = true; }
+        }
+        return array_keys($out);
+    }
+
+    /** Raw stored value of a field: a column of the object, or a column of its `via` row. */
+    protected function rawValue($object, $field) {
+        $fields = $this->fields();
+        if (!empty($fields[$field]['via'])) {
+            $row = $this->viaRow($object, $fields[$field]['via']);
+            return $row ? $row->get($this->column($field)) : null;
+        }
+        return $object->get($this->column($field));
     }
 
     /** Name of the code field, or null when the kind has none. */
@@ -391,7 +428,8 @@ abstract class Kind {
             $content = $this->effectiveContent($object);
             return $content[0];
         }
-        $raw = $object->get($this->column($field));
+        if (!empty($fields[$field]['write_only'])) { return ''; }
+        $raw = $this->rawValue($object, $field);
         if (isset($fields[$field]['format']) && $fields[$field]['format'] === 'datetime') {
             return self::datetime($raw);
         }
@@ -413,9 +451,9 @@ abstract class Kind {
     public function processorValue($object, $field) {
         $fields = $this->fields();
         if (isset($fields[$field]['format']) && $fields[$field]['format'] === 'datetime') {
-            return self::datetime($object->get($this->column($field)));
+            return self::datetime($this->rawValue($object, $field));
         }
-        return $object->get($this->column($field));
+        return $this->rawValue($object, $field);
     }
 
     /** Stored relation values for copying, without filling in defaults. */
@@ -454,14 +492,14 @@ abstract class Kind {
             if (isset($definition['description'])) { $field['description'] = $definition['description']; }
             if (!empty($definition['derived'])) { $definition['read_only'] = true; }
             if (isset($definition['format'])) { $field['format'] = $definition['format']; }
-            foreach (array('list', 'code', 'read_only', 'required', 'immutable') as $flag) {
+            foreach (array('list', 'code', 'read_only', 'required', 'immutable', 'write_only') as $flag) {
                 if (!empty($definition[$flag])) { $field[$flag] = true; }
             }
             $fields[] = $field;
         }
         $relations = array();
         foreach ($this->relationSpecs() as $name => $spec) {
-            if (!empty($spec['delete_only'])) { continue; }
+            if (!empty($spec['delete_only']) || !empty($spec['hidden'])) { continue; }
             $relations[] = array('name' => $name, 'description' => $spec['description'], 'writable' => !empty($spec['writable']));
         }
         $operations = array();

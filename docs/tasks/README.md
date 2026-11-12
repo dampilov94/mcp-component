@@ -53,7 +53,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 14 | [modx_dependency_graph](14-dependency-graph.md) | `task/14-dependency-graph` | merged |
 | 15 | [Object keys that are not numeric ids](15-object-keys.md) | `task/15-object-keys` | merged |
 | 16 | [Settings kinds](16-settings-kinds.md) | `task/16-settings-kinds` | merged |
-| 17 | [Kind user](17-users.md) | `task/17-users` | ready for the executor |
+| 17 | [Kind user](17-users.md) | `task/17-users` | merged |
 | 18 | [Access rules](18-access-rules.md) | `task/18-access-rules` | ready for the executor |
 
 ## Doing several briefs in a row

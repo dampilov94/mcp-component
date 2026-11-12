@@ -32,6 +32,11 @@ class FakeObject {
         }
     }
     public function initialize() { return true; }
+    /** The related one-to-one row of a relation alias (only the user's Profile is modelled). */
+    public function getOne($alias) {
+        if ($this->class === 'modUser' && $alias === 'Profile') { return $this->modx->getObject('modUserProfile', array('internalKey' => $this->fields['id'])); }
+        return null;
+    }
     public function getBasePath() { return (string) $this->get('basePath'); }
     public function getSourceFile() { return !empty($this->fields['static']) ? str_replace('[[++core_path]]', $this->modx->getOption('core_path'), (string) $this->fields['static_file']) : false; }
     public function joinGroup($id) {
@@ -211,6 +216,10 @@ class modX extends xPDO {
         array('modTemplateVar', 'modTemplateVarResource', 'tmplvarid', array()),
         array('modResource', 'modTemplateVarResource', 'contentid', array()),
         array('modUserGroup', 'modUserGroupMember', 'user_group', array()),
+        // A user takes its profile, memberships and settings with it.
+        array('modUser', 'modUserProfile', 'internalKey', array()),
+        array('modUser', 'modUserGroupMember', 'member', array()),
+        array('modUser', 'modUserSetting', 'user', array()),
         array('modResourceGroup', 'modResourceGroupResource', 'document_group', array()),
         // Composites that MODX removes together with a context or a namespace.
         array('modContext', 'modContextSetting', 'context_key', array(), 'key'),
@@ -239,7 +248,7 @@ class modX extends xPDO {
     }
     private function persist() { if ($this->file) { file_put_contents($this->file, json_encode($this->tables)); } }
     /** Primary key column(s) per class; rows of other classes are matched by id (or by their whole content without one). */
-    public static $primaryKeys = array('modSystemSetting' => 'key', 'modContext' => 'key', 'modNamespace' => 'name', 'modContextSetting' => array('context_key', 'key'));
+    public static $primaryKeys = array('modSystemSetting' => 'key', 'modContext' => 'key', 'modNamespace' => 'name', 'modContextSetting' => array('context_key', 'key'), 'modUserSetting' => array('user', 'key'));
     public static function primaryKey($class) { return isset(self::$primaryKeys[$class]) ? self::$primaryKeys[$class] : 'id'; }
     /** The identity of a row as one string, or null when a primary key column is missing. */
     private static function identity($class, array $fields) {
@@ -424,6 +433,107 @@ class modX extends xPDO {
         return new FakeResponse(null, array('id' => $object->get('id')));
     }
 
+
+    /** The salted hash MODX would store; the fake only needs it to differ from the plain text and to change with the password. */
+    public static function fakeHash($password, $salt) { return 'fakehash$' . $salt . '$' . sha1($salt . $password); }
+
+    /**
+     * security/user/{create,update,delete}: validation of _validation.php, the profile that travels with the
+     * user, the password properties, checkboxes and the refusals of the delete processor (MODX 2.8.8).
+     * Option fake_unconditional_checkbox makes setCheckbox() reset an absent property, as the brief feared.
+     */
+    private function userProcessor($action, array $data) {
+        if ($action === 'delete') {
+            $user = $this->getObject('modUser', array('id' => $data['id']));
+            if (!$user) { return new FakeResponse('User not found.'); }
+            if ($this->user && (string) $this->user->get('id') === (string) $user->get('id')) { return new FakeResponse('You cannot delete your own user.'); }
+            $admins = $this->getObject('modUserGroup', array('name' => 'Administrator'));
+            if ($admins && $this->getObject('modUserGroupMember', array('user_group' => $admins->get('id'), 'member' => $user->get('id')))
+                && $this->getCount('modUserGroupMember', array('user_group' => $admins->get('id'))) <= 1) {
+                return new FakeResponse('You cannot delete the last user of the Administrator group.');
+            }
+            $user->remove();
+            return new FakeResponse(null, array('id' => $data['id']));
+        }
+        $creating = $action === 'create';
+        $user = $creating ? $this->newObject('modUser') : $this->getObject('modUser', array('id' => $data['id']));
+        if (!$user) { return new FakeResponse('User not found.'); }
+        $profile = $creating ? $this->newObject('modUserProfile') : $this->getObject('modUserProfile', array('internalKey' => $data['id']));
+        if (!$profile) { $profile = $this->newObject('modUserProfile'); $profile->set('internalKey', $data['id']); }
+        $errors = array();
+        $username = isset($data['username']) ? $data['username'] : '';
+        if ($username === '') { $errors[] = 'Please specify a username.'; }
+        elseif (!preg_match('/^[^\'\\x3c\\x3e\\(\\);\\x22]+$/', $username)) { $errors[] = 'The username is not valid.'; }
+        else {
+            foreach ($this->getCollection('modUser', array('username' => $username)) as $other) {
+                if ($creating || (string) $other->get('id') !== (string) $data['id']) { $errors[] = 'A user with that username already exists.'; }
+            }
+        }
+        $password = null;
+        if (!$creating && isset($data['newpassword']) && $data['newpassword'] !== 'false' || $creating) {
+            if (empty($data['passwordnotifymethod'])) { $errors[] = 'Please specify a notification method.'; }
+            if ((isset($data['passwordgenmethod']) ? $data['passwordgenmethod'] : 'g') === 'g') { $password = 'generated-' . bin2hex(random_bytes(4)); }
+            else {
+                $given = isset($data['specifiedpassword']) ? $data['specifiedpassword'] : '';
+                if ($given === '') { $errors[] = 'Please specify a password.'; }
+                elseif ($given != (isset($data['confirmpassword']) ? $data['confirmpassword'] : null)) { $errors[] = 'The passwords do not match.'; }
+                elseif (mb_strlen($given, '8bit') < (int) $this->getOption('password_min_length', null, 8)) { $errors[] = 'The password is too short.'; }
+                elseif (!preg_match('/^[^\'\x3c\x3e\(\);\x22\x7b\x7d\x2f\x5c]+$/', $given)) { $errors[] = 'The password contains invalid characters.'; }
+                else { $password = $given; }
+            }
+        }
+        $email = isset($data['email']) ? $data['email'] : '';
+        if ($email === '') { $errors[] = 'Please specify an e-mail address.'; }
+        if (!$this->getOption('allow_multiple_emails', null, true)) {
+            foreach ($this->getCollection('modUserProfile', array('email' => $email)) as $other) {
+                if ($creating || (string) $other->get('internalKey') !== (string) $data['id']) { $errors[] = 'A user with that e-mail address already exists.'; }
+            }
+        }
+        foreach (array('blockeduntil', 'blockedafter') as $date) {
+            if (!empty($data[$date])) {
+                $time = strtotime(str_replace('-', '/', $data[$date]));
+                if (!$time) { $errors[] = "The {$date} date is not valid."; }
+                $data[$date] = (int) $time;
+            }
+        }
+        if ($errors) { return new FakeResponse(implode(' ', $errors)); }
+
+        // Like modUserUpdateProcessor::beforeSet(); a property that is not sent is left alone unless the option says otherwise.
+        $boxes = array('blocked', 'active', 'sudo');
+        foreach ($boxes as $box) {
+            if (!$creating && (isset($data[$box]) || $this->getOption('fake_unconditional_checkbox', null, false))) { $data[$box] = empty($data[$box]) || $data[$box] === 'false' ? 0 : 1; }
+        }
+        if ($creating) { $data['blocked'] = !empty($data['blocked']) ? 1 : 0; $data += array('active' => 0); }
+        $sudo = array_key_exists('sudo', $data) ? $data['sudo'] : null;
+        unset($data['sudo']);
+        if ($creating) {
+            $user->fromArray(array('username' => '', 'password' => '', 'cachepwd' => '', 'class_key' => 'modUser', 'active' => 0, 'remote_key' => null,
+                'remote_data' => null, 'hash_class' => 'hashing.modNative', 'salt' => '', 'primary_group' => 0, 'session_stale' => null, 'sudo' => 0, 'createdon' => 1700000000), '', false, true);
+        }
+        foreach (array('username', 'active', 'primary_group', 'class_key') as $column) {
+            if (array_key_exists($column, $data)) { $user->set($column, $data[$column]); }
+        }
+        if ($sudo !== null && $this->hasPermission('set_sudo')) { $user->set('sudo', empty($sudo) ? 0 : 1); }
+        if ($password !== null) {
+            if (!$user->get('salt')) { $user->set('salt', 'salt' . bin2hex(random_bytes(3))); }
+            $user->set('password', self::fakeHash($password, $user->get('salt')));
+        }
+        $user->save();
+        if ($creating) {
+            $profile->fromArray(array('internalKey' => $user->get('id'), 'fullname' => '', 'email' => '', 'phone' => '', 'mobilephone' => '', 'blocked' => 0,
+                'blockeduntil' => 0, 'blockedafter' => 0, 'logincount' => 0, 'lastlogin' => 0, 'thislogin' => 0, 'failedlogincount' => 0, 'sessionid' => '',
+                'dob' => 0, 'gender' => 0, 'address' => '', 'country' => '', 'city' => '', 'state' => '', 'zip' => '', 'fax' => '', 'photo' => '', 'comment' => '',
+                'website' => '', 'extended' => null), '', true, true);
+        }
+        foreach (array('fullname', 'email', 'phone', 'mobilephone', 'comment', 'blocked', 'blockeduntil', 'blockedafter') as $column) {
+            if (array_key_exists($column, $data)) { $profile->set($column, $data[$column] === '' && substr($column, 0, 7) === 'blocked' ? 0 : $data[$column]); }
+        }
+        $profile->save();
+        $fields = $user->toArray();
+        // The real create processor answers with the user and a message that holds the plain password.
+        return new FakeResponse(null, $fields);
+    }
+
     /** The checks of modSystemSettingsCreate/UpdateProcessor and the context setting processors on namespace and key. */
     private function checkSetting($action, array $data) {
         if ($action === 'remove') { return null; }
@@ -554,6 +664,7 @@ class modX extends xPDO {
         }
         $action = basename($path);
         $base = substr($path, 0, -strlen($action));
+        if ($base === 'security/user/') { return $this->userProcessor($action, $data); }
         if ($base === 'system/settings/') { return $this->settingProcessor($action, $data, $path); }
         if ($base === 'context/setting/') { return $this->settingProcessor($action, $data, $path, 'modContextSetting'); }
         if ($base === 'context/') { return $this->contextProcessor($action, $data); }
