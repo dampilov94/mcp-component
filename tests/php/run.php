@@ -2763,6 +2763,31 @@ check('user: a plan-only token creates nothing', !empty($planOnly['planned']) &&
 $journalDump = json_encode($uAdmin->journal()->changesets(array(), 100), JSON_UNESCAPED_UNICODE);
 check('user: no changeset summary of the journal holds a password', strpos($journalDump, $secretPw) === false && strpos($journalDump, $secretPw2) === false && strpos($journalDump, 'fakehash') === false);
 
+// Review additions: logins do not change a user's revision; the service user keeps its groups.
+list($loginSite, $loginDev) = $retentionSite();
+$loginAdmin = new Context($loginSite, array('scope' => 'admin') + $loginDev->token, $loginDev->corePath, function () {});
+$loginSite->options['modxmcp.service_user_id'] = 99;
+$loginUser = $call($loginAdmin, 'create', array('kind' => 'user', 'fields' => array('username' => 'ivan', 'password' => 'Пароль-123456', 'email' => 'ivan@example.ru', 'fullname' => 'Иван')));
+$loginBefore = $call($loginAdmin, 'get', array('kind' => 'user', 'id' => $loginUser['id']))['revision'];
+$profileRow = null;
+foreach ($loginSite->getCollection('modUserProfile', array('internalKey' => $loginUser['id'])) as $row) { $profileRow = $row; }
+$profileRow->fromArray(array('lastlogin' => 1700000000, 'thislogin' => 1700000500, 'logincount' => 7, 'sessionid' => 'abc', 'failedlogincount' => 1), '', false, true);
+$profileRow->save();
+$loginSite->store('modUser', array('session_stale' => 'a:1:{i:0;s:3:"web";}') + $loginSite->row('modUser', $loginUser['id']));
+check('users: a login does not change the revision', $call($loginAdmin, 'get', array('kind' => 'user', 'id' => $loginUser['id']))['revision'] === $loginBefore);
+$loginEdit = $call($loginAdmin, 'update', array('kind' => 'user', 'id' => $loginUser['id'], 'fields' => array('fullname' => 'Иван Петров')));
+check('users: no outside change was recorded for the login', $call($loginAdmin, 'history', array('source' => 'external'))['changesets'] === array());
+$call($loginAdmin, 'undo', array('changeset_id' => $loginEdit['changeset_id'], 'confirm' => true));
+$profileAfter = null;
+foreach ($loginSite->getCollection('modUserProfile', array('internalKey' => $loginUser['id'])) as $row) { $profileAfter = $row; }
+check('users: undo keeps the login statistics', (int) $profileAfter->get('logincount') === 7 && (int) $profileAfter->get('lastlogin') === 1700000000
+    && $call($loginAdmin, 'get', array('kind' => 'user', 'id' => $loginUser['id']))['fields']['fullname'] === 'Иван');
+$loginSite->store('modUserGroup', array('id' => 1, 'name' => 'Administrator', 'description' => '', 'parent' => 0, 'rank' => 0, 'dashboard' => 1));
+$e = throws('users: the service user cannot leave a group', ApiException::class, function () use ($call, $loginAdmin) {
+    $call($loginAdmin, 'invoke', array('kind' => 'user_group', 'id' => 1, 'op' => 'remove_member', 'args' => array('user' => 99)));
+});
+check('users: the refusal names the service user', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'service user') !== false);
+
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));
 check('canonical: list order is kept', Kernel::canonical(array(3, 1, 2)) === array(3, 1, 2));

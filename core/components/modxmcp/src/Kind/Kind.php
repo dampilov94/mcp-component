@@ -272,6 +272,8 @@ abstract class Kind {
      *   present      column, or list of columns, shown by the API
      *   description  meaning, for describe
      *   delete_only  captured only before a delete (data another object owns, e.g. TV values)
+     *   ignore_columns columns of the rows that MODX changes by itself (e.g. login statistics):
+     *                not part of the state, kept as they are on restore of a one-row relation
      *   hidden       not shown by modx_get and modx_describe (rows that only back `via` fields)
      *   in_state     false: shown by modx_get but not part of the snapshot, because the rows are
      *                objects of another kind, journaled as such (see deleteCascade())

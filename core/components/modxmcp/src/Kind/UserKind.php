@@ -52,12 +52,20 @@ final class UserKind extends Kind {
 
     public function relationSpecs() {
         return array(
+            // Every login rewrites these; they must not look like a change made behind the journal's back.
             'profile' => array('class' => 'modUserProfile', 'fk' => 'internalKey', 'present' => 'id', 'hidden' => true,
+                'ignore_columns' => array('sessionid', 'lastlogin', 'thislogin', 'logincount', 'failedlogincount'),
                 'description' => 'The profile row; its fields are the `via` fields of the user.'),
             'groups' => array('class' => 'modUserGroupMember', 'fk' => 'member', 'present' => array('user_group', 'role'),
                 'description' => 'Groups of the user with their role ids. Changed with modx_invoke add_member / remove_member on user_group.'),
             'settings' => array('class' => 'modUserSetting', 'fk' => 'user', 'delete_only' => true),
         );
+    }
+
+    /** session_stale is set by MODX whenever permissions are flushed. */
+    public function stateColumns(array $columns) {
+        unset($columns['session_stale']);
+        return $columns;
     }
 
     public function viaRow($object, $relation) {

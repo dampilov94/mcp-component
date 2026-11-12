@@ -42,7 +42,10 @@ final class Snapshot {
             if (!empty($spec['delete_only']) !== $deleteOnly || (isset($spec['in_state']) && $spec['in_state'] === false)) { continue; }
             $rows = array();
             foreach ($modx->getCollection($spec['class'], self::criteria($spec, $kind->keyOf($object))) as $row) {
-                $rows[] = self::row($row);
+                $values = self::row($row);
+                // Columns MODX changes on its own (login statistics) are not part of the state.
+                if (!empty($spec['ignore_columns'])) { $values = array_diff_key($values, array_flip($spec['ignore_columns'])); }
+                $rows[] = $values;
             }
             usort($rows, function ($a, $b) { return strcmp(json_encode($a), json_encode($b)); });
             $out[$name] = $rows;
@@ -198,10 +201,16 @@ final class Snapshot {
         $rows = $state['relations'] + $extra;
         foreach ($kind->relationSpecs() as $name => $spec) {
             if (!isset($rows[$name])) { continue; }
+            // A one-row relation keeps the current values of the columns the state ignores.
+            $kept = array();
+            if (!empty($spec['ignore_columns']) && count($rows[$name]) === 1) {
+                $current = $modx->getCollection($spec['class'], self::criteria($spec, $key));
+                if (count($current) === 1) { $kept = array_intersect_key(reset($current)->toArray('', true), array_flip($spec['ignore_columns'])); }
+            }
             $modx->removeCollection($spec['class'], self::criteria($spec, $key));
             foreach ($rows[$name] as $row) {
                 $related = $modx->newObject($spec['class']);
-                $related->fromArray($row, '', true, true);
+                $related->fromArray($kept + $row, '', true, true);
                 if (!$related->save()) { throw new \RuntimeException("Cannot restore {$name} of {$kind->name()} {$key}."); }
             }
         }

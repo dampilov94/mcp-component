@@ -172,3 +172,32 @@ Open questions:
 - Logins change the profile (`sessionid`, `lastlogin`, `thislogin`, `logincount`) outside the journal, so a user's revision moves after every login; an undo then reports a conflict, as for any outside change.
 - `remove_member` / `add_member` do not protect the service user's own memberships.
 - The journal's `history` shows the username (label) of a user change to any token with the history tool, regardless of read scope; `history_diff` is already refused for a token without the admin scope.
+
+## Review
+
+Accepted and merged. Verified on the stand with `scripts/stand/check-users.cjs`: a test user
+created, its profile and password changed (the password never appears in any tool result),
+membership journaled for both the user and the group, delete and undo restoring user,
+profile and membership exactly, the sudo service user protected.
+
+The finding that the checkbox/sudo trap does not exist in 2.8.8 is correct (the brief was
+wrong); keeping the current values in the update data is the right defence anyway.
+
+Changes the architect made on the branch:
+
+1. **Logins changed a user's revision** (the report's open question): every login rewrites
+   `lastlogin`, `thislogin`, `logincount`, `sessionid` in the profile and MODX sets
+   `session_stale` on the user. New relation flag `ignore_columns`: such columns are not part
+   of the state and keep their current values when a one-row relation is restored;
+   `UserKind::stateColumns()` drops `session_stale`.
+2. **The service user could be removed from its groups** through `user_group`
+   `remove_member`, which could cut the API off. Refused now.
+
+Noted, not changed: deleting a user makes MODX itself log "Could not get table class for
+class: modAccess" (an abstract composite of `modPrincipal`); harmless. `modx_history`
+shows usernames as labels to any token with the history tool.
+
+Architect's own mistake during the review: the first version of the stand check picked the
+first listed user as "the service user" and changed a real user's comment; it was undone
+at once through the journal (changeset 580 → 581). The check now tries only refusals on
+real users.

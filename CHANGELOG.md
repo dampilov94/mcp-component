@@ -125,6 +125,9 @@ After stage 3:
   write. Credentials are hidden from non-admin tokens and in every diff, and cannot be copied
   or made visible by them. modxMCP's own settings are read-only through the API, undo included.
 - `modx_list` quotes sort columns and searches literally.
+- Kind `user` (admin only, reading included): profile fields, write-only password through
+  MODX's own mechanism, memberships; the service user and sudo users are protected; login
+  statistics are not part of a user's revision.
 
 - Offline tests (`npm test`): pure PHP logic, the real kernel behind PHP's built-in server with
   stubbed MODX classes, and the Node bridge end to end. CI runs them.
