@@ -92,7 +92,19 @@ final class Objects {
                 }
             }
         }
+        $kind->assertColumns($out, $creating);
         return $out;
+    }
+
+    /** Refuse an update that tries to change a field fixed at creation (e.g. a setting key). */
+    public static function assertImmutable(Kind $kind, $object, array $columns) {
+        foreach ($kind->fields() as $name => $definition) {
+            $column = $kind->column($name);
+            if (empty($definition['immutable']) || !array_key_exists($column, $columns)) { continue; }
+            if ((string) $columns[$column] !== (string) $object->get($column)) {
+                throw new ApiException('validation_failed', "Field '{$name}' of {$kind->name()} cannot be changed after creation.");
+            }
+        }
     }
 
     /** Reject code that does not parse, before anything is saved. */
@@ -149,7 +161,7 @@ final class Objects {
             $tx->touch($kind, $other);
         }
         if ($id === null) {
-            $created = self::process($modx, $kind->processorPath() . 'create', $columns + $kind->processorExtras('create'));
+            $created = self::process($modx, $kind->processorPath() . 'create', $kind->processorData('create', $columns + $kind->processorExtras('create')));
             $id = $kind->createdKey($created, $columns);
             $tx->created($kind, $id);
         } elseif ($columns) {
@@ -159,7 +171,7 @@ final class Objects {
             foreach ($kind->fields() as $name => $definition) {
                 if (empty($definition['derived'])) { $data[$kind->column($name)] = $kind->processorValue($object, $name); }
             }
-            self::process($modx, $kind->processorPath() . 'update', $columns + $data + $kind->processorExtras('update'));
+            self::process($modx, $kind->processorPath() . 'update', $kind->processorData('update', $columns + $data + $kind->processorExtras('update')));
         }
 
         $field = $kind->codeField();
@@ -189,6 +201,7 @@ final class Objects {
             && $modx->getOption('modxmcp.auto_static', null, true)) {
             StaticFiles::makeStatic($context, $tx, $kind, $id);
         }
+        $kind->afterWrite($modx);
         return $id;
     }
 

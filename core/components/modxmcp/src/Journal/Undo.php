@@ -48,7 +48,8 @@ final class Undo {
             $oldest = $entry['oldest'];
             $subject = Subjects::forChange($context, $newest['kind'], $newest['object_key'], true);
             $key = $newest['object_key'];
-            $current = Snapshot::revision($subject->capture());
+            $currentState = $subject->capture();
+            $current = Snapshot::revision($currentState);
 
             $conflict = null;
             if ($entry['broken'] !== null) {
@@ -68,6 +69,12 @@ final class Undo {
                     throw new ApiException('not_reversible', "The stored state of {$subject->kindName()} {$key} is no longer available.");
                 }
                 $target = json_decode($json, true);
+            }
+            // A kind may refuse to have an object put back or taken away; say so before anything is touched.
+            if ($subject instanceof ObjectSubject) {
+                foreach (array($target, $currentState) as $state) {
+                    if ($state !== null) { $subject->kind()->assertRestorable($state); }
+                }
             }
             $extra = array();
             if ($oldest['extra_blob'] !== null) {

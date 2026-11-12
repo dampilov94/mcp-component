@@ -30,8 +30,11 @@ final class UpdateAction extends WriteAction {
 
     public function run(array $args, Context $context) {
         $kind = Objects::kind($context, $args['kind'], true);
-        $id = $kind->keyOf(Objects::resolve($context, $kind, $args));
+        $object = Objects::resolve($context, $kind, $args);
+        $id = $kind->keyOf($object);
         $columns = Objects::normalize($kind, isset($args['fields']) ? $args['fields'] : array(), false);
+        Objects::assertImmutable($kind, $object, $columns);
+        $kind->assertObjectWritable($context->modx, $object, 'update');
         $relations = isset($args['relations']) ? $args['relations'] : array();
         Objects::assertWritableRelations($kind, $relations);
         if (!$columns && !$relations) { throw new ApiException('validation_failed', 'Nothing to change: give fields or relations.'); }

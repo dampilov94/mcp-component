@@ -34,6 +34,7 @@ final class DeleteAction extends WriteAction {
         $kind = Objects::kind($context, $args['kind'], true);
         $object = Objects::resolve($context, $kind, $args);
         $id = $kind->keyOf($object);
+        $kind->assertObjectWritable($context->modx, $object, 'delete');
         $label = (string) $kind->value($object, $kind->nameField());
         $dry = $this->isDryRun($args, $context);
 
@@ -57,6 +58,7 @@ final class DeleteAction extends WriteAction {
             $staticPath = $kind->effectiveContent(Objects::resolveKey($context, $kind, $id))[2];
             Objects::process($context->modx, $kind->processorPath() . $kind->deleteProcessor(), $kind->processorKey($id));
             StaticFiles::removeManaged($context->modx, $staticPath);
+            $kind->afterWrite($context->modx);
             return array('result' => array(), 'summary' => "delete {$kind->name()} {$id} ({$label})");
         });
         if ($dry) { return $this->plan($context, $result); }

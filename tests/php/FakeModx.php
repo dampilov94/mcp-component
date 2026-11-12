@@ -56,7 +56,7 @@ class FakeObject {
     public function save() {
         $code = modX::codeColumn($this->class);
         $pk = modX::primaryKey($this->class);
-        $stored = isset($this->fields[$pk]) ? $this->modx->row($this->class, $this->fields[$pk]) : null;
+        $stored = $this->modx->rowOf($this->class, $this->fields);
         if ($pk === 'id' && empty($this->fields['id'])) { $this->fields['id'] = $this->modx->nextId($this->class); }
         // Like modElement::save(): the static file is written only when the column changed.
         if ($code && !empty($this->fields['static']) && !empty($this->fields['static_file'])
@@ -76,7 +76,7 @@ class FakeObject {
     public function remove() {
         $this->modx->drop($this->class, $this->fields);
         foreach (modX::$cascades as $spec) {
-            if ($spec[0] === $this->class) { $this->modx->removeCollection($spec[1], array($spec[2] => $this->fields['id']) + $spec[3]); }
+            if ($spec[0] === $this->class) { $this->modx->removeCollection($spec[1], array($spec[2] => $this->fields[isset($spec[4]) ? $spec[4] : 'id']) + $spec[3]); }
         }
         return true;
     }
@@ -207,6 +207,12 @@ class modX extends xPDO {
         array('modResource', 'modTemplateVarResource', 'contentid', array()),
         array('modUserGroup', 'modUserGroupMember', 'user_group', array()),
         array('modResourceGroup', 'modResourceGroupResource', 'document_group', array()),
+        // Composites that MODX removes together with a context or a namespace.
+        array('modContext', 'modContextSetting', 'context_key', array(), 'key'),
+        array('modContext', 'modAccessContext', 'target', array(), 'key'),
+        array('modNamespace', 'modSystemSetting', 'namespace', array(), 'name'),
+        array('modNamespace', 'modContextSetting', 'namespace', array(), 'name'),
+        array('modNamespace', 'modLexiconEntry', 'namespace', array(), 'name'),
     );
     private static $processors = array(
         'element/chunk/' => array('modChunk', 'name'), 'element/snippet/' => array('modSnippet', 'name'),
@@ -227,17 +233,33 @@ class modX extends xPDO {
         return isset($map[$class]) ? $map[$class] : null;
     }
     private function persist() { if ($this->file) { file_put_contents($this->file, json_encode($this->tables)); } }
-    /** Primary key column per class; rows of other classes are matched by id (or by their whole content without one). */
-    public static $primaryKeys = array('modSystemSetting' => 'key');
+    /** Primary key column(s) per class; rows of other classes are matched by id (or by their whole content without one). */
+    public static $primaryKeys = array('modSystemSetting' => 'key', 'modContext' => 'key', 'modNamespace' => 'name', 'modContextSetting' => array('context_key', 'key'));
     public static function primaryKey($class) { return isset(self::$primaryKeys[$class]) ? self::$primaryKeys[$class] : 'id'; }
-    private static function key($class, array $fields) {
-        $pk = self::primaryKey($class);
-        return isset($fields[$pk]) ? $pk . ':' . $fields[$pk] : md5(json_encode($fields));
+    /** The identity of a row as one string, or null when a primary key column is missing. */
+    private static function identity($class, array $fields) {
+        $parts = array();
+        foreach ((array) self::primaryKey($class) as $column) {
+            if (!isset($fields[$column])) { return null; }
+            $parts[] = (string) $fields[$column];
+        }
+        return implode("\x1f", $parts);
     }
+    private static function key($class, array $fields) {
+        $identity = self::identity($class, $fields);
+        return $identity !== null ? 'pk:' . $identity : md5(json_encode($fields));
+    }
+    /** A row by its primary key: a scalar, or a list of values for a composite key. */
     public function row($class, $id) {
-        $key = self::primaryKey($class) . ':' . $id;
+        $key = 'pk:' . implode("\x1f", array_map('strval', (array) $id));
         return isset($this->tables[$class][$key]) ? $this->tables[$class][$key] : null;
     }
+    public function rowOf($class, array $fields) {
+        $identity = self::identity($class, $fields);
+        return $identity !== null && isset($this->tables[$class]['pk:' . $identity]) ? $this->tables[$class]['pk:' . $identity] : null;
+    }
+    /** All rows of a class, for checks that nothing changed. */
+    public function tableDump($class) { $rows = isset($this->tables[$class]) ? $this->tables[$class] : array(); ksort($rows); return $rows; }
     public function nextId($class) {
         $max = 0;
         foreach (isset($this->tables[$class]) ? $this->tables[$class] : array() as $row) { $max = max($max, isset($row['id']) ? (int) $row['id'] : 0); }
@@ -246,7 +268,7 @@ class modX extends xPDO {
     public function store($class, array $fields) {
         // Values come back from a database as strings.
         foreach ($fields as $key => $value) { $fields[$key] = $value === null ? null : (is_array($value) || is_object($value) ? json_encode($value) : (is_bool($value) ? ($value ? '1' : '0') : (string) $value)); }
-        if (!isset($fields[self::primaryKey($class)])) {
+        if (self::identity($class, $fields) === null) {
             foreach (isset($this->tables[$class]) ? $this->tables[$class] : array() as $key => $row) {
                 if ($row == $fields) { unset($this->tables[$class][$key]); }
             }
@@ -255,9 +277,9 @@ class modX extends xPDO {
         $this->persist();
     }
     public function drop($class, array $fields) {
-        $pk = self::primaryKey($class);
+        $identity = self::identity($class, $fields);
         foreach (isset($this->tables[$class]) ? $this->tables[$class] : array() as $key => $row) {
-            if (isset($fields[$pk]) ? (isset($row[$pk]) && (string) $row[$pk] === (string) $fields[$pk]) : $row == $fields) {
+            if ($identity !== null ? self::identity($class, $row) === $identity : $row == $fields) {
                 unset($this->tables[$class][$key]);
             }
         }
@@ -298,7 +320,7 @@ class modX extends xPDO {
     }
     public function getObject($class, $criteria = null, $cacheFlag = true) {
         if ($class === 'modUser' && (is_array($criteria) ? (isset($criteria['id']) ? $criteria['id'] : null) : $criteria) == 1 && !$this->row('modUser', 1)) { return new FakeObject($this, 'modUser', array('id' => 1, 'active' => 1), false); }
-        $rows = $this->match($class, is_array($criteria) || $criteria instanceof FakeQuery ? $criteria : array('id' => $criteria));
+        $rows = $this->match($class, is_array($criteria) || $criteria instanceof FakeQuery ? $criteria : array(is_array(self::primaryKey($class)) ? 'id' : self::primaryKey($class) => $criteria));
         return $rows ? new FakeObject($this, $class, $rows[0], false) : null;
     }
     public function getCollection($class, $criteria = null) {
@@ -341,6 +363,19 @@ class modX extends xPDO {
     public function addPackage($name, $path) { return true; }
     public function getCachePath() { return $this->getOption('core_path') . 'cache/'; }
     public function getCacheManager() { return $this->cache; }
+    /** Like modX::reloadConfig(): the in-memory configuration is read again from the system settings. */
+    public $settingOptions = array();
+    public function reloadConfig() {
+        foreach ($this->settingOptions as $key) { unset($this->options[$key]); }
+        $this->settingOptions = array();
+        foreach (isset($this->tables['modSystemSetting']) ? $this->tables['modSystemSetting'] : array() as $row) {
+            $this->options[$row['key']] = $row['value'];
+            $this->settingOptions[] = $row['key'];
+        }
+        $this->cache->refresh();
+        return $this->options;
+    }
+    public function getContext($key) { return $this->getObject('modContext', array('key' => $key)); }
     public function log($level, $message) { error_log($message); }
     public function getVersionData() { return array('full_version' => '2.8.8-pl'); }
 
@@ -382,17 +417,39 @@ class modX extends xPDO {
         return new FakeResponse(null, array('id' => $object->get('id')));
     }
 
-    /** system/settings/*: a setting is identified by its key, there is no numeric id. */
-    private function settingProcessor($action, array $data, $path) {
+    /** The checks of modSystemSettingsCreate/UpdateProcessor and the context setting processors on namespace and key. */
+    private function checkSetting($action, array $data) {
+        if ($action === 'remove') { return null; }
+        if (empty($data['namespace'])) { return 'Please specify a namespace.'; }
+        if (!$this->getObject('modNamespace', array('name' => $data['namespace']))) { return 'The namespace could not be found.'; }
+        if ($action === 'create' && ctype_digit(substr(trim($data['key']), 0, 1))) { return 'A setting key cannot start with a number.'; }
+        return null;
+    }
+
+    /**
+     * system/settings/* and context/setting/*: a setting is identified by its key (and its context).
+     * Like the real processors these do not reload the configuration on their own here: the kind must.
+     */
+    private function settingProcessor($action, array $data, $path, $class = 'modSystemSetting') {
         if (!isset($data['key']) || $data['key'] === '') { return new FakeResponse('Please specify a key.'); }
-        $object = $this->getObject('modSystemSetting', array('key' => $data['key']));
+        $criteria = array('key' => $data['key']);
+        if ($class === 'modContextSetting') {
+            $contextKey = isset($data['context_key']) ? $data['context_key'] : (isset($data['fk']) ? $data['fk'] : '');
+            if ($action === 'create') { $contextKey = isset($data['fk']) ? $data['fk'] : ''; }
+            if ($contextKey === '' || !$this->getContext($contextKey)) { return new FakeResponse('The context could not be found.'); }
+            $criteria['context_key'] = $contextKey;
+            $data['context_key'] = $contextKey;
+            unset($data['fk']);
+        }
+        $object = $this->getObject($class, $criteria);
         if ($action === 'create') {
             if ($object) { return new FakeResponse('A setting with that key already exists.'); }
-            $object = $this->newObject('modSystemSetting');
+            $object = $this->newObject($class);
             $data += array('value' => '', 'area' => '', 'xtype' => 'textfield', 'namespace' => 'core');
         } elseif (!$object) {
             return new FakeResponse('Setting not found.');
         }
+        if ($error = $this->checkSetting($action, $data)) { return new FakeResponse($error); }
         if ($action === 'remove') {
             $object->remove();
             return new FakeResponse(null, array('key' => $data['key']));
@@ -401,6 +458,52 @@ class modX extends xPDO {
         $object->fromArray($data, '', true, true);
         $object->save();
         if ($this->failProcessor === $path) { throw new RuntimeException('Simulated failure after save.'); }
+        return new FakeResponse(null, $object->toArray());
+    }
+
+    /** context/*: MODX refuses to remove web and mgr; removing a context also removes its resources. */
+    private function contextProcessor($action, array $data) {
+        if (!isset($data['key']) || $data['key'] === '') { return new FakeResponse('Please specify a key.'); }
+        $object = $this->getObject('modContext', array('key' => $data['key']));
+        if ($action === 'create') {
+            if ($object) { return new FakeResponse('A context with that key already exists.'); }
+            $object = $this->newObject('modContext');
+            $data += array('name' => '', 'description' => '', 'rank' => 0);
+        } elseif (!$object) {
+            return new FakeResponse('Context not found.');
+        }
+        if ($action === 'remove') {
+            if ($data['key'] === 'web' || $data['key'] === 'mgr') { return new FakeResponse('Permission denied.'); }
+            $object->remove();
+            foreach ($this->getCollection('modResource', array('context_key' => $data['key'])) as $resource) {
+                $this->removeCollection('modTemplateVarResource', array('contentid' => $resource->get('id')));
+                $resource->remove();
+            }
+            return new FakeResponse(null, array('key' => $data['key']));
+        }
+        $object->fromArray($data, '', true, true);
+        $object->save();
+        return new FakeResponse(null, $object->toArray());
+    }
+
+    /** workspace/namespace/*: the core namespace cannot be removed; removing one removes its settings and lexicon entries. */
+    private function namespaceProcessor($action, array $data) {
+        if (!isset($data['name']) || $data['name'] === '') { return new FakeResponse('Please specify a name.'); }
+        $object = $this->getObject('modNamespace', array('name' => $data['name']));
+        if ($action === 'create') {
+            if ($object) { return new FakeResponse('The namespace could not be saved.'); }
+            $object = $this->newObject('modNamespace');
+            $data += array('path' => '', 'assets_path' => '');
+        } elseif (!$object) {
+            return new FakeResponse('Namespace not found.');
+        }
+        if ($action === 'remove') {
+            if ($data['name'] === 'core') { return new FakeResponse('The namespace could not be removed.'); }
+            $object->remove();
+            return new FakeResponse(null, array('name' => $data['name']));
+        }
+        $object->fromArray($data, '', true, true);
+        $object->save();
         return new FakeResponse(null, $object->toArray());
     }
 
@@ -445,6 +548,9 @@ class modX extends xPDO {
         $action = basename($path);
         $base = substr($path, 0, -strlen($action));
         if ($base === 'system/settings/') { return $this->settingProcessor($action, $data, $path); }
+        if ($base === 'context/setting/') { return $this->settingProcessor($action, $data, $path, 'modContextSetting'); }
+        if ($base === 'context/') { return $this->contextProcessor($action, $data); }
+        if ($base === 'workspace/namespace/') { return $this->namespaceProcessor($action, $data); }
         if (in_array($base, array('security/group/', 'security/role/', 'security/resourcegroup/'), true)) { return $this->accessProcessor($base, $action, $data); }
         if ($base === 'resource/') { return $this->resourceProcessor($action, $data, $path); }
         if (!isset(self::$processors[$base])) { return null; }
@@ -498,6 +604,7 @@ function fakeSite($dir, array $options = array()) {
     $modx = new modX($dir . '/objects.json');
     $modx->pdo = new PDO('sqlite:' . $dir . '/site.sqlite');
     fakeSchema($modx->pdo);
+    $modx->store('modNamespace', array('name' => 'core', 'path' => '{core_path}', 'assets_path' => '{assets_path}'));
     $modx->options = $options + array(
         'modxmcp.enabled' => true,
         'modxmcp.auto_static' => true,

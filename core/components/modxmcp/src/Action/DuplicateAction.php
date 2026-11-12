@@ -32,6 +32,7 @@ final class DuplicateAction extends WriteAction {
         $kind = Objects::kind($context, $args['kind'], true);
         $source = Objects::resolve($context, $kind, $args);
         $sourceId = $kind->keyOf($source);
+        $kind->assertObjectWritable($context->modx, $source, 'duplicate');
         $overrides = isset($args['fields']) ? $args['fields'] : array();
         Objects::normalize($kind, $overrides, false);
         $values = array();

@@ -128,6 +128,10 @@ final class Snapshot {
         $object = $kind->findByKey($modx, $key);
         $events = $kind->eventNames();
 
+        // A kind may refuse to put an object back (or take it away) through the API.
+        if ($state !== null) { $kind->assertRestorable($state); }
+        elseif ($object) { $kind->assertRestorable(self::capture($modx, $kind, $key)); }
+
         if ($state === null) {
             if (!$object) { return; }
             $staticPath = $kind->effectiveContent($object)[2];
@@ -136,6 +140,7 @@ final class Snapshot {
             if (isset($events['delete'])) {
                 $modx->invokeEvent($events['delete'], array('id' => $key, $events['param'] => &$object, 'object' => &$object));
             }
+            $kind->afterWrite($modx);
             return;
         }
 
@@ -169,6 +174,7 @@ final class Snapshot {
                 'mode' => $isNew ? 'new' : 'upd', 'id' => $key, $events['param'] => &$object, 'object' => &$object,
             ));
         }
+        $kind->afterWrite($modx);
     }
 
     /** Replace a file atomically, creating its directory when needed. */
