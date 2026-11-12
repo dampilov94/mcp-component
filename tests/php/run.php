@@ -113,14 +113,14 @@ $context = function ($scope, array $denied = array(), array $options = array()) 
 $read = $context('read');
 $tools = Manifest::tools($read);
 $names = array_column($tools, 'name');
-check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_invoke', 'modx_resource_tree', 'modx_view_code', 'modx_search', 'modx_find_usages', 'modx_list_files', 'modx_read_file', 'modx_history', 'modx_history_diff', 'modx_check_page', 'modx_request_status'));
+check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_invoke', 'modx_resource_tree', 'modx_view_code', 'modx_search', 'modx_find_usages', 'modx_dependency_graph', 'modx_list_files', 'modx_read_file', 'modx_history', 'modx_history_diff', 'modx_check_page', 'modx_request_status'));
 check('manifest: protocol action is not a tool', !in_array('modx_manifest', $names, true));
 check('manifest: hash is stable', Manifest::hash($tools) === Manifest::hash(Manifest::tools($context('read'))));
 foreach ($tools as $tool) {
     check("manifest: {$tool['name']} is read-only", $tool['name'] === 'modx_invoke' || ($tool['effect']['read_only'] === true && $tool['effect']['destructive'] === false));
 }
 $all = array_column(Manifest::tools($context('admin')), null, 'name');
-check('manifest: full tool count', count($all) === 31);
+check('manifest: full tool count', count($all) === 32);
 check('manifest: duplicate is a reversible write after delete', $all['modx_duplicate']['effect']['read_only'] === false
     && $all['modx_duplicate']['effect']['reversible'] === true && $all['modx_duplicate']['effect']['destructive'] === false
     && array_search('modx_duplicate', array_keys($all), true) === array_search('modx_delete', array_keys($all), true) + 1);
@@ -1329,6 +1329,123 @@ foreach (array(array(), array('id' => 1, 'url_path' => '/')) as $badSelector) {
 }
 $e = throws('check_page: unknown resource', ApiException::class, function () use ($call, $pageRead) { $call($pageRead, 'check_page', array('id' => 999)); });
 check('check_page: not_found', $e && $e->errorCode === 'not_found');
+
+// Graph expectations are hand-derived from legacy insertion order and reference scanners.
+$graphDir = $siteDir . '/graph';
+mkdir($graphDir . '/core', 0700, true);
+$graphSite = fakeSite($graphDir);
+$graphRead = new Context($graphSite, array('scope' => 'read') + $dev->token, $dev->corePath, function () {});
+$graphFile = $graphDir . '/static.tpl';
+file_put_contents($graphFile, '[[$header]]');
+$graphSite->store('modNamespace', array('name' => 'app'));
+$graphSite->store('modCategory', array('id' => 1, 'category' => 'App', 'parent' => 0));
+$graphSite->store('modCategory', array('id' => 2, 'category' => 'Child category', 'parent' => 1));
+$graphSite->store('modTemplate', array('id' => 1, 'templatename' => 'Главный', 'content' => '[[$header]][[!$row]][[!Worker? &tpl=`row`]][[Worker]][[~10]][[$missing]][[*helperTV]]'));
+$graphSite->store('modChunk', array('id' => 1, 'name' => 'header', 'snippet' => '[[+placeholder]]', 'category' => 2));
+$graphSite->store('modChunk', array('id' => 2, 'name' => 'row', 'snippet' => 'row'));
+$graphSite->store('modChunk', array('id' => 3, 'name' => 'unused', 'snippet' => 'unused'));
+$graphSite->store('modChunk', array('id' => 4, 'name' => 'Статический', 'snippet' => '[[$staleMissing]]', 'static' => 1, 'static_file' => $graphFile));
+$graphSite->store('modSnippet', array('id' => 1, 'name' => 'Worker', 'snippet' => '$modx->getChunk("row"); $modx->runSnippet("Helper"); $modx->getChunk("Статический");', 'properties' => array('tpl' => 'header')));
+$graphSite->store('modSnippet', array('id' => 2, 'name' => 'Helper', 'snippet' => 'return "ok";'));
+$graphSite->store('modTemplateVar', array('id' => 1, 'name' => 'gallery', 'type' => 'migx', 'default_text' => '@CHUNK header', 'input_properties' => array('formtabs' => '[{"inputTV":"helperTV"}]', 'columns' => '[{"renderchunktpl":"row"}]')));
+$graphSite->store('modTemplateVar', array('id' => 2, 'name' => 'helperTV', 'type' => 'text', 'default_text' => ''));
+$graphSite->store('modPlugin', array('id' => 1, 'name' => 'Listener', 'plugincode' => '$modx->runSnippet("Worker");', 'disabled' => 0));
+$graphSite->store('modTemplateVarTemplate', array('templateid' => 1, 'tmplvarid' => 1));
+$graphSite->store('modPluginEvent', array('pluginid' => 1, 'event' => 'OnLoadWebDocument'));
+$graphSite->store('modPropertySet', array('id' => 1, 'name' => 'Overrides', 'properties' => array(array('name' => 'tpl', 'value' => 'row'))));
+$graphSite->store('modElementPropertySet', array('element_class' => 'modSnippet', 'element' => 1, 'property_set' => 1));
+$graphSite->store('modSystemSetting', array('key' => 'site.row_tpl', 'value' => 'row'));
+$graphSite->store('modResource', array('id' => 10, 'pagetitle' => 'Страница 1', 'template' => 1, 'deleted' => 0, 'published' => 1, 'content' => ''));
+$graphSite->store('modResource', array('id' => 11, 'pagetitle' => 'Страница 2', 'template' => 1, 'deleted' => 0, 'published' => 0, 'content' => ''));
+$graph = $call($graphRead, 'dependency_graph');
+$expectedNodes = array(
+    array('i' => 0, 'type' => 'template', 'id' => 1, 'name' => 'Главный', 'category' => null, 'static' => false, 'resources' => 2, 'in' => 0, 'out' => 6),
+    array('i' => 1, 'type' => 'chunk', 'id' => 1, 'name' => 'header', 'category' => 'Child category', 'static' => false, 'vendor' => true, 'in' => 4, 'out' => 0),
+    array('i' => 2, 'type' => 'chunk', 'id' => 2, 'name' => 'row', 'category' => null, 'static' => false, 'used_by' => 'system setting site.row_tpl', 'in' => 5, 'out' => 0),
+    array('i' => 3, 'type' => 'chunk', 'id' => 3, 'name' => 'unused', 'category' => null, 'static' => false, 'in' => 0, 'out' => 0),
+    array('i' => 4, 'type' => 'chunk', 'id' => 4, 'name' => 'Статический', 'category' => null, 'static' => true, 'in' => 1, 'out' => 1),
+    array('i' => 5, 'type' => 'snippet', 'id' => 1, 'name' => 'Worker', 'category' => null, 'static' => false, 'in' => 2, 'out' => 5),
+    array('i' => 6, 'type' => 'snippet', 'id' => 2, 'name' => 'Helper', 'category' => null, 'static' => false, 'in' => 1, 'out' => 0),
+    array('i' => 7, 'type' => 'tv', 'id' => 1, 'name' => 'gallery', 'category' => null, 'static' => false, 'tv_type' => 'migx', 'in' => 1, 'out' => 3),
+    array('i' => 8, 'type' => 'tv', 'id' => 2, 'name' => 'helperTV', 'category' => null, 'static' => false, 'tv_type' => 'text', 'in' => 2, 'out' => 0),
+    array('i' => 9, 'type' => 'plugin', 'id' => 1, 'name' => 'Listener', 'category' => null, 'static' => false, 'disabled' => false, 'events' => array('OnLoadWebDocument'), 'in' => 0, 'out' => 1),
+);
+$expectedEdges = array(array(0,1,'tag'), array(0,2,'tag'), array(0,5,'tag'), array(0,2,'property'), array(0,8,'tag'),
+    array(4,1,'tag'), array(5,2,'php'), array(5,4,'php'), array(5,6,'php'), array(5,1,'property'),
+    array(7,8,'migx'), array(7,2,'migx'), array(7,1,'binding'), array(9,5,'php'), array(0,7,'attached'), array(5,2,'property'));
+check('graph: exact legacy nodes including degrees/vendor/settings', $graph['nodes'] === $expectedNodes);
+check('graph: exact deduplicated legacy edges in insertion order', $graph['edges'] === $expectedEdges);
+check('graph: exact missing and unused markers', $graph['missing'] === array(array('from' => 'template:Главный', 'from_id' => 1, 'kind' => 'chunk', 'name' => 'missing'))
+    && $graph['orphans'] === array(array('type' => 'chunk', 'id' => 3, 'name' => 'unused', 'reason' => 'never referenced')));
+check('graph: exact stats and read-only static file', $graph['stats'] === array('nodes' => 10, 'edges' => 16,
+    'by_type' => array('template' => 1, 'chunk' => 4, 'snippet' => 2, 'tv' => 2, 'plugin' => 1), 'missing' => 1, 'orphans' => 1, 'vendor' => 1, 'orphans_verified' => true)
+    && file_get_contents($graphFile) === '[[$header]]' && $graphSite->row('modChunk', 4)['snippet'] === '[[$staleMissing]]');
+$summaryGraph = $call($graphRead, 'dependency_graph', array('format' => 'summary'));
+check('graph: summary keeps global diagnostics without graph', $summaryGraph['stats'] === $graph['stats'] && $summaryGraph['missing'] === $graph['missing'] && !isset($summaryGraph['nodes']));
+$resourceGraph = $call($graphRead, 'dependency_graph', array('include_resources' => true));
+check('graph: only linked resource becomes a node', $resourceGraph['stats']['nodes'] === 11 && $resourceGraph['stats']['edges'] === 18
+    && $resourceGraph['nodes'][10] === array('i' => 10, 'type' => 'resource', 'id' => 10, 'name' => 'Страница 1', 'category' => null, 'static' => false, 'published' => true, 'in' => 1, 'out' => 1)
+    && array_slice($resourceGraph['edges'], -2) === array(array(0,10,'link'), array(10,0,'template')));
+$typeGraph = $call($graphRead, 'dependency_graph', array('types' => array('chunk')));
+check('graph: type filtering remaps endpoints and keeps global stats', array_column($typeGraph['nodes'], 'name') === array('header','row','unused','Статический')
+    && $typeGraph['edges'] === array(array(3,0,'tag')) && $typeGraph['stats'] === $graph['stats']);
+$outGraph = $call($graphRead, 'dependency_graph', array('focus' => 'snippet:Worker', 'direction' => 'out', 'depth' => 1));
+check('graph: outgoing focus', array_column($outGraph['nodes'], 'name') === array('header','row','Статический','Worker','Helper')
+    && $outGraph['focus'] === array('node' => 'snippet:Worker', 'depth' => 1, 'direction' => 'out') && !isset($outGraph['orphans']));
+$inGraph = $call($graphRead, 'dependency_graph', array('focus' => 'Worker', 'direction' => 'in', 'depth' => 1));
+check('graph: incoming focus by bare name', array_column($inGraph['nodes'], 'name') === array('Главный','Worker','Listener'));
+$bothGraph = $call($graphRead, 'dependency_graph', array('focus' => 'Worker', 'direction' => 'both', 'depth' => 5));
+check('graph: bidirectional depth expands reachability', count($bothGraph['nodes']) === 9 && !in_array('unused', array_column($bothGraph['nodes'], 'name'), true));
+$clampedGraph = $call($graphRead, 'dependency_graph', array('focus' => 'Worker', 'direction' => 'invalid', 'depth' => 99));
+check('graph: legacy direction fallback and depth clamp', $clampedGraph === $bothGraph);
+$notFoundGraph = $call($graphRead, 'dependency_graph', array('focus' => 'absent'));
+check('graph: missing focus stays a result', $notFoundGraph['focus'] === null && $notFoundGraph['nodes'] === array() && isset($notFoundGraph['error']));
+$graphSite->store('modResource', array('content' => '[[$unused]]') + $graphSite->row('modResource', 11));
+check('graph: verify_orphans option controls resource cross-check', $call($graphRead, 'dependency_graph')['orphans'] === array()
+    && count($call($graphRead, 'dependency_graph', array('verify_orphans' => false))['orphans']) === 1);
+$graphSite->store('modResource', array('content' => '') + $graphSite->row('modResource', 11));
+mkdir($graphDir . '/shop/model', 0700, true);
+$graphSite->options['minishop2.core_path'] = $graphDir . '/shop/';
+$graphSite->store('msOrderStatus', array('id' => 1, 'name' => 'Новый', 'body_user' => 3, 'body_manager' => 0));
+$shopGraph = $call($graphRead, 'dependency_graph');
+check('graph: miniShop2 helper protects status chunks', $shopGraph['nodes'][3]['used_by'] === 'miniShop2 order status "Новый" (body_user)' && $shopGraph['orphans'] === array());
+unset($graphSite->options['minishop2.core_path']);
+$graphSite->store('modChunk', array('id' => 5, 'name' => 'extra1', 'snippet' => ''));
+$graphSite->store('modChunk', array('id' => 6, 'name' => 'extra2', 'snippet' => ''));
+$cappedGraph = $call($graphRead, 'dependency_graph', array('max_nodes' => 1));
+check('graph: node cap uses legacy minimum 10', $cappedGraph['truncated'] && $cappedGraph['returned']['nodes'] === 10 && $cappedGraph['stats']['nodes'] === 12);
+$graphSite->removeCollection('modChunk', array('id' => 5));
+$graphSite->removeCollection('modChunk', array('id' => 6));
+// Preserve the old empty-file fallback and ASCII-only tag-name heuristic, not silently fix them.
+file_put_contents($graphFile, '');
+check('graph: legacy empty static file falls back to database', count($call($graphRead, 'dependency_graph')['missing']) === 2);
+file_put_contents($graphFile, '[[$header]]');
+$graphSite->store('modChunk', array('id' => 5, 'name' => 'Юникод', 'snippet' => '[[$несуществующий]]'));
+check('graph: legacy Cyrillic tag-name limitation preserved', count($call($graphRead, 'dependency_graph')['missing']) === 1);
+$graphSite->removeCollection('modChunk', array('id' => 5));
+// Instantiate the real manager processor against a minimal processor base and fake MODX.
+if (!class_exists('modProcessor')) {
+    class modProcessor {
+        public $modx; private $properties;
+        public function __construct($modx, array $properties = array()) { $this->modx = $modx; $this->properties = $properties; }
+        public function getProperty($key) { return isset($this->properties[$key]) ? $this->properties[$key] : null; }
+        public function success($message, $object) { return array('success' => true, 'object' => $object); }
+        public function failure($message) { return array('success' => false, 'message' => $message); }
+    }
+}
+require_once $dev->corePath . 'processors/mgr/graph.class.php';
+foreach (array('true' => true, 'false' => false) as $flag => $boolean) {
+    $managerGraph = new ModxmcpGraphProcessor($graphSite, array('include_resources' => $flag));
+    $managerResult = $managerGraph->process();
+    check('graph: manager and API use identical builder results', $managerGraph->checkPermissions() && $managerResult['success']
+        && $managerResult['object'] === $call($graphRead, 'dependency_graph', array('include_resources' => $boolean, 'max_nodes' => 2500)));
+}
+$graphSite->options['fake_permissions'] = array('settings' => false);
+check('graph: manager settings permission unchanged', !(new ModxmcpGraphProcessor($graphSite))->checkPermissions());
+$graphHelp = $call($dev, 'help', array('topic' => 'graph'))['content'];
+foreach (array('modx_project_overview', 'modx_search_code', 'modx_delete_element', 'modx_replace_across') as $oldGraphTool) {
+    check('graph: rewritten help tool names', strpos($graphHelp, $oldGraphTool) === false);
+}
 
 // --- Files ---
 use ModxMCP\Files\FileRoot;

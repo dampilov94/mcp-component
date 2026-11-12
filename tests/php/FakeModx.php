@@ -15,7 +15,14 @@ class FakeObject {
         $this->fields = $fields;
         $this->isNew = $isNew;
     }
-    public function get($key) { return array_key_exists($key, $this->fields) ? $this->fields[$key] : null; }
+    public function get($key) {
+        $value = array_key_exists($key, $this->fields) ? $this->fields[$key] : null;
+        if (in_array($key, array('properties', 'input_properties'), true) && is_string($value)) {
+            $decoded = json_decode($value, true);
+            if (is_array($decoded)) { return $decoded; }
+        }
+        return $value;
+    }
     public function set($key, $value) { $this->fields[$key] = $value; return true; }
     public function toArray($prefix = '', $raw = false) { return $this->fields; }
     public function fromArray($values, $prefix = '', $setPrimaryKeys = false, $raw = false) {
@@ -227,7 +234,7 @@ class modX extends xPDO {
     }
     public function store($class, array $fields) {
         // Values come back from a database as strings.
-        foreach ($fields as $key => $value) { $fields[$key] = $value === null ? null : (is_bool($value) ? ($value ? '1' : '0') : (string) $value); }
+        foreach ($fields as $key => $value) { $fields[$key] = $value === null ? null : (is_array($value) || is_object($value) ? json_encode($value) : (is_bool($value) ? ($value ? '1' : '0') : (string) $value)); }
         if (!isset($fields['id'])) {
             foreach (isset($this->tables[$class]) ? $this->tables[$class] : array() as $key => $row) {
                 if ($row == $fields) { unset($this->tables[$class][$key]); }
@@ -267,7 +274,9 @@ class modX extends xPDO {
                 if (!$any) { continue 2; }
             }
             foreach ($criteria as $key => $value) {
-                if (substr($key, -5) === ':LIKE') {
+                if (substr($key, -3) === ':IN') {
+                    if (!in_array((string) $row[substr($key, 0, -3)], array_map('strval', $value), true)) { continue 2; }
+                } elseif (substr($key, -5) === ':LIKE') {
                     if (!self::likes($row, $key, $value)) { continue 2; }
                 } elseif (!array_key_exists($key, $row) || (string) $row[$key] !== (string) $value) { continue 2; }
             }
@@ -313,6 +322,11 @@ class modX extends xPDO {
         $siteUrl = $setting ? $setting->get('value') : $this->getOption('site_url');
         return rtrim($siteUrl, '/') . '/' . ltrim($resource->get('uri') ?: $resource->get('alias'), '/');
     }
+    public function hasPermission($permission) {
+        $permissions = $this->getOption('fake_permissions', null, array('settings' => true));
+        return !empty($permissions[$permission]);
+    }
+    public function addPackage($name, $path) { return true; }
     public function getCachePath() { return $this->getOption('core_path') . 'cache/'; }
     public function getCacheManager() { return $this->cache; }
     public function log($level, $message) { error_log($message); }

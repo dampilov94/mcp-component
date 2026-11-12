@@ -8,9 +8,9 @@ It complements the other two orientation tools:
 
 | Tool | Answers |
 |---|---|
-| `modx_project_overview` | what EXISTS (counts, templates↔TVs, tree, integrations) |
+| `modx_site_info` | what EXISTS (counts, templates↔TVs, tree, integrations) |
 | `modx_dependency_graph` | how it is CONNECTED (who uses what) |
-| `modx_search_code` | where a literal STRING appears |
+| `modx_search` | where a literal STRING appears |
 
 Token cost scales with the number of **elements**, never with content — resources are counts,
 not nodes. A 100 000-page site returns the same small graph as a 10-page one.
@@ -36,8 +36,8 @@ tells you whether the site has broken references or dead elements.
 `direction:"out"` = *what this uses* (check before reading a template's parts).
 `depth` is 1–5 hops. `focus` accepts a bare name (`"header"`) or `type:name` to disambiguate.
 
-Prefer this over `modx_find_usages` when you need precision: find_usages is a substring text
-search (`header` also matches `headerNav`), the graph resolves real references.
+`modx_find_usages` gives matching source lines and structural counts for one object; the
+graph gives connections and neighborhoods. Both use textual heuristics rather than executing code.
 
 **3. Whole graph — to understand an unfamiliar site's architecture:**
 
@@ -98,16 +98,16 @@ e-mail templates (`body_user`/`body_manager`, which reference chunks **by id**).
 - **`orphans` is a CANDIDATE list, never proof.** A third-party add-on can reference an element
   from its own database tables, which nothing generic can see. The response carries an
   `orphans_note` spelling out exactly what was and was not checked. **Always confirm with
-  `modx_delete_element {dry_run:true}` before deleting anything.**
+  `modx_delete {kind: "chunk", id: …, dry_run: true}` before deleting anything.**
 - Duplicate element names: the first one found wins.
 
 ## Typical workflows
 
 **Before deleting a chunk** — `{"focus":"chunk:oldPromo","direction":"in"}`; empty result plus an
-entry in `orphans` means it is genuinely unused. Then `modx_delete_element` with `dry_run:true`.
+entry in `orphans` means it is genuinely unused. Then `modx_delete {kind: "chunk", id: …, dry_run: true}`.
 
-**Before renaming** — the same call lists every element that must be updated; feed those names to
-`modx_replace_across` (with `dry_run:true` first).
+**Before renaming** — the same call lists every element that must be updated; review `modx_replace` with `dry_run:true`, then apply its `revisions` map as
+`expected_revisions`.
 
 **Understanding a page's rendering** — `{"focus":"template:Article","direction":"out","depth":2}`
 gives the whole chain of chunks, snippets and TVs that produce that page.

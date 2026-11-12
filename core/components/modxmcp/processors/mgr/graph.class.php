@@ -12,9 +12,9 @@ class ModxmcpGraphProcessor extends modProcessor {
     }
 
     public function process() {
-        $modelFile = $this->modx->getOption('core_path') . 'components/modxmcp/model/modxmcp.class.php';
+        $modelFile = rtrim($this->modx->getOption('modxmcp.core_path', null, $this->modx->getOption('core_path') . 'components/modxmcp/'), '/\\') . '/src/autoload.php';
         if (!file_exists($modelFile)) {
-            return $this->failure('modxMCP model not found.');
+            return $this->failure('modxMCP core not found.');
         }
         require_once $modelFile;
 
@@ -24,8 +24,8 @@ class ModxmcpGraphProcessor extends modProcessor {
 
         // Two catches for PHP 5/7+ portability (same pattern as the model).
         try {
-            $mcp = new modxMCP($this->modx);
-            $graph = $mcp->buildDependencyGraph(array(
+            $mcp = new \ModxMCP\Graph\GraphBuilder($this->modx);
+            $graph = $mcp->build(array(
                 'include_resources' => $includeResources,
                 'max_nodes'         => 2500,
             ));

@@ -26,6 +26,7 @@ final class Registry {
         SearchAction::class,
         ReplaceAction::class,
         FindUsagesAction::class,
+        DependencyGraphAction::class,
         ListFilesAction::class,
         ReadFileAction::class,
         WriteFileAction::class,
