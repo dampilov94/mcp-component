@@ -26,7 +26,7 @@ class FakeObject {
     }
     public function initialize() { return true; }
     public function getBasePath() { return (string) $this->get('basePath'); }
-    public function getSourceFile() { return !empty($this->fields['static']) ? (string) $this->fields['static_file'] : false; }
+    public function getSourceFile() { return !empty($this->fields['static']) ? str_replace('[[++core_path]]', $this->modx->getOption('core_path'), (string) $this->fields['static_file']) : false; }
     public function joinGroup($id) {
         if (!$this->modx->getObject('modResourceGroup', $id)) { return false; }
         $where = array('document' => $this->get('id'), 'document_group' => $id);
@@ -53,7 +53,10 @@ class FakeObject {
         // Like modElement::save(): the static file is written only when the column changed.
         if ($code && !empty($this->fields['static']) && !empty($this->fields['static_file'])
             && (!$stored || (string) $stored[$code] !== (string) $this->fields[$code])) {
-            file_put_contents($this->fields['static_file'], (string) $this->fields[$code]);
+            $path = $this->getSourceFile();
+            if (!is_file($path) || file_get_contents($path) !== (string) $this->fields[$code]) {
+                file_put_contents($path, (string) $this->fields[$code]);
+            }
         }
         $this->modx->store($this->class, $this->fields);
         $this->isNew = false;
@@ -403,6 +406,9 @@ class modX extends xPDO {
         if ($action === 'create') {
             $defaults = array('description' => '', 'category' => 0, 'locked' => 0);
             if (self::codeColumn($class)) { $defaults += array(self::codeColumn($class) => '', 'static' => 0, 'static_file' => '', 'source' => 0, 'properties' => null); }
+            if (in_array($class, array('modChunk', 'modSnippet', 'modPlugin'), true)) { $defaults['property_preprocess'] = 0; }
+            if ($class === 'modPlugin') { $defaults['disabled'] = 0; }
+            if ($class === 'modTemplate') { $defaults['icon'] = ''; }
             $data += $defaults;
         }
         $object->fromArray($data, '', false, true);
@@ -435,6 +441,7 @@ function fakeSite($dir, array $options = array()) {
     fakeSchema($modx->pdo);
     $modx->options = $options + array(
         'modxmcp.enabled' => true,
+        'modxmcp.auto_static' => true,
         'modxmcp.core_path' => dirname(dirname(__DIR__)) . '/core/components/modxmcp/',
         'core_path' => $dir . '/core/',
         'table_prefix' => 'modx_',

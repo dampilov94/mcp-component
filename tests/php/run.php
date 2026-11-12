@@ -259,6 +259,8 @@ throws('blobs: corruption is detected', RuntimeException::class, function () use
 $siteDir = sys_get_temp_dir() . '/modxmcp-site-' . bin2hex(random_bytes(6));
 mkdir($siteDir . '/core', 0700, true);
 $site = fakeSite($siteDir);
+// This older object/journal block specifically checks database-backed elements.
+$site->options['modxmcp.auto_static'] = false;
 $site->store('modEvent', array('name' => 'OnLoadWebDocument'));
 $site->store('modEvent', array('name' => 'OnWebPageInit'));
 $site->store('modTemplate', array('id' => 1, 'templatename' => 'Base', 'content' => '<html>', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => '', 'icon' => ''));
@@ -676,6 +678,8 @@ $site->options['modxmcp.history_max_blob_bytes'] = 5242880;
 check('oversize: saved, flagged, with a warning', $big['reversible'] === false && $big['changeset_id'] !== null && count($small->warnings) === 1);
 $e = throws('oversize: undo is refused', ApiException::class, function () use ($call, $dev, $big) { $call($dev, 'undo', array('changeset_id' => $big['changeset_id'], 'confirm' => true)); });
 check('oversize: refusal is not_reversible', $e && $e->errorCode === 'not_reversible');
+
+$site->options['modxmcp.auto_static'] = true;
 
 // --- Resources ---
 $editor = $actor('content');
@@ -1165,6 +1169,92 @@ check('tv inputs: help is rewritten', strpos($tvHelp, 'modx_invoke') !== false);
 foreach (array('modx_suggest_tv_type', 'modx_list_tv_input_types', 'modx_get_element', 'modx_update_element', 'modx_create_element', 'modx_get_resource_tvs') as $legacyName) {
     check('tv inputs: no legacy help tool ' . $legacyName, strpos($tvHelp, $legacyName) === false);
 }
+
+// Managed static files on fresh sites, with auto-static enabled by default.
+$staticFixture = function ($suffix) use ($siteDir, $dev) {
+    $dir = $siteDir . '/static-' . $suffix;
+    mkdir($dir . '/core', 0700, true);
+    $modx = fakeSite($dir);
+    $context = new Context($modx, $dev->token, $dev->corePath, function () {});
+    $context->sessionId = 'static-session-0001';
+    return array($modx, $context, $dir);
+};
+list($staticSite, $staticDev, $staticDir) = $staticFixture('convert');
+foreach (array('chunk' => array('chunks', 'tpl'), 'snippet' => array('snippets', 'php'), 'template' => array('templates', 'tpl'), 'plugin' => array('plugins', 'php')) as $kindName => $pathInfo) {
+    $code = in_array($kindName, array('snippet', 'plugin'), true) ? "return 'Привет';" : '<p>Привет</p>';
+    $dbElement = $call($staticDev, 'create', array('kind' => $kindName, 'fields' => array('name' => 'Test Мир ' . $kindName, 'content' => $code, 'static' => false)));
+    $converted = $call($staticDev, 'invoke', array('kind' => $kindName, 'id' => $dbElement['id'], 'op' => 'make_static'));
+    $stored = '[[++core_path]]elements/' . $pathInfo[0] . '/Test-' . $kindName . '-' . $dbElement['id'] . '.' . $pathInfo[1];
+    $absolute = str_replace('[[++core_path]]', $staticSite->getOption('core_path'), $stored);
+    $gotStatic = $call($staticDev, 'get', array('kind' => $kindName, 'id' => $dbElement['id']));
+    check('make_static: conversion ' . $kindName, $converted['status'] === 'converted' && $converted['static_file'] === $stored && file_get_contents($absolute) === $code
+        && $gotStatic['fields']['static'] && $gotStatic['fields']['source'] === 0 && $gotStatic['fields']['content'] === $code
+        && $converted['revision'] !== $dbElement['revision'] && count($staticDev->journal()->changes(array($converted['changeset_id']))) === 1);
+    $already = $call($staticDev, 'invoke', array('kind' => $kindName, 'id' => $dbElement['id'], 'op' => 'make_static'));
+    check('make_static: already static is no-op', $already['status'] === 'already_static' && $already['changeset_id'] === null && $already['revision'] === $converted['revision']);
+    $call($staticDev, 'undo', array('changeset_id' => $converted['changeset_id'], 'confirm' => true));
+    check('make_static: undo retains file and restores database content', is_file($absolute)
+        && !$call($staticDev, 'get', array('kind' => $kindName, 'id' => $dbElement['id']))['fields']['static']
+        && $call($staticDev, 'get', array('kind' => $kindName, 'id' => $dbElement['id']))['fields']['content'] === $code);
+}
+foreach (array('!!!', 'ЖЖЖ') as $name) {
+    $slugElement = $call($staticDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => $name, 'content' => 'slug', 'static' => false)));
+    $baseFile = $staticSite->getOption('core_path') . 'elements/chunks/chunk-' . $slugElement['id'] . '.tpl';
+    file_put_contents($baseFile, 'occupied');
+    $slugged = $call($staticDev, 'invoke', array('kind' => 'chunk', 'id' => $slugElement['id'], 'op' => 'make_static'));
+    check('make_static: fallback slug and collision suffix', $slugged['static_file'] === '[[++core_path]]elements/chunks/chunk-' . $slugElement['id'] . '-1.tpl'
+        && file_get_contents($baseFile) === 'occupied');
+}
+$failedStatic = $call($staticDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'fail static', 'content' => 'stable', 'static' => false)));
+$staticSite->failProcessor = 'element/chunk/update';
+throws('make_static: processor failure', RuntimeException::class, function () use ($call, $staticDev, $failedStatic) { $call($staticDev, 'invoke', array('kind' => 'chunk', 'id' => $failedStatic['id'], 'op' => 'make_static')); });
+$staticSite->failProcessor = null;
+check('make_static: failure removes created file and restores object', !file_exists($staticSite->getOption('core_path') . 'elements/chunks/fail-static-' . $failedStatic['id'] . '.tpl')
+    && $call($staticDev, 'get', array('kind' => 'chunk', 'id' => $failedStatic['id']))['revision'] === $failedStatic['revision']);
+list($autoSite, $autoDev, $autoDir) = $staticFixture('auto');
+$auto = $call($autoDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'Auto', 'content' => 'auto code')));
+$autoGot = $call($autoDev, 'get', array('kind' => 'chunk', 'id' => $auto['id']));
+$autoPath = str_replace('[[++core_path]]', $autoSite->getOption('core_path'), $autoGot['fields']['static_file']);
+check('auto_static: default create produces a managed file', $autoGot['fields']['static'] && file_get_contents($autoPath) === 'auto code'
+    && in_array('static', $auto['changed'], true) && in_array('static_file', $auto['changed'], true));
+$autoCopy = $call($autoDev, 'duplicate', array('kind' => 'chunk', 'id' => $auto['id']));
+check('auto_static: duplicate remains in database', !$call($autoDev, 'get', array('kind' => 'chunk', 'id' => $autoCopy['id']))['fields']['static']);
+$call($autoDev, 'undo', array('changeset_id' => $auto['changeset_id'], 'confirm' => true));
+check('auto_static: undo create removes file and empty shard but keeps root', $autoSite->row('modChunk', $auto['id']) === null && !file_exists($autoPath)
+    && !is_dir(dirname($autoPath)) && is_dir($autoSite->getOption('core_path') . 'elements'));
+$explicitDb = $call($autoDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'Explicit DB', 'static' => false)));
+check('auto_static: explicit false wins', !$call($autoDev, 'get', array('kind' => 'chunk', 'id' => $explicitDb['id']))['fields']['static']);
+$autoSite->options['modxmcp.auto_static'] = false;
+$optionDb = $call($autoDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'Option DB')));
+check('auto_static: disabled setting keeps database storage', !$call($autoDev, 'get', array('kind' => 'chunk', 'id' => $optionDb['id']))['fields']['static']);
+$autoSite->options['modxmcp.auto_static'] = true;
+foreach (array('tv', 'category') as $kindName) {
+    $notStatic = $call($autoDev, 'create', array('kind' => $kindName, 'fields' => array('name' => 'Not static ' . $kindName)));
+    check('auto_static: non-code kinds unaffected', !isset($call($autoDev, 'get', array('kind' => $kindName, 'id' => $notStatic['id']))['fields']['static']));
+}
+$deleteStatic = $call($autoDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'Delete static', 'content' => 'kept code')));
+$deletePath = $autoSite->getObject('modChunk', $deleteStatic['id'])->getSourceFile();
+$staticDeleted = $call($autoDev, 'delete', array('kind' => 'chunk', 'id' => $deleteStatic['id']));
+check('auto_static: delete cleans managed file', !file_exists($deletePath));
+$call($autoDev, 'undo', array('changeset_id' => $staticDeleted['changeset_id'], 'confirm' => true));
+check('auto_static: undo delete restores static element and file', file_get_contents($deletePath) === 'kept code'
+    && $call($autoDev, 'get', array('kind' => 'chunk', 'id' => $deleteStatic['id']))['revision'] === $deleteStatic['revision']);
+$externalPath = $autoDir . '/external.tpl';
+file_put_contents($externalPath, 'external');
+$externalElement = $call($autoDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'External', 'static' => true, 'static_file' => $externalPath, 'content' => 'external')));
+$externalDeleted = $call($autoDev, 'delete', array('kind' => 'chunk', 'id' => $externalElement['id']));
+check('auto_static: delete leaves external file', file_get_contents($externalPath) === 'external');
+$call($autoDev, 'undo', array('changeset_id' => $externalDeleted['changeset_id'], 'confirm' => true));
+$call($autoDev, 'undo', array('changeset_id' => $externalElement['changeset_id'], 'confirm' => true));
+check('auto_static: undo create leaves external file', file_get_contents($externalPath) === 'external');
+$autoSite->failProcessor = 'element/chunk/update';
+$autoCount = $autoSite->getCount('modChunk');
+throws('auto_static: conversion failure aborts create', RuntimeException::class, function () use ($call, $autoDev) {
+    $call($autoDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'Failure automatic', 'content' => 'x')));
+});
+$autoSite->failProcessor = null;
+check('auto_static: failed create leaves no object or file', $autoSite->getCount('modChunk') === $autoCount
+    && glob($autoSite->getOption('core_path') . 'elements/chunks/Failure-automatic-*.tpl') === array());
 
 // --- Files ---
 use ModxMCP\Files\FileRoot;

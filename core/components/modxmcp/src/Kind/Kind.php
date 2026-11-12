@@ -3,6 +3,9 @@ namespace ModxMCP\Kind;
 
 use ModxMCP\ApiException;
 use ModxMCP\Auth\Scope;
+use ModxMCP\Context;
+use ModxMCP\Schema;
+use ModxMCP\Write\Transaction;
 
 /**
  * One kind of site object. A kind declares how its objects are named, which fields the API
@@ -141,6 +144,15 @@ abstract class Kind {
     /** Special operations: op => description, read_only, needs_object (default true), input schema, handler. */
     public function operations() {
         return array();
+    }
+
+    /** Shared operation declaration for the four static-capable code kinds. */
+    protected function staticOperations() {
+        return array('make_static' => array('description' => 'Move database code into a managed static file.',
+            'read_only' => false, 'needs_object' => true, 'input' => Schema::obj(), 'handler' => 'opMakeStatic'));
+    }
+    public function opMakeStatic(Context $context, Transaction $tx, $object, array $args): array {
+        return StaticFiles::makeStatic($context, $tx, $this, (int) $object->get('id'));
     }
 
     /** Replace a writable relation. $value is the API form (a list). */

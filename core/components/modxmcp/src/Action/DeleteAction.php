@@ -6,6 +6,7 @@ use ModxMCP\Context;
 use ModxMCP\Code\Usages;
 use ModxMCP\Journal\Snapshot;
 use ModxMCP\Kind\Objects;
+use ModxMCP\Kind\StaticFiles;
 use ModxMCP\Schema;
 use ModxMCP\Write\Writer;
 
@@ -52,7 +53,9 @@ final class DeleteAction extends WriteAction {
                 ) + $this->usagePlan($context, $kind, $id));
             }
             foreach ($kind->alsoAffected($context->modx, $id, array(), 'delete') as $other) { $tx->touch($kind, $other); }
+            $staticPath = $kind->effectiveContent(Objects::resolve($context, $kind, array('id' => $id)))[2];
             Objects::process($context->modx, $kind->processorPath() . $kind->deleteProcessor(), array('id' => $id));
+            StaticFiles::removeManaged($context->modx, $staticPath);
             return array('result' => array(), 'summary' => "delete {$kind->name()} {$id} ({$label})");
         });
         if ($dry) { return $this->plan($context, $result); }

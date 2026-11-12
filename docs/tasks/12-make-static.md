@@ -112,3 +112,31 @@ static element whose file already exists with equal content is left alone.
 `npm run check`, `npm test`. Files: `src/Kind/StaticFiles.php`, `src/Kind/Kind.php`, the four
 code kinds, `src/Kind/Objects.php`, `src/Action/DeleteAction.php`, `src/Journal/Snapshot.php`,
 the guide, tests, `tests/php/FakeModx.php`.
+
+## Report
+
+Based on: task/11-tv-operations at 0d6f282
+
+- `StaticFiles.php`: exclusive managed-file allocation, slug/suffix rules, processor-based
+  conversion, content verification, failure cleanup and realpath-bounded managed deletion.
+- `Kind.php` and four code kinds: shared make_static declaration/handler. `Objects.php`:
+  auto-static after successful creates only when static was not supplied; duplicate remains
+  non-static. DeleteAction/Snapshot remove managed files after deletion/undo-of-create.
+- Guide updated. Fake resolves the core_path tag and avoids rewriting equal existing
+  static content; real model defaults for property_preprocess/disabled/icon were added so
+  rollback snapshots do not acquire previously absent fake-only columns.
+- Tests cover all four kinds, Unicode/symbol slugs, collisions, no-op conversion, undo,
+  defaults/overrides, managed and external files, and conversion/create failure cleanup.
+- `npm run check` and `npm test` passed: 879 PHP checks and 24 Node/HTTP tests.
+
+The old main-site object/journal block (from fakeSite setup through the resource-block
+boundary) explicitly disables auto-static because its assertions and external-change
+fixtures assume database storage; it is restored before resource tests. Other fake sites,
+including endpoint tests, keep auto-static on by default. Assertions were not rewritten.
+
+Additional conservative path check: refuse a managed subdirectory symlink resolving outside
+core/elements. No direct SQL or other design deviations. The real MODX source confirms the
+file-first conversion approach; its cache writeFile returns a boolean even for empty code.
+Only fake MODX and real temporary files were exercised. Verify native static-source changes,
+processor events, file permissions, empty content, deletion and undo on the stand (especially
+sites enabling MODX's own static-file automation). No blocking questions, deployment or push.

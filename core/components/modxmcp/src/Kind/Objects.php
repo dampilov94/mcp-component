@@ -116,6 +116,7 @@ final class Objects {
      */
     public static function save(Context $context, Transaction $tx, Kind $kind, $id, array $columns, array $relations) {
         $modx = $context->modx;
+        $creating = $id === null;
         foreach ($kind->alsoAffected($modx, $id, $columns, $id === null ? 'create' : 'update') as $other) {
             $tx->touch($kind, $other);
         }
@@ -156,6 +157,10 @@ final class Objects {
             foreach ($relations as $name => $value) { $kind->writeRelation($modx, $object, $name, $value); }
             $cache = $modx->getCacheManager();
             if ($cache) { $cache->refresh(); }
+        }
+        if ($creating && isset($kind->operations()['make_static']) && !array_key_exists('static', $columns)
+            && $modx->getOption('modxmcp.auto_static', null, true)) {
+            StaticFiles::makeStatic($context, $tx, $kind, $id);
         }
         return $id;
     }

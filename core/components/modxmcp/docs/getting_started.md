@@ -28,6 +28,10 @@ is the file. Snippet and plugin code is PHP **without** an opening `<?php` tag; 
 the tag if you send one, which shifts line numbers, so read the code back before editing it
 by lines.
 
+New chunks, snippets, templates and plugins are static by default, with files under
+`core/elements/`; edit their code through the same object and code tools.
+`modx_invoke {kind, id, op: "make_static"}` converts an existing element.
+
 ## Resources
 
 - `modx_resource_tree {parent?, depth?}` — the page tree; `modx_list {kind: "resource"}`
