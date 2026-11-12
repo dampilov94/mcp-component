@@ -113,14 +113,14 @@ $context = function ($scope, array $denied = array(), array $options = array()) 
 $read = $context('read');
 $tools = Manifest::tools($read);
 $names = array_column($tools, 'name');
-check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_resource_tree', 'modx_view_code', 'modx_search', 'modx_list_files', 'modx_read_file', 'modx_history', 'modx_history_diff', 'modx_request_status'));
+check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_resource_tree', 'modx_view_code', 'modx_search', 'modx_find_usages', 'modx_list_files', 'modx_read_file', 'modx_history', 'modx_history_diff', 'modx_request_status'));
 check('manifest: protocol action is not a tool', !in_array('modx_manifest', $names, true));
 check('manifest: hash is stable', Manifest::hash($tools) === Manifest::hash(Manifest::tools($context('read'))));
 foreach ($tools as $tool) {
     check("manifest: {$tool['name']} is read-only", $tool['effect']['read_only'] === true && $tool['effect']['destructive'] === false);
 }
 $all = array_column(Manifest::tools($context('admin')), null, 'name');
-check('manifest: full tool count', count($all) === 26);
+check('manifest: full tool count', count($all) === 27);
 check('manifest: duplicate is a reversible write after delete', $all['modx_duplicate']['effect']['read_only'] === false
     && $all['modx_duplicate']['effect']['reversible'] === true && $all['modx_duplicate']['effect']['destructive'] === false
     && array_search('modx_duplicate', array_keys($all), true) === array_search('modx_delete', array_keys($all), true) + 1);
@@ -427,6 +427,79 @@ $e = throws('replace: missing static file is refused', ApiException::class, func
     $call($replaceDev, 'replace', $replaceArgs + array('expected_revisions' => array('chunk:2' => $missingRevision)));
 });
 check('replace: missing file identifies object', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'chunk:2') !== false);
+
+// Find usages: textual references and structural extras on an independent site.
+$usageDir = $siteDir . '/usages';
+mkdir($usageDir . '/core', 0700, true);
+$usageSite = fakeSite($usageDir);
+$usageRead = new Context($usageSite, array('scope' => 'read') + $dev->token, $dev->corePath, function () {});
+$usageSite->store('modChunk', array('id' => 12, 'name' => 'header', 'snippet' => '[[$header]]', 'category' => 3));
+$usageSite->store('modSnippet', array('id' => 13, 'name' => 'worker', 'snippet' => '[[worker]]', 'category' => 3));
+$usageSite->store('modTemplateVar', array('id' => 14, 'name' => 'image', 'category' => 3));
+$usageSite->store('modResource', array('id' => 12, 'pagetitle' => 'Target', 'content' => '[[~12]]', 'template' => 0, 'deleted' => 0, 'parent' => 0));
+$usageSite->store('modTemplate', array('id' => 2, 'templatename' => 'Base usages', 'content' => '', 'category' => 3));
+$usageSite->store('modCategory', array('id' => 3, 'category' => 'Parent', 'parent' => 0));
+$usageSite->store('modCategory', array('id' => 4, 'category' => 'Child', 'parent' => 3));
+$usageCode = <<<'CODE'
+[[$header]]
+[[!$header]]
+getChunk('header')
+&tpl=`header`
+{include 'header'}
+'header' | chunk
+[[$header_top]] getChunk('header_top') `header_top` {include 'header_top'}
+[[worker]]
+[[!worker]]
+runSnippet("worker")
+&snippet=`worker`
+'worker' | snippet
+[[worker.extra]] runSnippet('worker-extra') `worker_more`
+[[*image]]
+[[!*image]]
+getTVValue('image')
+resource.image
+&includeTVs=`other,image`
+&processTVs=`image,other`
+&tvFilters=`image==yes`
+[[*image_more]] resource.image_more &includeTVs=`image_more`
+[[~12]]
+[[!~12]]
+makeUrl(12)
+12 | url
+[[~123]] makeUrl(123) 123 | url 112 | url
+CODE;
+$usageSite->store('modChunk', array('id' => 100, 'name' => 'A calls', 'snippet' => $usageCode, 'category' => 3));
+$usageFile = $usageDir . '/uses.tpl';
+file_put_contents($usageFile, "[[\$header]]\n[[worker]]\n[[*image]]\n[[~12]]");
+$usageSite->store('modChunk', array('id' => 101, 'name' => 'Z static', 'snippet' => 'no references', 'static' => 1, 'static_file' => $usageFile, 'category' => 0));
+$usageSite->store('modPlugin', array('id' => 100, 'name' => 'Event', 'plugincode' => '', 'category' => 3));
+$usageSite->store('modResource', array('id' => 13, 'pagetitle' => 'Page calls', 'content' => "[[\$header]] [[worker]] [[*image]] [[~12]]", 'template' => 2, 'deleted' => 0, 'parent' => 12));
+for ($i = 20; $i <= 41; $i++) { $usageSite->store('modResource', array('id' => $i, 'pagetitle' => 'Page ' . $i, 'content' => '', 'template' => 2, 'deleted' => 0, 'parent' => 0)); }
+$usageSite->store('modResource', array('id' => 19, 'pagetitle' => 'Trashed', 'content' => '', 'template' => 2, 'deleted' => 1, 'parent' => 0));
+$usageSite->store('modTemplateVarTemplate', array('templateid' => 2, 'tmplvarid' => 14));
+$usageSite->store('modTemplateVarResource', array('contentid' => 13, 'tmplvarid' => 14, 'value' => 'one'));
+$usageSite->store('modTemplateVarResource', array('contentid' => 20, 'tmplvarid' => 14, 'value' => 'two'));
+foreach (array('chunk' => array(12, 6, 1), 'snippet' => array(13, 5, 8), 'tv' => array(14, 7, 14), 'resource' => array(12, 4, 22)) as $kindName => $expected) {
+    $usage = $call($usageRead, 'find_usages', array('kind' => $kindName, 'id' => $expected[0]));
+    check('usages: exact count and ordering for ' . $kindName, $usage['objects'] === 3 && !$usage['truncated']
+        && array_column($usage['usages'], 'name') === array('A calls', 'Z static', 'Page calls')
+        && $usage['usages'][0]['match_count'] === $expected[1] && $usage['usages'][0]['matches'][0]['line'] === $expected[2]);
+    check('usages: tags, API and Fenom classified for ' . $kindName,
+        array_column($usage['usages'][0]['matches'], 'via') === ($kindName === 'resource' ? array('tag', 'tag', 'api', 'fenom')
+        : ($kindName === 'tv' ? array('tag', 'tag', 'api', 'fenom', 'property') : array('tag', 'tag', 'api', 'property', 'fenom'))));
+    check('usages: static content read for ' . $kindName, $usage['usages'][1]['static'] && $usage['usages'][1]['match_count'] === 1);
+    $capped = $call($usageRead, 'find_usages', array('kind' => $kindName, 'id' => $expected[0], 'limit' => 1));
+    check('usages: object limit for ' . $kindName, $capped['objects'] === 1 && $capped['truncated']);
+}
+check('usages: template extras count live pages and cap ids', $call($usageRead, 'find_usages', array('kind' => 'template', 'id' => 2))['extra']
+    === array('resources' => 23, 'resource_ids' => array_merge(array(13), range(20, 38)), 'tvs' => array(14)));
+check('usages: TV extras', $call($usageRead, 'find_usages', array('kind' => 'tv', 'name' => 'image'))['extra'] === array('templates' => array(2), 'resources_with_value' => 2));
+check('usages: category extras', $call($usageRead, 'find_usages', array('kind' => 'category', 'id' => 3))['extra']
+    === array('chunks' => 2, 'snippets' => 1, 'templates' => 1, 'plugins' => 1, 'tvs' => 1, 'subcategories' => 1));
+check('usages: resource children and empty chunk extra', $call($usageRead, 'find_usages', array('kind' => 'resource', 'id' => 12))['extra'] === array('children' => 1)
+    && $call($usageRead, 'find_usages', array('kind' => 'chunk', 'id' => 12))['extra'] instanceof stdClass);
+$e = throws('usages: unsupported target', ApiException::class, function () use ($call, $usageRead) { $call($usageRead, 'find_usages', array('kind' => 'plugin', 'id' => 100)); });
+check('usages: unsupported lists supported targets', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'category') !== false);
 
 // History and diff
 $history = $call($dev, 'history', array('kind' => 'chunk', 'id' => 1));

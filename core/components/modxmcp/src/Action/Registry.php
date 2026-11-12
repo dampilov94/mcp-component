@@ -24,6 +24,7 @@ final class Registry {
         EditCodeAction::class,
         SearchAction::class,
         ReplaceAction::class,
+        FindUsagesAction::class,
         ListFilesAction::class,
         ReadFileAction::class,
         WriteFileAction::class,
