@@ -15,7 +15,14 @@ class FakeObject {
         $this->fields = $fields;
         $this->isNew = $isNew;
     }
-    public function get($key) { return array_key_exists($key, $this->fields) ? $this->fields[$key] : null; }
+    public function get($key) {
+        $value = array_key_exists($key, $this->fields) ? $this->fields[$key] : null;
+        if (in_array($key, array('properties', 'input_properties'), true) && is_string($value)) {
+            $decoded = json_decode($value, true);
+            if (is_array($decoded)) { return $decoded; }
+        }
+        return $value;
+    }
     public function set($key, $value) { $this->fields[$key] = $value; return true; }
     public function toArray($prefix = '', $raw = false) { return $this->fields; }
     public function fromArray($values, $prefix = '', $setPrimaryKeys = false, $raw = false) {
@@ -26,7 +33,19 @@ class FakeObject {
     }
     public function initialize() { return true; }
     public function getBasePath() { return (string) $this->get('basePath'); }
-    public function getSourceFile() { return !empty($this->fields['static']) ? (string) $this->fields['static_file'] : false; }
+    public function getSourceFile() { return !empty($this->fields['static']) ? str_replace('[[++core_path]]', $this->modx->getOption('core_path'), (string) $this->fields['static_file']) : false; }
+    public function joinGroup($id) {
+        if (!$this->modx->getObject('modResourceGroup', $id)) { return false; }
+        $where = array('document' => $this->get('id'), 'document_group' => $id);
+        if ($this->modx->getCount('modResourceGroupResource', $where)) { return false; }
+        $row = $this->modx->newObject('modResourceGroupResource');
+        $row->fromArray($where);
+        return $row->save();
+    }
+    public function leaveGroup($id) {
+        $row = $this->modx->getObject('modResourceGroupResource', array('document' => $this->get('id'), 'document_group' => $id));
+        return $row ? $row->remove() : false;
+    }
     public function setTVValue($tvId, $value) {
         $this->modx->removeCollection('modTemplateVarResource', array('tmplvarid' => $tvId, 'contentid' => $this->fields['id']));
         $this->modx->store('modTemplateVarResource', array(
@@ -41,7 +60,13 @@ class FakeObject {
         // Like modElement::save(): the static file is written only when the column changed.
         if ($code && !empty($this->fields['static']) && !empty($this->fields['static_file'])
             && (!$stored || (string) $stored[$code] !== (string) $this->fields[$code])) {
-            file_put_contents($this->fields['static_file'], (string) $this->fields[$code]);
+            $path = $this->getSourceFile();
+            // Like modScript::setFileContent(): snippet and plugin files get an opening PHP tag.
+            $script = in_array($this->class, array('modSnippet', 'modPlugin'), true);
+            $bytes = ($script ? "<?php\n" : '') . (string) $this->fields[$code];
+            if (!is_file($path) || file_get_contents($path) !== $bytes) {
+                file_put_contents($path, $bytes);
+            }
         }
         $this->modx->store($this->class, $this->fields);
         $this->isNew = false;
@@ -128,9 +153,9 @@ trait FakeResourceProcessors {
         if ($action === 'create') {
             $resource = $this->newObject('modResource');
             // MODX generates an alias from the title when create receives an empty alias.
-            if (empty($data['alias'])) { $data['alias'] = strtolower(str_replace(' ', '-', $data['pagetitle'])); }
+            if (empty($data['alias'])) { $data['alias'] = mb_strtolower(str_replace(' ', '-', $data['pagetitle']), 'UTF-8'); }
             $data += array(
-                'longtitle' => '', 'description' => '', 'introtext' => '', 'menutitle' => '', 'alias' => strtolower(str_replace(' ', '-', $data['pagetitle'])),
+                'longtitle' => '', 'description' => '', 'introtext' => '', 'menutitle' => '', 'alias' => mb_strtolower(str_replace(' ', '-', $data['pagetitle']), 'UTF-8'),
                 'uri_override' => 0, 'parent' => 0, 'context_key' => 'web', 'template' => 0, 'content' => '', 'published' => 0, 'deleted' => 0,
                 'deletedon' => 0, 'hidemenu' => 0, 'isfolder' => 0, 'menuindex' => 0, 'richtext' => 1, 'searchable' => 1, 'cacheable' => 1,
                 'class_key' => 'modDocument', 'content_type' => 1, 'link_attributes' => '', 'pub_date' => 0, 'unpub_date' => 0,
@@ -212,7 +237,7 @@ class modX extends xPDO {
     }
     public function store($class, array $fields) {
         // Values come back from a database as strings.
-        foreach ($fields as $key => $value) { $fields[$key] = $value === null ? null : (is_bool($value) ? ($value ? '1' : '0') : (string) $value); }
+        foreach ($fields as $key => $value) { $fields[$key] = $value === null ? null : (is_array($value) || is_object($value) ? json_encode($value) : (is_bool($value) ? ($value ? '1' : '0') : (string) $value)); }
         if (!isset($fields['id'])) {
             foreach (isset($this->tables[$class]) ? $this->tables[$class] : array() as $key => $row) {
                 if ($row == $fields) { unset($this->tables[$class][$key]); }
@@ -252,7 +277,9 @@ class modX extends xPDO {
                 if (!$any) { continue 2; }
             }
             foreach ($criteria as $key => $value) {
-                if (substr($key, -5) === ':LIKE') {
+                if (substr($key, -3) === ':IN') {
+                    if (!in_array((string) $row[substr($key, 0, -3)], array_map('strval', $value), true)) { continue 2; }
+                } elseif (substr($key, -5) === ':LIKE') {
                     if (!self::likes($row, $key, $value)) { continue 2; }
                 } elseif (!array_key_exists($key, $row) || (string) $row[$key] !== (string) $value) { continue 2; }
             }
@@ -261,7 +288,7 @@ class modX extends xPDO {
         return $out;
     }
     public function getObject($class, $criteria = null, $cacheFlag = true) {
-        if ($class === 'modUser') { return new FakeObject($this, 'modUser', array('id' => 1, 'active' => 1), false); }
+        if ($class === 'modUser' && (is_array($criteria) ? (isset($criteria['id']) ? $criteria['id'] : null) : $criteria) == 1 && !$this->row('modUser', 1)) { return new FakeObject($this, 'modUser', array('id' => 1, 'active' => 1), false); }
         $rows = $this->match($class, is_array($criteria) || $criteria instanceof FakeQuery ? $criteria : array('id' => $criteria));
         return $rows ? new FakeObject($this, $class, $rows[0], false) : null;
     }
@@ -288,6 +315,21 @@ class modX extends xPDO {
         return true;
     }
     public function invokeEvent($name, array $params = array()) { $this->events[] = $name; }
+    public function makeUrl($id, $context = '', $args = '', $scheme = -1) {
+        $urls = $this->getOption('fake_urls', null, array());
+        if (array_key_exists($id, $urls)) { return $urls[$id]; }
+        $resource = $this->getObject('modResource', $id);
+        if (!$resource) { return ''; }
+        $key = $context !== '' ? $context : ($resource->get('context_key') ?: 'web');
+        $setting = $this->getObject('modContextSetting', array('context_key' => $key, 'key' => 'site_url'));
+        $siteUrl = $setting ? $setting->get('value') : $this->getOption('site_url');
+        return rtrim($siteUrl, '/') . '/' . ltrim($resource->get('uri') ?: $resource->get('alias'), '/');
+    }
+    public function hasPermission($permission) {
+        $permissions = $this->getOption('fake_permissions', null, array('settings' => true));
+        return !empty($permissions[$permission]);
+    }
+    public function addPackage($name, $path) { return true; }
     public function getCachePath() { return $this->getOption('core_path') . 'cache/'; }
     public function getCacheManager() { return $this->cache; }
     public function log($level, $message) { error_log($message); }
@@ -333,6 +375,29 @@ class modX extends xPDO {
 
     /** Minimal create / update / remove processors with the validation the real ones have. */
     public function runProcessor($path, array $data = array()) {
+        if ($path === 'security/group/user/create' || $path === 'security/group/user/remove') {
+            $where = array('user_group' => $data['usergroup'], 'member' => $data['user']);
+            $member = $this->getObject('modUserGroupMember', $where);
+            $user = $this->getObject('modUser', $data['user']);
+            $group = $this->getObject('modUserGroup', $data['usergroup']);
+            if ($path === 'security/group/user/create') {
+                if (!$user || !$group || (!empty($data['role']) && !$this->getObject('modUserGroupRole', $data['role']))) { return new FakeResponse('User, group or role not found.'); }
+                if ($member) { return new FakeResponse('User is already in this group.'); }
+                $member = $this->newObject('modUserGroupMember');
+                $rank = $this->getCount('modUserGroupMember', array('member' => $data['user']));
+                $member->fromArray($where + array('role' => isset($data['role']) ? $data['role'] : 0, 'rank' => $rank));
+                $this->invokeEvent('OnUserBeforeAddToGroup');
+                $member->save();
+                $this->invokeEvent('OnUserAddToGroup');
+                if ($rank === 0) { $user->set('primary_group', $data['usergroup']); $user->save(); }
+            } else {
+                if (!$member) { return new FakeResponse('Membership not found.'); }
+                $member->remove();
+                if ($user && $group && $user->get('primary_group') == $group->get('id')) { $user->set('primary_group', 0); $user->save(); }
+            }
+            return new FakeResponse(null, $member->toArray());
+        }
+
         if (in_array($path, array('system/refreshuris', 'system/remove_locks', 'security/access/flush', 'resource/emptyrecyclebin'), true)) {
             $this->maintenanceProcessors[] = $path;
             if ($this->failProcessor === $path) { return new FakeResponse('Maintenance processor refused.'); }
@@ -368,6 +433,9 @@ class modX extends xPDO {
         if ($action === 'create') {
             $defaults = array('description' => '', 'category' => 0, 'locked' => 0);
             if (self::codeColumn($class)) { $defaults += array(self::codeColumn($class) => '', 'static' => 0, 'static_file' => '', 'source' => 0, 'properties' => null); }
+            if (in_array($class, array('modChunk', 'modSnippet', 'modPlugin'), true)) { $defaults['property_preprocess'] = 0; }
+            if ($class === 'modPlugin') { $defaults['disabled'] = 0; }
+            if ($class === 'modTemplate') { $defaults['icon'] = ''; }
             $data += $defaults;
         }
         $object->fromArray($data, '', false, true);
@@ -400,6 +468,7 @@ function fakeSite($dir, array $options = array()) {
     fakeSchema($modx->pdo);
     $modx->options = $options + array(
         'modxmcp.enabled' => true,
+        'modxmcp.auto_static' => true,
         'modxmcp.core_path' => dirname(dirname(__DIR__)) . '/core/components/modxmcp/',
         'core_path' => $dir . '/core/',
         'table_prefix' => 'modx_',

@@ -24,6 +24,8 @@ final class SnippetKind extends Kind {
         );
     }
 
+    public function operations() { return $this->staticOperations(); }
+
     public function relationSpecs() {
         return array('property_sets' => $this->propertySetRelation());
     }

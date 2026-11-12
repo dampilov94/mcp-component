@@ -27,6 +27,8 @@ final class PluginKind extends Kind {
         );
     }
 
+    public function operations() { return $this->staticOperations(); }
+
     public function relationSpecs() {
         return array(
             'events' => array(

@@ -28,6 +28,10 @@ is the file. Snippet and plugin code is PHP **without** an opening `<?php` tag; 
 the tag if you send one, which shifts line numbers, so read the code back before editing it
 by lines.
 
+New chunks, snippets, templates and plugins are static by default, with files under
+`core/elements/`; edit their code through the same object and code tools.
+`modx_invoke {kind, id, op: "make_static"}` converts an existing element.
+
 ## Resources
 
 - `modx_resource_tree {parent?, depth?}` — the page tree; `modx_list {kind: "resource"}`
@@ -113,6 +117,10 @@ Rules that keep a live site safe:
 
 ## Checking the result
 
+- `modx_check_page {id}` or `{url_path: "/…"}` requests a page of this site as a visitor and
+  returns status, time, title and the error-log entries written during the request. MODX
+  drops unknown tags from the output, so a missing snippet or a broken tag is found in
+  those log entries, not in the page.
 - `modx_read_log` returns the tail of the MODX error log and an `end_offset`. Read it
   before a risky change, then call it with `after_offset` afterwards to see only new errors.
 - `modx_maintenance {operation}` (admin): `clear_cache`, `refresh_uris`, `remove_locks`,

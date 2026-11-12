@@ -118,3 +118,36 @@ Update tool lists/counts in both test files.
 `npm run check`, `npm test`. Files: `src/Action/InvokeAction.php`, `src/Action/Registry.php`,
 `src/Kind/Kind.php` (operations format + describe), `src/Kind/UserGroupKind.php`,
 `src/Kind/ResourceGroupKind.php`, tests, `tests/php/FakeModx.php`.
+
+## Report
+
+Based on: task/09-delete-usages at 6884565
+
+- `InvokeAction.php` / `Registry.php`: generic operation dispatch, per-operation schemas,
+  read access/write scope checks, object requirements, previews, Writer commits and current
+  revisions even for no-op writes. `Kind.php` describes the new operation declarations.
+- `UserGroupKind.php`: processor-based add/remove member and read-only member_count.
+- `ResourceGroupKind.php`: joinGroup/leaveGroup plus the processor's event names/parameters;
+  group and resource are both touched and journaled. The add processor expects tree-widget
+  strings, so the permitted model-method alternative was used for both operations.
+- Fake/test changes model memberships, events and processor role default 0; test all paths,
+  errors, undo, scopes, plan-only and object-less/no-op contracts using a test-only kind.
+  The fake's locale-sensitive alias strtolower corrupted Cyrillic UTF-8 on PHP 7.4; changed
+  it to mb_strtolower while adding Cyrillic resource/user fixtures.
+- `npm run check` and `npm test` passed: 826 PHP checks, 24 Node/HTTP tests; 30 tools.
+
+Source detail / limitation: group/user/create defaults role to false (stored as 0), not
+Member. The real add/remove processors also change modUser.primary_group; the fake mirrors
+that side effect. Users are explicitly outside this brief and have no journal kind, so
+undo here restores group membership but not primary_group. No extra user kind or direct
+site writes were introduced. The architect should decide how to cover that side effect.
+
+Only fake MODX was exercised. Verify processor permissions/defaults, primary-group behavior,
+resource-group events and both-object undo on the stand. No deployment or push.
+
+## Review
+
+Accepted and merged with the rest of the stack (09–14). Verified on the stand with
+`scripts/stand/check-operations.cjs`; every earlier stand check was rerun.
+
+No changes.

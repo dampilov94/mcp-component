@@ -2,6 +2,9 @@
 namespace ModxMCP\Kind;
 
 use ModxMCP\Auth\Scope;
+use ModxMCP\Context;
+use ModxMCP\Schema;
+use ModxMCP\Write\Transaction;
 
 final class UserGroupKind extends Kind {
     public function name() { return 'user_group'; }
@@ -34,4 +37,27 @@ final class UserGroupKind extends Kind {
         }
         return $relations;
     }
+    public function operations() {
+        $user = Schema::int(null, array('minimum' => 1));
+        return array(
+            'add_member' => array('description' => 'Add a user to the group.', 'read_only' => false,
+                'input' => Schema::obj(array('user' => $user, 'role' => $user), array('user')), 'handler' => 'opAddMember'),
+            'remove_member' => array('description' => 'Remove a user from the group.', 'read_only' => false,
+                'input' => Schema::obj(array('user' => $user), array('user')), 'handler' => 'opRemoveMember'),
+            'member_count' => array('description' => 'Count members of the group.', 'read_only' => true,
+                'input' => Schema::obj(), 'handler' => 'opMemberCount'),
+        );
+    }
+    public function opAddMember(Context $context, Transaction $tx, $object, array $args): array {
+        Objects::process($context->modx, 'security/group/user/create', array('usergroup' => (int) $object->get('id')) + $args);
+        return array();
+    }
+    public function opRemoveMember(Context $context, Transaction $tx, $object, array $args): array {
+        Objects::process($context->modx, 'security/group/user/remove', array('usergroup' => (int) $object->get('id')) + $args);
+        return array();
+    }
+    public function opMemberCount(Context $context, $object, array $args): array {
+        return array('members' => (int) $context->modx->getCount('modUserGroupMember', array('user_group' => $object->get('id'))));
+    }
+
 }

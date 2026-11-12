@@ -45,12 +45,12 @@ below) or append a `## Review` section to the brief with numbered change request
 | 06 | [modx_read_log](06-read-log.md) | `task/06-read-log` | merged |
 | 07 | [modx_maintenance](07-maintenance.md) | `task/07-maintenance` | merged |
 | 08 | [Access kinds](08-access-kinds.md) | `task/08-access-kinds` | merged |
-| 09 | [Usages in the delete dry run](09-delete-usages.md) | `task/09-delete-usages` | ready for the executor |
-| 10 | [modx_invoke and membership](10-invoke.md) | `task/10-invoke` | ready for the executor |
-| 11 | [TV operations](11-tv-operations.md) | `task/11-tv-operations` | ready for the executor |
-| 12 | [make_static and auto-static](12-make-static.md) | `task/12-make-static` | ready for the executor |
-| 13 | [modx_check_page](13-check-page.md) | `task/13-check-page` | ready for the executor |
-| 14 | [modx_dependency_graph](14-dependency-graph.md) | `task/14-dependency-graph` | ready for the executor |
+| 09 | [Usages in the delete dry run](09-delete-usages.md) | `task/09-delete-usages` | merged |
+| 10 | [modx_invoke and membership](10-invoke.md) | `task/10-invoke` | merged |
+| 11 | [TV operations](11-tv-operations.md) | `task/11-tv-operations` | merged |
+| 12 | [make_static and auto-static](12-make-static.md) | `task/12-make-static` | merged |
+| 13 | [modx_check_page](13-check-page.md) | `task/13-check-page` | merged |
+| 14 | [modx_dependency_graph](14-dependency-graph.md) | `task/14-dependency-graph` | merged |
 
 ## Doing several briefs in a row
 

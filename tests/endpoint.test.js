@@ -112,11 +112,11 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
     assert.equal(result.protocol, 2);
     assert.deepEqual(result.tools.map((item) => item.name), [
       "modx_capabilities", "modx_site_info", "modx_describe", "modx_help", "modx_list", "modx_get",
-      "modx_resource_tree", "modx_view_code", "modx_search", "modx_find_usages", "modx_list_files", "modx_read_file", "modx_history", "modx_history_diff",
-      "modx_request_status",
+      "modx_invoke", "modx_resource_tree", "modx_view_code", "modx_search", "modx_find_usages", "modx_dependency_graph", "modx_list_files", "modx_read_file", "modx_history", "modx_history_diff",
+      "modx_check_page", "modx_request_status",
     ]);
     const full = (await call(admin, "manifest")).body.result;
-    assert.equal(full.tools.length, 29);
+    assert.equal(full.tools.length, 32);
     assert.equal(full.tools[full.tools.findIndex((item) => item.name === "modx_delete") + 1].name, "modx_duplicate");
     assert.equal(full.tools.find((item) => item.name === "modx_duplicate").effect.read_only, false);
     assert.notEqual(full.hash, result.hash);
@@ -227,7 +227,7 @@ test("bridge + kernel end to end", { skip: available ? false : "PHP with pdo_sql
   t.after(async () => { await client.close(); site.stop(); });
 
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 29);
+  assert.equal(tools.length, 32);
   const run = async (name, args = {}) => {
     const result = await client.callTool({ name, arguments: args });
     assert.equal(result.isError, undefined, `${name}: ${result.content[0].text}`);

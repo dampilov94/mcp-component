@@ -2,6 +2,7 @@
 namespace ModxMCP\Journal;
 
 use ModxMCP\Kind\Kind;
+use ModxMCP\Kind\StaticFiles;
 
 /**
  * Canonical state of one object: its raw columns plus the related rows the kind declares.
@@ -127,7 +128,9 @@ final class Snapshot {
 
         if ($state === null) {
             if (!$object) { return; }
+            $staticPath = $kind->effectiveContent($object)[2];
             if (!$object->remove()) { throw new \RuntimeException("Cannot remove {$kind->name()} {$key}."); }
+            StaticFiles::removeManaged($modx, $staticPath);
             if (isset($events['delete'])) {
                 $modx->invokeEvent($events['delete'], array('id' => (int) $key, $events['param'] => &$object, 'object' => &$object));
             }
@@ -144,7 +147,7 @@ final class Snapshot {
         if ($kind->codeField() !== null && isset($fields['static']) && $fields['static'] === '1' && empty($state['static_file_missing'])) {
             $path = $object->getSourceFile();
             if ($path && strpos($path, '://') === false) {
-                self::writeFile($path, (string) $fields[$kind->column($kind->codeField())]);
+                self::writeFile($path, $kind->fileContent((string) $fields[$kind->column($kind->codeField())]));
             }
         }
         if (!$object->save()) { throw new \RuntimeException("Cannot restore {$kind->name()} {$key}."); }

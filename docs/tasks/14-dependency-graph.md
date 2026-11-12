@@ -69,3 +69,56 @@ Update tool lists/counts in both test files (a read tool).
 `src/Action/DependencyGraphAction.php`, `src/Action/Registry.php`,
 `processors/mgr/graph.class.php`, the moved help topic and the component's `docs/index.md`,
 tests, `tests/php/FakeModx.php`.
+
+## Report
+
+Based on: task/13-check-page at 916a398
+
+- `Graph/GraphBuilder.php`: ported the complete graph algorithm and scanners, focus/filter/
+  remap logic, properties/TV wiring, vendor detection, setting use and miniShop2 helper.
+  Four code kinds use KindRegistry/effectiveContent; TV defaults retain their special
+  read-only file path. Legacy empty-file/database fallback is preserved.
+- `DependencyGraphAction.php` / `Registry.php`: read tool with the legacy options/output;
+  integer limits retain the old clamping semantics and invalid direction/format fallbacks.
+  Full manifest is 32 tools; no kind changes.
+- Manager graph processor loads src/autoload and uses the same builder, retaining the
+  settings permission, checkbox string handling and max_nodes=2500. graph.js is unchanged.
+- Moved/reworked graph help and linked it in the index. Replaced all old tool names; dropped
+  the obsolete claim that find_usages is a naive substring search. No unported-tool workflow
+  remained to remove. Builder diagnostic strings (including the legacy delete_element hint)
+  remain byte-compatible rather than being editorially rewritten.
+- Fake adds JSON property reads/storage, IN criteria, permission and addPackage stand-ins.
+  Tests instantiate the actual manager processor against a minimal modProcessor base and
+  compare its results with the tool for identical options.
+
+Expected fixture values were derived by reading the legacy loops: node order is template,
+4 chunks, 2 snippets, 2 TVs, plugin; reference insertion/deduplication gives 16 edges, one
+missing chunk and one unused chunk. Exact nodes (including degrees, category/vendor/settings,
+TV types, plugin events and template resource count), edges, diagnostics and stats are
+asserted. Optional resources add only the linked page plus link/template edges; every input
+option, named/default properties, nested TV JSON, miniShop2 status use and Cyrillic names
+are covered without requiring or running the 1.x model.
+
+Validation: `npm run check` passed (13 JavaScript files, 129 PHP files on PHP 7.4.33 and
+release metadata). `npm test` passed: 956 PHP checks, 24 Node/HTTP tests, no skips.
+Search across core/assets/build/tests, excluding the retained model directory, found no
+`modxmcp/model`, `model/modxmcp.class` or `new modxMCP(` references. Remaining model-internal
+requires are only porting source; no runtime consumer loads them. Model files were not deleted.
+
+Preserved legacy limitations: tagName and @CHUNK name patterns are ASCII-only (quoted PHP
+calls can still resolve Cyrillic names); an empty/missing static file falls back to stale
+DB code; orphan resource LIKE checks use unescaped name prefixes, and optional resource
+nodes can be omitted by the pre-cap without truncated becoming true. These heuristics were
+not fixed, per the faithful-port requirement. Global stats remain global in filtered views.
+
+Only fake MODX/local files were exercised. Verify real xPDO JSON properties, media-source
+static paths, miniShop2 model loading and the unchanged visual manager consumer on the stand.
+No blocking questions, deployment or push.
+
+## Review
+
+Accepted and merged with the rest of the stack (09–14). Verified on the stand with
+`scripts/stand/check-operations.cjs`; every earlier stand check was rerun.
+
+No changes. The builder differs from the 1.x trait only in how it reads static code; on the
+stand it reports 112 nodes and 105 edges for the same site the manager page shows.

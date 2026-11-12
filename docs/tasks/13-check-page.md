@@ -95,3 +95,35 @@ Update tool lists/counts in both test files (a read tool).
 `npm run check`, `npm test`. Files: `src/Verify/PageFetcher.php`, `src/Verify/CurlPageFetcher.php`,
 `src/Action/CheckPageAction.php`, `src/Action/Registry.php`, `src/Context.php`, tests,
 `tests/php/FakeModx.php`.
+
+## Report
+
+Based on: task/12-make-static at c7a7ebf
+
+- PageFetcher/CurlPageFetcher: injectable interface and bounded anonymous HTTP(S) GET,
+  TLS verification, 5-second connect timeout, no redirects/cookies/credentials, limited
+  write callback and transport exceptions. Context exposes the default fetcher and setter.
+- CheckPageAction/Registry: resource/path URLs, context origins and host allowlist,
+  validation, status/timing/body metadata, Unicode title extraction, bounded tag listing,
+  script/style exclusion and before/after log cursor. Full manifest now has 31 tools.
+- Fake makeUrl/context-setting fixtures and tests cover paths/hosts, Cyrillic title/tags/log,
+  HTTP errors, redirects, caps, binary bodies, transport failures, selector validation.
+- `npm run check` and `npm test` passed: 929 PHP checks and 24 Node/HTTP tests.
+
+Decisions where unspecified: fetch timeout is 15 seconds; URL credentials and decoded
+backslashes/traversal/control characters are rejected as well. Text bodies are scanned
+(including text/plain); only text/html yields a title, while non-text bodies are not scanned.
+
+All page requests used a fake fetcher: CurlPageFetcher, its missing-extension path, real DNS,
+TLS, body abort and remote HTTP behavior remain untested as requested. Verify those and real
+context URL generation on the stand. Log output is the newest 20 entries within max_read_bytes,
+not a claim to count all errors during a busy request. No blocking questions or push.
+
+## Review
+
+Accepted and merged with the rest of the stack (09–14). Verified on the stand with
+`scripts/stand/check-operations.cjs`; every earlier stand check was rerun.
+
+No code changes. On the stand MODX removed an unknown chunk tag from the output and logged
+errors for a JavaScript array it took for a snippet call: the log entries are the useful
+signal, `unparsed_tags` is rarely non-empty. The description now says so.

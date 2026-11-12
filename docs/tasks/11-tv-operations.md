@@ -48,3 +48,33 @@ it contains no 1.x-only tool name (assert that none of `modx_suggest_tv_type`,
 `npm run check`, `npm test`. Files: `src/Kind/TvInputTypes.php`, `src/Kind/TvKind.php`, the
 moved help topic and `docs/index.md` of the component, tests, `tests/php/FakeModx.php` if
 the port needs objects the fake lacks. Do not change the 1.x trait.
+
+## Report
+
+Based on: task/10-invoke at 4164488
+
+- `TvInputTypes.php`: faithful static port of the two legacy methods, replacing facade
+  access and exceptions only. `TvKind.php`: object-less read operations and schemas.
+- Moved/reworked the TV help topic into the component and linked it in the index. Examples
+  use current fields/relations and tools. Dropped references to unported MIGX/study_component
+  help and direct API input_properties/media_source assignment, which TvKind does not expose;
+  retained widget guidance with manager setup and component read_file instructions.
+- Tests derive expectations directly from legacy rule order, keyword counts, fallback logic
+  and reqMap: IMAGE PHOTO has image score 2/order 1; ЦВЕТ falls back to text without the
+  colorpicker namespace; no signal gives the zero-score text candidate. Custom event parsing,
+  plugin exceptions, namespace fallbacks, validation and rewritten help are covered.
+- `npm run check` and `npm test` passed: 850 PHP checks and 24 Node/HTTP tests.
+
+No output redesign: create_skeleton intentionally still contains create_element/field_type
+and historical hint strings, as the brief requires identical values. The new help explains
+how to translate that hint into a current API call. Empty custom remains the legacy array;
+neither legacy result was a bare list, so no wrapper was added.
+Only fake MODX was exercised; check real OnTVInputRenderList plugins and installed add-on
+fallbacks on the stand. No blocking questions, deployment or push.
+
+## Review
+
+Accepted and merged with the rest of the stack (09–14). Verified on the stand with
+`scripts/stand/check-operations.cjs`; every earlier stand check was rerun.
+
+No changes.

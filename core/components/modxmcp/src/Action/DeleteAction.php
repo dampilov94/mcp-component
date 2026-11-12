@@ -3,8 +3,10 @@ namespace ModxMCP\Action;
 
 use ModxMCP\ApiException;
 use ModxMCP\Context;
+use ModxMCP\Code\Usages;
 use ModxMCP\Journal\Snapshot;
 use ModxMCP\Kind\Objects;
+use ModxMCP\Kind\StaticFiles;
 use ModxMCP\Schema;
 use ModxMCP\Write\Writer;
 
@@ -14,7 +16,7 @@ final class DeleteAction extends WriteAction {
     public function destructive() { return true; }
 
     public function description() {
-        return 'Delete one object. Run with dry_run first to see what would be removed. The object and its '
+        return 'Delete one object. Run with dry_run first to see what would be removed and where it is still used. The object and its '
             . 'related rows are kept in the journal, so modx_undo restores it with the same id. A resource goes '
             . 'to the MODX trash together with its child resources.';
     }
@@ -48,13 +50,37 @@ final class DeleteAction extends WriteAction {
                     'kind' => $kind->name(), 'id' => $id, 'revision' => Snapshot::revision($before),
                     'would_delete' => array('name' => $label, 'related_rows' => $related ? $related : new \stdClass()),
                     'reversible' => true,
-                ));
+                ) + $this->usagePlan($context, $kind, $id));
             }
             foreach ($kind->alsoAffected($context->modx, $id, array(), 'delete') as $other) { $tx->touch($kind, $other); }
+            $staticPath = $kind->effectiveContent(Objects::resolve($context, $kind, array('id' => $id)))[2];
             Objects::process($context->modx, $kind->processorPath() . $kind->deleteProcessor(), array('id' => $id));
+            StaticFiles::removeManaged($context->modx, $staticPath);
             return array('result' => array(), 'summary' => "delete {$kind->name()} {$id} ({$label})");
         });
         if ($dry) { return $this->plan($context, $result); }
         return $this->written($kind->name(), $id, $info, array('deleted' => true));
     }
+    private function usagePlan(Context $context, $kind, $id) {
+        if (!Usages::supports($kind)) { return array(); }
+        try {
+            $found = Usages::find($context, $kind, Objects::resolve($context, $kind, array('id' => $id)), 10);
+            $items = array();
+            foreach ($found['usages'] as $item) { unset($item['matches']); $items[] = $item; }
+            $out = array('usages' => array('objects' => $found['objects'], 'truncated' => $found['truncated'], 'items' => $items, 'extra' => $found['extra']));
+            $warnings = array();
+            if ($found['objects']) { $warnings[] = "Still used in {$found['objects']} object(s); deleting it will break them."; }
+            $extra = (array) $found['extra'];
+            if ($kind->name() === 'template' && !empty($extra['resources'])) { $warnings[] = "{$extra['resources']} resource(s) use this template."; }
+            if ($kind->name() === 'tv' && !empty($extra['resources_with_value'])) { $warnings[] = "{$extra['resources_with_value']} resource(s) have a value for this TV."; }
+            if ($kind->name() === 'category' && array_sum($extra) > 0) { $warnings[] = 'The category is not empty.'; }
+            if ($kind->name() === 'resource' && !empty($extra['children'])) { $warnings[] = "{$extra['children']} child resource(s) go to the trash with it."; }
+            if ($warnings) { $out['warning'] = implode(' ', $warnings); }
+            return $out;
+        } catch (\Throwable $e) {
+            $context->warnings[] = 'Could not look up usages: ' . $e->getMessage();
+            return array();
+        }
+    }
+
 }

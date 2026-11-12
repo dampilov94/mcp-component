@@ -3,6 +3,9 @@ namespace ModxMCP\Kind;
 
 use ModxMCP\ApiException;
 use ModxMCP\Auth\Scope;
+use ModxMCP\Context;
+use ModxMCP\Schema;
+use ModxMCP\Write\Transaction;
 
 /**
  * One kind of site object. A kind declares how its objects are named, which fields the API
@@ -138,9 +141,18 @@ abstract class Kind {
         return array();
     }
 
-    /** Special operations for modx_invoke: op => [description, read_only]. */
+    /** Special operations: op => description, read_only, needs_object (default true), input schema, handler. */
     public function operations() {
         return array();
+    }
+
+    /** Shared operation declaration for the four static-capable code kinds. */
+    protected function staticOperations() {
+        return array('make_static' => array('description' => 'Move database code into a managed static file.',
+            'read_only' => false, 'needs_object' => true, 'input' => Schema::obj(), 'handler' => 'opMakeStatic'));
+    }
+    public function opMakeStatic(Context $context, Transaction $tx, $object, array $args): array {
+        return StaticFiles::makeStatic($context, $tx, $this, (int) $object->get('id'));
     }
 
     /** Replace a writable relation. $value is the API form (a list). */
@@ -202,6 +214,25 @@ abstract class Kind {
     }
 
     /**
+     * Bytes of a static file for the given code. MODX keeps snippet and plugin files with an
+     * opening PHP tag (modScript::setFileContent) while the code itself has none.
+     */
+    public function fileContent($code) {
+        return $this->lint() === 'php' ? "<?php\n" . $code : (string) $code;
+    }
+
+    /** Code held by the bytes of a static file: the inverse of fileContent(). */
+    public function codeFromFile($bytes) {
+        if ($this->lint() !== 'php') { return (string) $bytes; }
+        if (strncmp($bytes, '<?php', 5) === 0) {
+            $bytes = (string) substr($bytes, 5);
+            if (strncmp($bytes, "\r\n", 2) === 0) { return (string) substr($bytes, 2); }
+            return strncmp($bytes, "\n", 1) === 0 ? (string) substr($bytes, 1) : $bytes;
+        }
+        return (string) $bytes;
+    }
+
+    /**
      * Code as the site runs it: the file for a static element, the database column otherwise.
      * Reads without synchronising the file back into the database.
      * @return array [content, is static, absolute file path or null, file missing]
@@ -220,7 +251,7 @@ abstract class Kind {
         if (!is_file($path)) { return array('', true, $path, true); }
         $content = @file_get_contents($path);
         if ($content === false) { throw new \RuntimeException('Cannot read the static file of ' . $this->name() . ' ' . $object->get('id') . '.'); }
-        return array($content, true, $path, false);
+        return array($this->codeFromFile($content), true, $path, false);
     }
 
     /** API value of one field. */
@@ -305,7 +336,8 @@ abstract class Kind {
         }
         $operations = array();
         foreach ($this->operations() as $op => $definition) {
-            $operations[] = array('op' => $op, 'description' => $definition[0], 'read_only' => !empty($definition[1]));
+            $operations[] = array('op' => $op, 'description' => $definition['description'], 'read_only' => !empty($definition['read_only']),
+                'needs_object' => !isset($definition['needs_object']) || $definition['needs_object'], 'input' => $definition['input']);
         }
         return array(
             'kind'        => $this->name(),

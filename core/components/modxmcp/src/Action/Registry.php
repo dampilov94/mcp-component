@@ -18,6 +18,7 @@ final class Registry {
         UpdateAction::class,
         DeleteAction::class,
         DuplicateAction::class,
+        InvokeAction::class,
         ResourceTreeAction::class,
         BulkResourcesAction::class,
         ViewCodeAction::class,
@@ -25,6 +26,7 @@ final class Registry {
         SearchAction::class,
         ReplaceAction::class,
         FindUsagesAction::class,
+        DependencyGraphAction::class,
         ListFilesAction::class,
         ReadFileAction::class,
         WriteFileAction::class,
@@ -35,6 +37,7 @@ final class Registry {
         UndoAction::class,
         CheckpointAction::class,
         ReadLogAction::class,
+        CheckPageAction::class,
         MaintenanceAction::class,
         RequestStatusAction::class,
     );

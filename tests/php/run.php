@@ -113,14 +113,14 @@ $context = function ($scope, array $denied = array(), array $options = array()) 
 $read = $context('read');
 $tools = Manifest::tools($read);
 $names = array_column($tools, 'name');
-check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_resource_tree', 'modx_view_code', 'modx_search', 'modx_find_usages', 'modx_list_files', 'modx_read_file', 'modx_history', 'modx_history_diff', 'modx_request_status'));
+check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_invoke', 'modx_resource_tree', 'modx_view_code', 'modx_search', 'modx_find_usages', 'modx_dependency_graph', 'modx_list_files', 'modx_read_file', 'modx_history', 'modx_history_diff', 'modx_check_page', 'modx_request_status'));
 check('manifest: protocol action is not a tool', !in_array('modx_manifest', $names, true));
 check('manifest: hash is stable', Manifest::hash($tools) === Manifest::hash(Manifest::tools($context('read'))));
 foreach ($tools as $tool) {
-    check("manifest: {$tool['name']} is read-only", $tool['effect']['read_only'] === true && $tool['effect']['destructive'] === false);
+    check("manifest: {$tool['name']} is read-only", $tool['name'] === 'modx_invoke' || ($tool['effect']['read_only'] === true && $tool['effect']['destructive'] === false));
 }
 $all = array_column(Manifest::tools($context('admin')), null, 'name');
-check('manifest: full tool count', count($all) === 29);
+check('manifest: full tool count', count($all) === 32);
 check('manifest: duplicate is a reversible write after delete', $all['modx_duplicate']['effect']['read_only'] === false
     && $all['modx_duplicate']['effect']['reversible'] === true && $all['modx_duplicate']['effect']['destructive'] === false
     && array_search('modx_duplicate', array_keys($all), true) === array_search('modx_delete', array_keys($all), true) + 1);
@@ -259,6 +259,8 @@ throws('blobs: corruption is detected', RuntimeException::class, function () use
 $siteDir = sys_get_temp_dir() . '/modxmcp-site-' . bin2hex(random_bytes(6));
 mkdir($siteDir . '/core', 0700, true);
 $site = fakeSite($siteDir);
+// This older object/journal block specifically checks database-backed elements.
+$site->options['modxmcp.auto_static'] = false;
 $site->store('modEvent', array('name' => 'OnLoadWebDocument'));
 $site->store('modEvent', array('name' => 'OnWebPageInit'));
 $site->store('modTemplate', array('id' => 1, 'templatename' => 'Base', 'content' => '<html>', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => '', 'icon' => ''));
@@ -542,6 +544,30 @@ check('usages: resource children and empty chunk extra', $call($usageRead, 'find
 $e = throws('usages: unsupported target', ApiException::class, function () use ($call, $usageRead) { $call($usageRead, 'find_usages', array('kind' => 'plugin', 'id' => 100)); });
 check('usages: unsupported lists supported targets', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'category') !== false);
 
+// Delete previews reuse the exact usage lookup without deleting or changing it.
+$usageAdmin = new Context($usageSite, array('scope' => 'admin') + $dev->token, $dev->corePath, function () {});
+$beforeUsages = json_encode($call($usageRead, 'find_usages', array('kind' => 'chunk', 'id' => 12)));
+$deleteUsed = $call($usageAdmin, 'delete', array('kind' => 'chunk', 'id' => 12, 'dry_run' => true));
+check('delete usages: users and compact warning', $deleteUsed['usages']['objects'] === 3 && !isset($deleteUsed['usages']['items'][0]['matches'])
+    && $deleteUsed['warning'] === 'Still used in 3 object(s); deleting it will break them.' && $usageSite->row('modChunk', 12) !== null);
+check('delete usages: standalone lookup unchanged', json_encode($call($usageRead, 'find_usages', array('kind' => 'chunk', 'id' => 12))) === $beforeUsages);
+$usageSite->store('modChunk', array('id' => 200, 'name' => 'Свободный чанк', 'snippet' => ''));
+$unusedDelete = $call($usageAdmin, 'delete', array('kind' => 'chunk', 'id' => 200, 'dry_run' => true));
+check('delete usages: unused object has no warning', $unusedDelete['usages']['objects'] === 0 && !isset($unusedDelete['warning']));
+foreach (array('template' => array(2, '23 resource(s) use this template.'), 'tv' => array(14, '2 resource(s) have a value for this TV.'),
+    'category' => array(3, 'The category is not empty.'), 'resource' => array(12, '1 child resource(s) go to the trash with it.')) as $kindName => $expect) {
+    $dryUsage = $call($usageAdmin, 'delete', array('kind' => $kindName, 'id' => $expect[0], 'dry_run' => true));
+    check('delete usages: structural warning ' . $kindName, strpos($dryUsage['warning'], $expect[1]) !== false);
+}
+$usageSite->store('modUserGroup', array('id' => 5, 'name' => 'Group'));
+foreach (array('plugin' => 100, 'user_group' => 5) as $kindName => $id) {
+    $dryUsage = $call($usageAdmin, 'delete', array('kind' => $kindName, 'id' => $id, 'dry_run' => true));
+    check('delete usages: unsupported kind omitted', !isset($dryUsage['usages']) && !isset($dryUsage['warning']));
+}
+$lookupDenied = new Context($usageSite, array('scope' => 'admin', 'denied_groups' => array('resources')) + $dev->token, $dev->corePath, function () {});
+$lookupFailure = $call($lookupDenied, 'delete', array('kind' => 'chunk', 'id' => 12, 'dry_run' => true));
+check('delete usages: lookup failure preserves dry run', $lookupFailure['dry_run'] && !isset($lookupFailure['usages']) && count($lookupDenied->warnings) === 1);
+
 // Read log is developer-only and reads the configured MODX cache path.
 mkdir($site->getCachePath() . 'logs', 0700, true);
 file_put_contents($site->getCachePath() . 'logs/error.log', "[2026-01-01 10:00:00] (ERROR @ fake) action log\n");
@@ -652,6 +678,8 @@ $site->options['modxmcp.history_max_blob_bytes'] = 5242880;
 check('oversize: saved, flagged, with a warning', $big['reversible'] === false && $big['changeset_id'] !== null && count($small->warnings) === 1);
 $e = throws('oversize: undo is refused', ApiException::class, function () use ($call, $dev, $big) { $call($dev, 'undo', array('changeset_id' => $big['changeset_id'], 'confirm' => true)); });
 check('oversize: refusal is not_reversible', $e && $e->errorCode === 'not_reversible');
+
+$site->options['modxmcp.auto_static'] = true;
 
 // --- Resources ---
 $editor = $actor('content');
@@ -1005,6 +1033,421 @@ $call($accessAdmin, 'update', array('kind' => 'role', 'id' => 1, 'fields' => arr
 $call($accessAdmin, 'delete', array('kind' => 'role', 'id' => 1));
 check('access: role protection follows names, not id, as in MODX', $accessSite->row('modUserGroupRole', 1) === null);
 
+// Invoke: membership operations through the existing access fixture.
+$accessSite->store('modUser', array('id' => 501, 'username' => 'участник', 'primary_group' => 0));
+$opSpecs = array_column($call($accessAdmin, 'describe', array('kind' => 'user_group'))['operations'], null, 'op');
+check('invoke: describe includes schemas and needs_object', $opSpecs['add_member']['needs_object'] && !$opSpecs['add_member']['read_only']
+    && $opSpecs['add_member']['input']['required'] === array('user') && $opSpecs['member_count']['read_only']);
+$opBase = array('kind' => 'user_group', 'id' => $groupId);
+$beforeMemberCount = $call($accessContext('read'), 'invoke', $opBase + array('op' => 'member_count'))['members'];
+$invokeDry = $call($accessAdmin, 'invoke', $opBase + array('op' => 'add_member', 'args' => array('user' => 501), 'dry_run' => true));
+check('invoke: validated dry run does not call handler', $invokeDry['validated'] && $invokeDry['dry_run'] && !$accessSite->getCount('modUserGroupMember', array('member' => 501)));
+check('invoke: plan-only forces dry run', $call($accessContext('admin', array('plan_only' => true)), 'invoke', $opBase + array('op' => 'add_member', 'args' => array('user' => 501)))['planned']);
+$addedMember = $call($accessAdmin, 'invoke', $opBase + array('op' => 'add_member', 'args' => array('user' => 501)));
+check('invoke: member addition is journaled with default role zero', $addedMember['changed'] === array('members') && $addedMember['changeset_id'] !== null
+    && count($accessAdmin->journal()->changes(array($addedMember['changeset_id']))) === 1
+    && $accessSite->getObject('modUserGroupMember', array('member' => 501))->get('role') === '0');
+check('invoke: read member_count works and tool is visible', $call($accessContext('read'), 'invoke', $opBase + array('op' => 'member_count'))['members'] === $beforeMemberCount + 1
+    && in_array('modx_invoke', array_column(Manifest::tools($accessContext('read')), 'name'), true));
+$lastInvoke = $accessAdmin->journal()->lastChangesetId();
+$e = throws('invoke: duplicate member', ApiException::class, function () use ($call, $accessAdmin, $opBase) { $call($accessAdmin, 'invoke', $opBase + array('op' => 'add_member', 'args' => array('user' => 501))); });
+check('invoke: duplicate add passes error without journal', $e && $e->errorCode === 'validation_failed' && $accessAdmin->journal()->lastChangesetId() === $lastInvoke);
+$removedMember = $call($accessAdmin, 'invoke', $opBase + array('op' => 'remove_member', 'args' => array('user' => 501)));
+check('invoke: member removal journaled', $removedMember['changed'] === array('members') && !$accessSite->getCount('modUserGroupMember', array('member' => 501)));
+$e = throws('invoke: removing non-member', ApiException::class, function () use ($call, $accessAdmin, $opBase) { $call($accessAdmin, 'invoke', $opBase + array('op' => 'remove_member', 'args' => array('user' => 501))); });
+check('invoke: remove non-member error and no journal', $e && $e->errorCode === 'validation_failed' && $accessAdmin->journal()->lastChangesetId() === $removedMember['changeset_id']);
+$call($accessAdmin, 'undo', array('changeset_id' => $removedMember['changeset_id'], 'confirm' => true));
+check('invoke: undo member removal', $accessSite->getCount('modUserGroupMember', array('member' => 501)) === 1);
+$call($accessAdmin, 'undo', array('changeset_id' => $addedMember['changeset_id'], 'confirm' => true));
+check('invoke: undo member addition', !$accessSite->getCount('modUserGroupMember', array('member' => 501)));
+$opPage = $call($accessAdmin, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Страница группы')));
+$resourceOp = array('kind' => 'resource_group', 'id' => $resourceGroupId, 'args' => array('resource' => $opPage['id']));
+$addedResource = $call($accessAdmin, 'invoke', $resourceOp + array('op' => 'add_resource'));
+check('invoke: resource and group share one changeset', $addedResource['changed'] === array('resources')
+    && count($accessAdmin->journal()->changes(array($addedResource['changeset_id']))) === 2 && end($accessSite->events) === 'OnResourceAddToResourceGroup');
+$e = throws('invoke: duplicate resource membership', ApiException::class, function () use ($call, $accessAdmin, $resourceOp) { $call($accessAdmin, 'invoke', $resourceOp + array('op' => 'add_resource')); });
+check('invoke: duplicate resource does not journal', $e && $e->errorCode === 'validation_failed' && $accessAdmin->journal()->lastChangesetId() === $addedResource['changeset_id']);
+$removedResource = $call($accessAdmin, 'invoke', $resourceOp + array('op' => 'remove_resource'));
+check('invoke: resource removal fires event and journals both', count($accessAdmin->journal()->changes(array($removedResource['changeset_id']))) === 2 && end($accessSite->events) === 'OnResourceRemoveFromResourceGroup');
+$e = throws('invoke: removing non-member resource', ApiException::class, function () use ($call, $accessAdmin, $resourceOp) { $call($accessAdmin, 'invoke', $resourceOp + array('op' => 'remove_resource')); });
+check('invoke: resource refusal', $e && $e->errorCode === 'validation_failed' && $accessAdmin->journal()->lastChangesetId() === $removedResource['changeset_id']);
+$call($accessAdmin, 'undo', array('changeset_id' => $removedResource['changeset_id'], 'confirm' => true));
+check('invoke: undo restores resource relation', in_array($resourceGroupId, $call($accessAdmin, 'get', array('kind' => 'resource', 'id' => $opPage['id']))['relations']['resource_groups'], true));
+$call($accessAdmin, 'undo', array('changeset_id' => $addedResource['changeset_id'], 'confirm' => true));
+check('invoke: undo removes resource relation', !in_array($resourceGroupId, $call($accessAdmin, 'get', array('kind' => 'resource', 'id' => $opPage['id']))['relations']['resource_groups'], true));
+foreach (array(array(), array('user' => '501'), array('user' => 501, 'extra' => true)) as $invalidOp) {
+    $e = throws('invoke: schema validation', ApiException::class, function () use ($call, $accessAdmin, $opBase, $invalidOp) { $call($accessAdmin, 'invoke', $opBase + array('op' => 'add_member', 'args' => $invalidOp)); });
+    check('invoke: schema error path', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'args.') !== false);
+}
+foreach (array(array('kind' => 'user_group', 'op' => 'unknown', 'id' => $groupId), array('kind' => 'role', 'op' => 'member_count', 'id' => $roleId)) as $unknownOp) {
+    $e = throws('invoke: unknown operation', ApiException::class, function () use ($call, $accessAdmin, $unknownOp) { $call($accessAdmin, 'invoke', $unknownOp); });
+    check('invoke: unknown op points to describe', $e && $e->errorCode === 'not_found' && strpos($e->getMessage(), 'modx_describe') !== false);
+}
+$e = throws('invoke: object required', ApiException::class, function () use ($call, $accessAdmin) { $call($accessAdmin, 'invoke', array('kind' => 'user_group', 'op' => 'member_count')); });
+check('invoke: missing object reference', $e && $e->errorCode === 'validation_failed');
+$e = throws('invoke: write scope', ApiException::class, function () use ($call, $accessContext, $opBase) { $call($accessContext('develop'), 'invoke', $opBase + array('op' => 'add_member', 'args' => array('user' => 501))); });
+check('invoke: write denied to develop', $e && $e->errorCode === 'forbidden_scope');
+$accessSite->options['modxmcp.disabled_groups'] = 'access';
+$e = throws('invoke: disabled group', ApiException::class, function () use ($call, $accessAdmin, $opBase) { $call($accessAdmin, 'invoke', $opBase + array('op' => 'member_count')); });
+check('invoke: group disabled is unavailable', $e && $e->errorCode === 'unavailable');
+$accessSite->options['modxmcp.disabled_groups'] = '';
+
+// Exercise the generic object-less contract before real object-less ops land in task 11.
+$invokeFixtureContext = $accessContext();
+$fixtureKind = new class extends ModxMCP\Kind\Kind {
+    public function name() { return 'invoke_fixture'; }
+    public function label() { return 'Invoke fixture'; }
+    public function modelClass() { return 'modUserGroup'; }
+    public function processorPath() { return 'security/group/'; }
+    public function fields() { return (new ModxMCP\Kind\UserGroupKind())->fields(); }
+    public function operations() {
+        return array('read' => array('description' => 'Fixture read.', 'read_only' => true, 'needs_object' => false, 'input' => Schema::obj(), 'handler' => 'read'),
+            'noop' => array('description' => 'Fixture no-op.', 'read_only' => false, 'input' => Schema::obj(), 'handler' => 'noop'));
+    }
+    public function read(Context $context, $object, array $args): array { return array('object_is_null' => $object === null); }
+    public function noop(Context $context, ModxMCP\Write\Transaction $tx, $object, array $args): array { return array(); }
+};
+$fixtureKinds = $invokeFixtureContext->kinds->all();
+$fixtureKinds['invoke_fixture'] = $fixtureKind;
+$fixtureProperty = new ReflectionProperty(ModxMCP\Kind\KindRegistry::class, 'kinds');
+$fixtureProperty->setAccessible(true);
+$fixtureProperty->setValue($invokeFixtureContext->kinds, $fixtureKinds);
+check('invoke: object-less read receives null', $call($invokeFixtureContext, 'invoke', array('kind' => 'invoke_fixture', 'op' => 'read'))['object_is_null']);
+foreach (array(array('id' => $groupId), array('name' => 'any')) as $badReference) {
+    $e = throws('invoke: object-less reference forbidden', ApiException::class, function () use ($call, $invokeFixtureContext, $badReference) {
+        $call($invokeFixtureContext, 'invoke', array('kind' => 'invoke_fixture', 'op' => 'read') + $badReference);
+    });
+    check('invoke: object-less validation code', $e && $e->errorCode === 'validation_failed');
+}
+$noOpState = ModxMCP\Journal\Snapshot::capture($accessSite, $fixtureKind, $groupId);
+$invokeNoop = $call($invokeFixtureContext, 'invoke', array('kind' => 'invoke_fixture', 'op' => 'noop', 'id' => $groupId));
+check('invoke: no-op returns current revision', $invokeNoop['changeset_id'] === null && $invokeNoop['changed'] === array()
+    && $invokeNoop['revision'] === ModxMCP\Journal\Snapshot::revision($noOpState));
+
+// TV input operations preserve the legacy recommendation data, including Cyrillic matching.
+$tvRuntime = new class extends modX {
+    public $inputEvent = array();
+    public function invokeEvent($name, array $params = array()) {
+        if ($name === 'OnTVInputRenderList') {
+            if ($this->inputEvent instanceof Throwable) { throw $this->inputEvent; }
+            return $this->inputEvent;
+        }
+        return parent::invokeEvent($name, $params);
+    }
+};
+$tvRead = new Context($tvRuntime, array('scope' => 'read') + $dev->token, $dev->corePath, function () {});
+$types = $call($tvRead, 'invoke', array('kind' => 'tv', 'op' => 'list_input_types'));
+check('tv inputs: core and empty custom match legacy values', count($types['core']) === 20 && $types['custom'] === array()
+    && $types['core']['image'] === array('label' => 'Image', 'use' => 'pick/upload an image', 'requires' => array('media_source (id)')));
+$imageSuggestion = $call($tvRead, 'invoke', array('kind' => 'tv', 'op' => 'suggest_type', 'args' => array('description' => 'IMAGE PHOTO')));
+check('tv inputs: ranked image suggestion exact values', $imageSuggestion['description'] === 'IMAGE PHOTO' && $imageSuggestion['recommended'] === 'image'
+    && $imageSuggestion['candidates'] === array(array('type' => 'image', 'why' => 'a single image', 'score' => 2, 'matched' => array('image', 'photo'), 'order' => 1))
+    && $imageSuggestion['create_skeleton'] === array('action' => 'create_element', 'type' => 'tv', 'data' => array('name' => '<tv_name>', 'caption' => '<Caption>',
+        'field_type' => 'image', 'templates' => array('<template id>'), 'media_source' => '<media source id — see modx_list_media_sources>')) && $imageSuggestion['note'] === null);
+$colorSuggestion = $call($tvRead, 'invoke', array('kind' => 'tv', 'op' => 'suggest_type', 'args' => array('description' => 'ЦВЕТ')));
+check('tv inputs: Cyrillic and unavailable color fallback', $colorSuggestion['recommended'] === 'text' && $colorSuggestion['candidates'][0]['matched'] === array('цвет')
+    && $colorSuggestion['note'] === 'No colorpicker input type is installed; suggesting text. Install a colorpicker add-on for a real picker.');
+$unknownSuggestion = $call($tvRead, 'invoke', array('kind' => 'tv', 'op' => 'suggest_type', 'args' => array('description' => 'xyz')));
+check('tv inputs: no-keyword fallback', $unknownSuggestion['candidates'] === array(array('type' => 'text', 'why' => 'no strong signal — short single-line text is the safe default', 'score' => 0, 'matched' => array())));
+$tvRuntime->inputEvent = array("fancy==Выбор\n/path/to/render\nplain", array('other==Другой'));
+$customTypes = $call($tvRead, 'invoke', array('kind' => 'tv', 'op' => 'list_input_types'));
+check('tv inputs: custom parsing skips paths', $customTypes['custom'] === array('fancy' => 'Выбор', 'plain' => 'plain', 'other' => 'Другой'));
+$tvRuntime->store('modNamespace', array('name' => 'migx'));
+$tvRuntime->store('modNamespace', array('name' => 'colorpicker'));
+$tvRuntime->inputEvent = new RuntimeException('Headless plugin failure');
+$customTypes = $call($tvRead, 'invoke', array('kind' => 'tv', 'op' => 'list_input_types'));
+check('tv inputs: plugin failure still allows installed fallbacks', $customTypes['custom'] === array('migx' => 'MIGX', 'migxdb' => 'MIGXdb', 'colorpicker' => 'ColorPicker'));
+check('tv inputs: installed colorpicker recommended', $call($tvRead, 'invoke', array('kind' => 'tv', 'op' => 'suggest_type', 'args' => array('description' => 'ЦВЕТ')))['recommended'] === 'colorpicker');
+foreach (array(array(), array('description' => 7), array('description' => ' '), array('description' => 'text', 'extra' => true)) as $badSuggestion) {
+    $e = throws('tv inputs: argument validation', ApiException::class, function () use ($call, $tvRead, $badSuggestion) { $call($tvRead, 'invoke', array('kind' => 'tv', 'op' => 'suggest_type', 'args' => $badSuggestion)); });
+    check('tv inputs: validation code', $e && $e->errorCode === 'validation_failed');
+}
+$e = throws('tv inputs: object reference forbidden', ApiException::class, function () use ($call, $tvRead) { $call($tvRead, 'invoke', array('kind' => 'tv', 'id' => 1, 'op' => 'list_input_types')); });
+check('tv inputs: object-less validation', $e && $e->errorCode === 'validation_failed');
+$tvHelp = $call($dev, 'help', array('topic' => 'tv_input_types'))['content'];
+check('tv inputs: help is rewritten', strpos($tvHelp, 'modx_invoke') !== false);
+foreach (array('modx_suggest_tv_type', 'modx_list_tv_input_types', 'modx_get_element', 'modx_update_element', 'modx_create_element', 'modx_get_resource_tvs') as $legacyName) {
+    check('tv inputs: no legacy help tool ' . $legacyName, strpos($tvHelp, $legacyName) === false);
+}
+
+// Managed static files on fresh sites, with auto-static enabled by default.
+$staticFixture = function ($suffix) use ($siteDir, $dev) {
+    $dir = $siteDir . '/static-' . $suffix;
+    mkdir($dir . '/core', 0700, true);
+    $modx = fakeSite($dir);
+    $context = new Context($modx, $dev->token, $dev->corePath, function () {});
+    $context->sessionId = 'static-session-0001';
+    return array($modx, $context, $dir);
+};
+list($staticSite, $staticDev, $staticDir) = $staticFixture('convert');
+foreach (array('chunk' => array('chunks', 'tpl'), 'snippet' => array('snippets', 'php'), 'template' => array('templates', 'tpl'), 'plugin' => array('plugins', 'php')) as $kindName => $pathInfo) {
+    $code = in_array($kindName, array('snippet', 'plugin'), true) ? "return 'Привет';" : '<p>Привет</p>';
+    $dbElement = $call($staticDev, 'create', array('kind' => $kindName, 'fields' => array('name' => 'Test Мир ' . $kindName, 'content' => $code, 'static' => false)));
+    $converted = $call($staticDev, 'invoke', array('kind' => $kindName, 'id' => $dbElement['id'], 'op' => 'make_static'));
+    $stored = '[[++core_path]]elements/' . $pathInfo[0] . '/Test-' . $kindName . '-' . $dbElement['id'] . '.' . $pathInfo[1];
+    $absolute = str_replace('[[++core_path]]', $staticSite->getOption('core_path'), $stored);
+    $gotStatic = $call($staticDev, 'get', array('kind' => $kindName, 'id' => $dbElement['id']));
+    check('make_static: conversion ' . $kindName, $converted['status'] === 'converted' && $converted['static_file'] === $stored
+        && file_get_contents($absolute) === (in_array($kindName, array('snippet', 'plugin'), true) ? "<?php\n" : '') . $code
+        && $gotStatic['fields']['static'] && $gotStatic['fields']['source'] === 0 && $gotStatic['fields']['content'] === $code
+        && $converted['revision'] !== $dbElement['revision'] && count($staticDev->journal()->changes(array($converted['changeset_id']))) === 1);
+    $already = $call($staticDev, 'invoke', array('kind' => $kindName, 'id' => $dbElement['id'], 'op' => 'make_static'));
+    check('make_static: already static is no-op', $already['status'] === 'already_static' && $already['changeset_id'] === null && $already['revision'] === $converted['revision']);
+    $call($staticDev, 'undo', array('changeset_id' => $converted['changeset_id'], 'confirm' => true));
+    check('make_static: undo retains file and restores database content', is_file($absolute)
+        && !$call($staticDev, 'get', array('kind' => $kindName, 'id' => $dbElement['id']))['fields']['static']
+        && $call($staticDev, 'get', array('kind' => $kindName, 'id' => $dbElement['id']))['fields']['content'] === $code);
+}
+foreach (array('!!!', 'ЖЖЖ') as $name) {
+    $slugElement = $call($staticDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => $name, 'content' => 'slug', 'static' => false)));
+    $baseFile = $staticSite->getOption('core_path') . 'elements/chunks/chunk-' . $slugElement['id'] . '.tpl';
+    file_put_contents($baseFile, 'occupied');
+    $slugged = $call($staticDev, 'invoke', array('kind' => 'chunk', 'id' => $slugElement['id'], 'op' => 'make_static'));
+    check('make_static: fallback slug and collision suffix', $slugged['static_file'] === '[[++core_path]]elements/chunks/chunk-' . $slugElement['id'] . '-1.tpl'
+        && file_get_contents($baseFile) === 'occupied');
+}
+$failedStatic = $call($staticDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'fail static', 'content' => 'stable', 'static' => false)));
+$staticSite->failProcessor = 'element/chunk/update';
+throws('make_static: processor failure', RuntimeException::class, function () use ($call, $staticDev, $failedStatic) { $call($staticDev, 'invoke', array('kind' => 'chunk', 'id' => $failedStatic['id'], 'op' => 'make_static')); });
+$staticSite->failProcessor = null;
+check('make_static: failure removes created file and restores object', !file_exists($staticSite->getOption('core_path') . 'elements/chunks/fail-static-' . $failedStatic['id'] . '.tpl')
+    && $call($staticDev, 'get', array('kind' => 'chunk', 'id' => $failedStatic['id']))['revision'] === $failedStatic['revision']);
+list($autoSite, $autoDev, $autoDir) = $staticFixture('auto');
+$auto = $call($autoDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'Auto', 'content' => 'auto code')));
+$autoGot = $call($autoDev, 'get', array('kind' => 'chunk', 'id' => $auto['id']));
+$autoPath = str_replace('[[++core_path]]', $autoSite->getOption('core_path'), $autoGot['fields']['static_file']);
+check('auto_static: default create produces a managed file', $autoGot['fields']['static'] && file_get_contents($autoPath) === 'auto code'
+    && in_array('static', $auto['changed'], true) && in_array('static_file', $auto['changed'], true));
+$autoCopy = $call($autoDev, 'duplicate', array('kind' => 'chunk', 'id' => $auto['id']));
+check('auto_static: duplicate remains in database', !$call($autoDev, 'get', array('kind' => 'chunk', 'id' => $autoCopy['id']))['fields']['static']);
+$call($autoDev, 'undo', array('changeset_id' => $auto['changeset_id'], 'confirm' => true));
+check('auto_static: undo create removes file and empty shard but keeps root', $autoSite->row('modChunk', $auto['id']) === null && !file_exists($autoPath)
+    && !is_dir(dirname($autoPath)) && is_dir($autoSite->getOption('core_path') . 'elements'));
+$explicitDb = $call($autoDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'Explicit DB', 'static' => false)));
+check('auto_static: explicit false wins', !$call($autoDev, 'get', array('kind' => 'chunk', 'id' => $explicitDb['id']))['fields']['static']);
+$autoSite->options['modxmcp.auto_static'] = false;
+$optionDb = $call($autoDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'Option DB')));
+check('auto_static: disabled setting keeps database storage', !$call($autoDev, 'get', array('kind' => 'chunk', 'id' => $optionDb['id']))['fields']['static']);
+$autoSite->options['modxmcp.auto_static'] = true;
+foreach (array('tv', 'category') as $kindName) {
+    $notStatic = $call($autoDev, 'create', array('kind' => $kindName, 'fields' => array('name' => 'Not static ' . $kindName)));
+    check('auto_static: non-code kinds unaffected', !isset($call($autoDev, 'get', array('kind' => $kindName, 'id' => $notStatic['id']))['fields']['static']));
+}
+$deleteStatic = $call($autoDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'Delete static', 'content' => 'kept code')));
+$deletePath = $autoSite->getObject('modChunk', $deleteStatic['id'])->getSourceFile();
+$staticDeleted = $call($autoDev, 'delete', array('kind' => 'chunk', 'id' => $deleteStatic['id']));
+check('auto_static: delete cleans managed file', !file_exists($deletePath));
+$call($autoDev, 'undo', array('changeset_id' => $staticDeleted['changeset_id'], 'confirm' => true));
+check('auto_static: undo delete restores static element and file', file_get_contents($deletePath) === 'kept code'
+    && $call($autoDev, 'get', array('kind' => 'chunk', 'id' => $deleteStatic['id']))['revision'] === $deleteStatic['revision']);
+$externalPath = $autoDir . '/external.tpl';
+file_put_contents($externalPath, 'external');
+$externalElement = $call($autoDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'External', 'static' => true, 'static_file' => $externalPath, 'content' => 'external')));
+$externalDeleted = $call($autoDev, 'delete', array('kind' => 'chunk', 'id' => $externalElement['id']));
+check('auto_static: delete leaves external file', file_get_contents($externalPath) === 'external');
+$call($autoDev, 'undo', array('changeset_id' => $externalDeleted['changeset_id'], 'confirm' => true));
+$call($autoDev, 'undo', array('changeset_id' => $externalElement['changeset_id'], 'confirm' => true));
+check('auto_static: undo create leaves external file', file_get_contents($externalPath) === 'external');
+$autoSite->failProcessor = 'element/chunk/update';
+$autoCount = $autoSite->getCount('modChunk');
+throws('auto_static: conversion failure aborts create', RuntimeException::class, function () use ($call, $autoDev) {
+    $call($autoDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'Failure automatic', 'content' => 'x')));
+});
+$autoSite->failProcessor = null;
+check('auto_static: failed create leaves no object or file', $autoSite->getCount('modChunk') === $autoCount
+    && glob($autoSite->getOption('core_path') . 'elements/chunks/Failure-automatic-*.tpl') === array());
+
+// Page checks never use the network: the injected fetcher controls responses and log writes.
+$pageDir = $siteDir . '/page-check';
+mkdir($pageDir . '/core/cache/logs', 0700, true);
+$pageSite = fakeSite($pageDir, array('site_url' => 'https://site.example/base/'));
+$pageSite->store('modContext', array('key' => 'web', 'name' => 'Web'));
+$pageSite->store('modContext', array('key' => 'other', 'name' => 'Other'));
+$pageSite->store('modContextSetting', array('context_key' => 'other', 'key' => 'site_url', 'value' => 'https://Other.Example:8443/sub/'));
+$pageSite->store('modContextSetting', array('context_key' => 'other', 'key' => 'http_host', 'value' => 'alias.example:8080'));
+$pageSite->store('modResource', array('id' => 1, 'pagetitle' => 'Страница', 'context_key' => 'web', 'uri' => 'page.html'));
+$pageRead = new Context($pageSite, array('scope' => 'read') + $dev->token, $dev->corePath, function () {});
+$fetcher = new class implements ModxMCP\Verify\PageFetcher {
+    public $response;
+    public $onFetch;
+    public $calls = array();
+    public function fetch($url, $timeoutSeconds, $maxBytes): array {
+        $this->calls[] = array($url, $timeoutSeconds, $maxBytes);
+        if ($this->onFetch) { call_user_func($this->onFetch); }
+        if ($this->response instanceof RuntimeException) { throw $this->response; }
+        return $this->response;
+    }
+};
+$pageRead->setPageFetcher($fetcher);
+$fetcher->response = array('status' => 200, 'headers' => array('content-type' => 'text/html; charset=UTF-8'),
+    'body' => "<title> Привет &amp; мир </title>\n[[\$missing]]\n<script>[[ignored]]</script>\n<style>[[ignored]]</style>\n[[!Сниппет]]", 'time_ms' => 17, 'truncated' => false);
+$pageLog = $pageSite->getCachePath() . 'logs/error.log';
+file_put_contents($pageLog, "[2026-01-01 10:00:00] (INFO @ old) old error\n");
+$fetcher->onFetch = function () use ($pageLog) { file_put_contents($pageLog, "[2026-01-01 10:01:00] (ERROR in Page::render @ fake) Новая ошибка\n", FILE_APPEND); };
+$checkedPage = $call($pageRead, 'check_page', array('id' => 1));
+check('check_page: id URL, HTML and precise tags', $checkedPage['url'] === 'https://site.example/base/page.html' && $checkedPage['status'] === 200
+    && $checkedPage['title'] === 'Привет & мир' && $checkedPage['time_ms'] === 17 && $checkedPage['bytes'] === strlen($fetcher->response['body'])
+    && $checkedPage['unparsed_count'] === 2 && $checkedPage['unparsed_tags'] === array(array('tag' => '[[$missing]]', 'line' => 2), array('tag' => '[[!Сниппет]]', 'line' => 5)));
+check('check_page: only new log entries', $checkedPage['log']['new_entries'] === 1 && $checkedPage['log']['entries'][0]['message'] === 'Новая ошибка');
+$fetcher->onFetch = null;
+$pathPage = $call($pageRead, 'check_page', array('url_path' => '/target?q=1', 'context' => 'other', 'max_bytes' => 1234));
+check('check_page: context origin discards base path and passes limit', $pathPage['url'] === 'https://Other.Example:8443/target?q=1'
+    && end($fetcher->calls) === array('https://Other.Example:8443/target?q=1', 15, 1234) && $pathPage['log']['new_entries'] === 0);
+foreach (array('//evil.example/x', '/\\evil', 'https://evil.example', '/../secret', '/a/../b', "/bad\npath", '/%2e%2e/secret', '/%5cevil', '/%2fevil') as $badPath) {
+    $e = throws('check_page: unsafe path', ApiException::class, function () use ($call, $pageRead, $badPath) { $call($pageRead, 'check_page', array('url_path' => $badPath)); });
+    check('check_page: path validation', $e && $e->errorCode === 'validation_failed');
+}
+foreach (array('https://evil.example/x', 'ftp://site.example/x', 'https://user:pass@site.example/x', '') as $badUrl) {
+    $pageSite->options['fake_urls'] = array(1 => $badUrl);
+    $e = throws('check_page: final URL guard', ApiException::class, function () use ($call, $pageRead) { $call($pageRead, 'check_page', array('id' => 1)); });
+    check('check_page: URL refused', $e && $e->errorCode === 'validation_failed');
+}
+$pageSite->options['fake_urls'] = array(1 => 'https://alias.example/ok');
+check('check_page: context http_host is allowed', $call($pageRead, 'check_page', array('id' => 1))['url'] === 'https://alias.example/ok');
+unset($pageSite->options['fake_urls']);
+$fetcher->response['body'] = '<title>' . str_repeat('Я', 350) . '</title>' . str_repeat("\n[[tag]]", 25);
+$longPage = $call($pageRead, 'check_page', array('id' => 1));
+check('check_page: long title and tag list caps', mb_strlen($longPage['title'], 'UTF-8') === 300 && $longPage['unparsed_count'] === 25 && count($longPage['unparsed_tags']) === 20);
+foreach (array(404, 500) as $status) {
+    $fetcher->response['status'] = $status;
+    check('check_page: HTTP error is a result', $call($pageRead, 'check_page', array('id' => 1))['status'] === $status);
+}
+$fetcher->response['status'] = 302;
+foreach (array('/local' => true, 'next' => true, 'https://other.example/page' => true, '//evil.example/page' => false, 'https://evil.example/page' => false, 'javascript:alert(1)' => false) as $location => $same) {
+    $fetcher->response['headers']['location'] = $location;
+    $redirect = $call($pageRead, 'check_page', array('id' => 1));
+    check('check_page: redirect reported without following', $redirect['location'] === $location && $redirect['redirect_same_site'] === $same);
+}
+$fetcher->response = array('status' => 200, 'headers' => array('content-type' => 'application/octet-stream'), 'body' => '<title>not HTML</title>[[tag]]', 'time_ms' => 1, 'truncated' => true);
+$binaryPage = $call($pageRead, 'check_page', array('id' => 1));
+check('check_page: binary content not scanned and truncation retained', !isset($binaryPage['title']) && $binaryPage['unparsed_count'] === 0 && $binaryPage['truncated']);
+$fetcher->response = new RuntimeException('TLS transport failure');
+$failedPage = $call($pageRead, 'check_page', array('id' => 1));
+check('check_page: transport failure remains a result', $failedPage['status'] === 0 && $failedPage['error'] === 'TLS transport failure' && $failedPage['log']['new_entries'] === 0);
+foreach (array(array(), array('id' => 1, 'url_path' => '/')) as $badSelector) {
+    $e = throws('check_page: exactly one selector', ApiException::class, function () use ($call, $pageRead, $badSelector) { $call($pageRead, 'check_page', $badSelector); });
+    check('check_page: selector error', $e && $e->errorCode === 'validation_failed');
+}
+$e = throws('check_page: unknown resource', ApiException::class, function () use ($call, $pageRead) { $call($pageRead, 'check_page', array('id' => 999)); });
+check('check_page: not_found', $e && $e->errorCode === 'not_found');
+
+// Graph expectations are hand-derived from legacy insertion order and reference scanners.
+$graphDir = $siteDir . '/graph';
+mkdir($graphDir . '/core', 0700, true);
+$graphSite = fakeSite($graphDir);
+$graphRead = new Context($graphSite, array('scope' => 'read') + $dev->token, $dev->corePath, function () {});
+$graphFile = $graphDir . '/static.tpl';
+file_put_contents($graphFile, '[[$header]]');
+$graphSite->store('modNamespace', array('name' => 'app'));
+$graphSite->store('modCategory', array('id' => 1, 'category' => 'App', 'parent' => 0));
+$graphSite->store('modCategory', array('id' => 2, 'category' => 'Child category', 'parent' => 1));
+$graphSite->store('modTemplate', array('id' => 1, 'templatename' => 'Главный', 'content' => '[[$header]][[!$row]][[!Worker? &tpl=`row`]][[Worker]][[~10]][[$missing]][[*helperTV]]'));
+$graphSite->store('modChunk', array('id' => 1, 'name' => 'header', 'snippet' => '[[+placeholder]]', 'category' => 2));
+$graphSite->store('modChunk', array('id' => 2, 'name' => 'row', 'snippet' => 'row'));
+$graphSite->store('modChunk', array('id' => 3, 'name' => 'unused', 'snippet' => 'unused'));
+$graphSite->store('modChunk', array('id' => 4, 'name' => 'Статический', 'snippet' => '[[$staleMissing]]', 'static' => 1, 'static_file' => $graphFile));
+$graphSite->store('modSnippet', array('id' => 1, 'name' => 'Worker', 'snippet' => '$modx->getChunk("row"); $modx->runSnippet("Helper"); $modx->getChunk("Статический");', 'properties' => array('tpl' => 'header')));
+$graphSite->store('modSnippet', array('id' => 2, 'name' => 'Helper', 'snippet' => 'return "ok";'));
+$graphSite->store('modTemplateVar', array('id' => 1, 'name' => 'gallery', 'type' => 'migx', 'default_text' => '@CHUNK header', 'input_properties' => array('formtabs' => '[{"inputTV":"helperTV"}]', 'columns' => '[{"renderchunktpl":"row"}]')));
+$graphSite->store('modTemplateVar', array('id' => 2, 'name' => 'helperTV', 'type' => 'text', 'default_text' => ''));
+$graphSite->store('modPlugin', array('id' => 1, 'name' => 'Listener', 'plugincode' => '$modx->runSnippet("Worker");', 'disabled' => 0));
+$graphSite->store('modTemplateVarTemplate', array('templateid' => 1, 'tmplvarid' => 1));
+$graphSite->store('modPluginEvent', array('pluginid' => 1, 'event' => 'OnLoadWebDocument'));
+$graphSite->store('modPropertySet', array('id' => 1, 'name' => 'Overrides', 'properties' => array(array('name' => 'tpl', 'value' => 'row'))));
+$graphSite->store('modElementPropertySet', array('element_class' => 'modSnippet', 'element' => 1, 'property_set' => 1));
+$graphSite->store('modSystemSetting', array('key' => 'site.row_tpl', 'value' => 'row'));
+$graphSite->store('modResource', array('id' => 10, 'pagetitle' => 'Страница 1', 'template' => 1, 'deleted' => 0, 'published' => 1, 'content' => ''));
+$graphSite->store('modResource', array('id' => 11, 'pagetitle' => 'Страница 2', 'template' => 1, 'deleted' => 0, 'published' => 0, 'content' => ''));
+$graph = $call($graphRead, 'dependency_graph');
+$expectedNodes = array(
+    array('i' => 0, 'type' => 'template', 'id' => 1, 'name' => 'Главный', 'category' => null, 'static' => false, 'resources' => 2, 'in' => 0, 'out' => 6),
+    array('i' => 1, 'type' => 'chunk', 'id' => 1, 'name' => 'header', 'category' => 'Child category', 'static' => false, 'vendor' => true, 'in' => 4, 'out' => 0),
+    array('i' => 2, 'type' => 'chunk', 'id' => 2, 'name' => 'row', 'category' => null, 'static' => false, 'used_by' => 'system setting site.row_tpl', 'in' => 5, 'out' => 0),
+    array('i' => 3, 'type' => 'chunk', 'id' => 3, 'name' => 'unused', 'category' => null, 'static' => false, 'in' => 0, 'out' => 0),
+    array('i' => 4, 'type' => 'chunk', 'id' => 4, 'name' => 'Статический', 'category' => null, 'static' => true, 'in' => 1, 'out' => 1),
+    array('i' => 5, 'type' => 'snippet', 'id' => 1, 'name' => 'Worker', 'category' => null, 'static' => false, 'in' => 2, 'out' => 5),
+    array('i' => 6, 'type' => 'snippet', 'id' => 2, 'name' => 'Helper', 'category' => null, 'static' => false, 'in' => 1, 'out' => 0),
+    array('i' => 7, 'type' => 'tv', 'id' => 1, 'name' => 'gallery', 'category' => null, 'static' => false, 'tv_type' => 'migx', 'in' => 1, 'out' => 3),
+    array('i' => 8, 'type' => 'tv', 'id' => 2, 'name' => 'helperTV', 'category' => null, 'static' => false, 'tv_type' => 'text', 'in' => 2, 'out' => 0),
+    array('i' => 9, 'type' => 'plugin', 'id' => 1, 'name' => 'Listener', 'category' => null, 'static' => false, 'disabled' => false, 'events' => array('OnLoadWebDocument'), 'in' => 0, 'out' => 1),
+);
+$expectedEdges = array(array(0,1,'tag'), array(0,2,'tag'), array(0,5,'tag'), array(0,2,'property'), array(0,8,'tag'),
+    array(4,1,'tag'), array(5,2,'php'), array(5,4,'php'), array(5,6,'php'), array(5,1,'property'),
+    array(7,8,'migx'), array(7,2,'migx'), array(7,1,'binding'), array(9,5,'php'), array(0,7,'attached'), array(5,2,'property'));
+check('graph: exact legacy nodes including degrees/vendor/settings', $graph['nodes'] === $expectedNodes);
+check('graph: exact deduplicated legacy edges in insertion order', $graph['edges'] === $expectedEdges);
+check('graph: exact missing and unused markers', $graph['missing'] === array(array('from' => 'template:Главный', 'from_id' => 1, 'kind' => 'chunk', 'name' => 'missing'))
+    && $graph['orphans'] === array(array('type' => 'chunk', 'id' => 3, 'name' => 'unused', 'reason' => 'never referenced')));
+check('graph: exact stats and read-only static file', $graph['stats'] === array('nodes' => 10, 'edges' => 16,
+    'by_type' => array('template' => 1, 'chunk' => 4, 'snippet' => 2, 'tv' => 2, 'plugin' => 1), 'missing' => 1, 'orphans' => 1, 'vendor' => 1, 'orphans_verified' => true)
+    && file_get_contents($graphFile) === '[[$header]]' && $graphSite->row('modChunk', 4)['snippet'] === '[[$staleMissing]]');
+$summaryGraph = $call($graphRead, 'dependency_graph', array('format' => 'summary'));
+check('graph: summary keeps global diagnostics without graph', $summaryGraph['stats'] === $graph['stats'] && $summaryGraph['missing'] === $graph['missing'] && !isset($summaryGraph['nodes']));
+$resourceGraph = $call($graphRead, 'dependency_graph', array('include_resources' => true));
+check('graph: only linked resource becomes a node', $resourceGraph['stats']['nodes'] === 11 && $resourceGraph['stats']['edges'] === 18
+    && $resourceGraph['nodes'][10] === array('i' => 10, 'type' => 'resource', 'id' => 10, 'name' => 'Страница 1', 'category' => null, 'static' => false, 'published' => true, 'in' => 1, 'out' => 1)
+    && array_slice($resourceGraph['edges'], -2) === array(array(0,10,'link'), array(10,0,'template')));
+$typeGraph = $call($graphRead, 'dependency_graph', array('types' => array('chunk')));
+check('graph: type filtering remaps endpoints and keeps global stats', array_column($typeGraph['nodes'], 'name') === array('header','row','unused','Статический')
+    && $typeGraph['edges'] === array(array(3,0,'tag')) && $typeGraph['stats'] === $graph['stats']);
+$outGraph = $call($graphRead, 'dependency_graph', array('focus' => 'snippet:Worker', 'direction' => 'out', 'depth' => 1));
+check('graph: outgoing focus', array_column($outGraph['nodes'], 'name') === array('header','row','Статический','Worker','Helper')
+    && $outGraph['focus'] === array('node' => 'snippet:Worker', 'depth' => 1, 'direction' => 'out') && !isset($outGraph['orphans']));
+$inGraph = $call($graphRead, 'dependency_graph', array('focus' => 'Worker', 'direction' => 'in', 'depth' => 1));
+check('graph: incoming focus by bare name', array_column($inGraph['nodes'], 'name') === array('Главный','Worker','Listener'));
+$bothGraph = $call($graphRead, 'dependency_graph', array('focus' => 'Worker', 'direction' => 'both', 'depth' => 5));
+check('graph: bidirectional depth expands reachability', count($bothGraph['nodes']) === 9 && !in_array('unused', array_column($bothGraph['nodes'], 'name'), true));
+$clampedGraph = $call($graphRead, 'dependency_graph', array('focus' => 'Worker', 'direction' => 'invalid', 'depth' => 99));
+check('graph: legacy direction fallback and depth clamp', $clampedGraph === $bothGraph);
+$notFoundGraph = $call($graphRead, 'dependency_graph', array('focus' => 'absent'));
+check('graph: missing focus stays a result', $notFoundGraph['focus'] === null && $notFoundGraph['nodes'] === array() && isset($notFoundGraph['error']));
+$graphSite->store('modResource', array('content' => '[[$unused]]') + $graphSite->row('modResource', 11));
+check('graph: verify_orphans option controls resource cross-check', $call($graphRead, 'dependency_graph')['orphans'] === array()
+    && count($call($graphRead, 'dependency_graph', array('verify_orphans' => false))['orphans']) === 1);
+$graphSite->store('modResource', array('content' => '') + $graphSite->row('modResource', 11));
+mkdir($graphDir . '/shop/model', 0700, true);
+$graphSite->options['minishop2.core_path'] = $graphDir . '/shop/';
+$graphSite->store('msOrderStatus', array('id' => 1, 'name' => 'Новый', 'body_user' => 3, 'body_manager' => 0));
+$shopGraph = $call($graphRead, 'dependency_graph');
+check('graph: miniShop2 helper protects status chunks', $shopGraph['nodes'][3]['used_by'] === 'miniShop2 order status "Новый" (body_user)' && $shopGraph['orphans'] === array());
+unset($graphSite->options['minishop2.core_path']);
+$graphSite->store('modChunk', array('id' => 5, 'name' => 'extra1', 'snippet' => ''));
+$graphSite->store('modChunk', array('id' => 6, 'name' => 'extra2', 'snippet' => ''));
+$cappedGraph = $call($graphRead, 'dependency_graph', array('max_nodes' => 1));
+check('graph: node cap uses legacy minimum 10', $cappedGraph['truncated'] && $cappedGraph['returned']['nodes'] === 10 && $cappedGraph['stats']['nodes'] === 12);
+$graphSite->removeCollection('modChunk', array('id' => 5));
+$graphSite->removeCollection('modChunk', array('id' => 6));
+// Preserve the old empty-file fallback and ASCII-only tag-name heuristic, not silently fix them.
+file_put_contents($graphFile, '');
+check('graph: legacy empty static file falls back to database', count($call($graphRead, 'dependency_graph')['missing']) === 2);
+file_put_contents($graphFile, '[[$header]]');
+$graphSite->store('modChunk', array('id' => 5, 'name' => 'Юникод', 'snippet' => '[[$несуществующий]]'));
+check('graph: legacy Cyrillic tag-name limitation preserved', count($call($graphRead, 'dependency_graph')['missing']) === 1);
+$graphSite->removeCollection('modChunk', array('id' => 5));
+// Instantiate the real manager processor against a minimal processor base and fake MODX.
+if (!class_exists('modProcessor')) {
+    class modProcessor {
+        public $modx; private $properties;
+        public function __construct($modx, array $properties = array()) { $this->modx = $modx; $this->properties = $properties; }
+        public function getProperty($key) { return isset($this->properties[$key]) ? $this->properties[$key] : null; }
+        public function success($message, $object) { return array('success' => true, 'object' => $object); }
+        public function failure($message) { return array('success' => false, 'message' => $message); }
+    }
+}
+require_once $dev->corePath . 'processors/mgr/graph.class.php';
+foreach (array('true' => true, 'false' => false) as $flag => $boolean) {
+    $managerGraph = new ModxmcpGraphProcessor($graphSite, array('include_resources' => $flag));
+    $managerResult = $managerGraph->process();
+    check('graph: manager and API use identical builder results', $managerGraph->checkPermissions() && $managerResult['success']
+        && $managerResult['object'] === $call($graphRead, 'dependency_graph', array('include_resources' => $boolean, 'max_nodes' => 2500)));
+}
+$graphSite->options['fake_permissions'] = array('settings' => false);
+check('graph: manager settings permission unchanged', !(new ModxmcpGraphProcessor($graphSite))->checkPermissions());
+$graphHelp = $call($dev, 'help', array('topic' => 'graph'))['content'];
+foreach (array('modx_project_overview', 'modx_search_code', 'modx_delete_element', 'modx_replace_across') as $oldGraphTool) {
+    check('graph: rewritten help tool names', strpos($graphHelp, $oldGraphTool) === false);
+}
+
 // --- Files ---
 use ModxMCP\Files\FileRoot;
 
@@ -1300,6 +1743,28 @@ check('log: the "LEVEL in Class::method @ file : line" header is parsed', $inEnt
     'in' => 'modRestCurlClient::__construct', 'location' => '/var/www/site/core/model/modx/rest/modrestcurlclient.class.php : 26', 'message' => 'cURL is missing')
     && $inEntries[1] === array('time' => '2026-11-11 20:06:19', 'level' => 'ERROR', 'location' => '/var/www/site/index.php : 5', 'message' => 'plain'));
 unlink($inLog);
+
+// Review additions: a static snippet's file carries the PHP tag, its code does not.
+list($tagSite, $tagDev, $tagDir) = $staticFixture('phptag');
+$tagged = $call($tagDev, 'create', array('kind' => 'snippet', 'fields' => array('name' => 'tagged', 'content' => "return 1;")));
+$tagRow = $tagSite->row('modSnippet', $tagged['id']);
+$tagFile = str_replace('[[++core_path]]', $tagSite->getOption('core_path'), $tagRow['static_file']);
+$tagGot = $call($tagDev, 'get', array('kind' => 'snippet', 'id' => $tagged['id']));
+check('static script: file has the PHP tag, the API shows code without it', file_get_contents($tagFile) === "<?php\nreturn 1;" && $tagGot['fields']['content'] === 'return 1;' && $tagGot['revision'] === $tagged['revision']);
+$tagEdit = $call($tagDev, 'update', array('kind' => 'snippet', 'id' => $tagged['id'], 'fields' => array('content' => "return 2;")));
+check('static script: an update keeps the tag in the file', file_get_contents($tagFile) === "<?php\nreturn 2;" && $call($tagDev, 'view_code', array('kind' => 'snippet', 'id' => $tagged['id']))['numbered'] === "1\treturn 2;");
+$tagRevision = $call($tagDev, 'get', array('kind' => 'snippet', 'id' => $tagged['id']))['revision'];
+$tagDelete = $call($tagDev, 'delete', array('kind' => 'snippet', 'id' => $tagged['id']));
+$call($tagDev, 'undo', array('changeset_id' => $tagDelete['changeset_id'], 'confirm' => true));
+check('static script: delete and undo give the identical state and file', $call($tagDev, 'get', array('kind' => 'snippet', 'id' => $tagged['id']))['revision'] === $tagRevision
+    && file_get_contents($tagFile) === "<?php\nreturn 2;");
+file_put_contents($tagFile, "<?php\r\nreturn 3;");
+check('static script: a file edited by hand with CRLF after the tag', $call($tagDev, 'get', array('kind' => 'snippet', 'id' => $tagged['id']))['fields']['content'] === 'return 3;');
+file_put_contents($tagFile, "return 4;");
+check('static script: a file without a tag is read as it is', $call($tagDev, 'get', array('kind' => 'snippet', 'id' => $tagged['id']))['fields']['content'] === 'return 4;');
+$tagChunk = $call($tagDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'tagchunk', 'content' => '<?php not code')));
+$tagChunkFile = str_replace('[[++core_path]]', $tagSite->getOption('core_path'), $tagSite->row('modChunk', $tagChunk['id'])['static_file']);
+check('static chunk: files are stored exactly as the content', file_get_contents($tagChunkFile) === '<?php not code');
 
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));
