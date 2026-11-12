@@ -157,3 +157,16 @@ Open questions:
 - A create processor that throws after saving (the fake's `failProcessor` on `.../create`) leaves the new object unregistered in the transaction, so rollback cannot remove it. This is existing behaviour for integer kinds too; I did not test or change it.
 - The test kind makes `key` a writable field, so `update` could try to rename a key; the transaction would then track the old key only. Brief 16's real kinds should make the key field read-only on update (or reject it).
 - The built-in help (`core/components/modxmcp/docs/`) does not mention `key` yet; left for brief 16.
+
+## Review
+
+Accepted and merged. Every existing assertion is unchanged and passes; all six earlier
+stand checks pass against this branch, so behaviour for integer kinds is unchanged on a
+real site. The string-key path is exercised on the stand with brief 16.
+
+The deviations in the report are accepted. Open questions:
+
+- A create processor that throws after saving leaves an unregistered object: true, and it
+  predates this task. Recorded for a later fix.
+- Key immutability on update is required by brief 16 for its real kinds.
+- Help text for `key` comes with brief 16, when a real string-key kind exists.
