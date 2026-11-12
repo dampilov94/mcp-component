@@ -285,6 +285,7 @@ class modX extends xPDO {
         return true;
     }
     public function invokeEvent($name, array $params = array()) { $this->events[] = $name; }
+    public function getCachePath() { return $this->getOption('core_path') . 'cache/'; }
     public function getCacheManager() { return $this->cache; }
     public function log($level, $message) { error_log($message); }
     public function getVersionData() { return array('full_version' => '2.8.8-pl'); }

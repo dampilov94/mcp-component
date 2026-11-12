@@ -120,7 +120,7 @@ foreach ($tools as $tool) {
     check("manifest: {$tool['name']} is read-only", $tool['effect']['read_only'] === true && $tool['effect']['destructive'] === false);
 }
 $all = array_column(Manifest::tools($context('admin')), null, 'name');
-check('manifest: full tool count', count($all) === 27);
+check('manifest: full tool count', count($all) === 28);
 check('manifest: duplicate is a reversible write after delete', $all['modx_duplicate']['effect']['read_only'] === false
     && $all['modx_duplicate']['effect']['reversible'] === true && $all['modx_duplicate']['effect']['destructive'] === false
     && array_search('modx_duplicate', array_keys($all), true) === array_search('modx_delete', array_keys($all), true) + 1);
@@ -188,6 +188,47 @@ check('lint: valid snippet code', PhpLint::check("\$a = 1;\nreturn \$a;") === nu
 check('lint: opening tag accepted', PhpLint::check("<?php\nreturn 1;") === null);
 $lint = PhpLint::check("\$a = 1;\nreturn \$a +;\n");
 check('lint: error line refers to the stored source', $lint && $lint['line'] === 2 && strpos($lint['message'], 'syntax error') === 0);
+
+// Pure bounded log reader: multiline entries, cursors and byte/character boundaries.
+$logPath = sys_get_temp_dir() . '/modxmcp-log-' . bin2hex(random_bytes(6));
+$logOne = "[2026-01-01 10:00:00] (ERROR @ /core/test.php : 7) first\ntrace one\ntrace two\n";
+$logTwo = "[2026-01-01 10:01:00] (INFO @ /core/next.php) second\n";
+$logThree = "[2026-01-01 10:02:00] odd header\ncontinued\n";
+file_put_contents($logPath, "startup\n" . $logOne . $logTwo . $logThree);
+$log = ModxMCP\Verify\LogReader::tail($logPath);
+check('log: multiline entries, prologue and fallback headers', $log['returned'] === 4 && !$log['truncated'] && !$log['reset']
+    && $log['entries'][0] === array('message' => 'startup')
+    && $log['entries'][1] === array('time' => '2026-01-01 10:00:00', 'level' => 'ERROR', 'location' => '/core/test.php : 7', 'message' => "first\ntrace one\ntrace two")
+    && $log['entries'][3] === array('time' => '2026-01-01 10:02:00', 'message' => "odd header\ncontinued"));
+$limitedLog = ModxMCP\Verify\LogReader::tail($logPath, 1);
+check('log: limit keeps newest matching entry', $limitedLog['truncated'] && $limitedLog['entries'] === array($log['entries'][3]));
+$filteredLog = ModxMCP\Verify\LogReader::tail($logPath, 1, 262144, 'TRACE TWO');
+check('log: filter covers whole entry before limit', !$filteredLog['truncated'] && $filteredLog['entries'] === array($log['entries'][1]));
+check('log: cursor at end is empty', ModxMCP\Verify\LogReader::tail($logPath, 50, 262144, '', $log['end_offset'])['returned'] === 0);
+file_put_contents($logPath, $logTwo, FILE_APPEND);
+$newLog = ModxMCP\Verify\LogReader::tail($logPath, 50, 262144, '', $log['end_offset']);
+check('log: appended entries and new end cursor', $newLog['entries'] === array($log['entries'][2]) && $newLog['end_offset'] === $log['size'] + strlen($logTwo));
+$midLog = ModxMCP\Verify\LogReader::tail($logPath, 50, 262144, '', 40);
+check('log: cursor inside an entry drops its tail', $midLog['returned'] === 3 && $midLog['entries'][0]['message'] === 'second');
+file_put_contents($logPath, $logTwo);
+$resetLog = ModxMCP\Verify\LogReader::tail($logPath, 50, 262144, '', $newLog['end_offset']);
+check('log: rotation resets cursor', $resetLog['reset'] && $resetLog['returned'] === 1 && $resetLog['end_offset'] === strlen($logTwo));
+file_put_contents($logPath, $logOne . str_repeat('old continuation x', 1000) . "\n" . $logTwo . $logThree);
+$boundedLog = ModxMCP\Verify\LogReader::tail($logPath, 50, 12000);
+check('log: reverse byte window drops partial entry', $boundedLog['truncated'] && $boundedLog['returned'] === 2
+    && $boundedLog['entries'][0]['message'] === 'second' && $boundedLog['entries'][1]['message'] === "odd header\ncontinued");
+$boundaryLog = ModxMCP\Verify\LogReader::tail($logPath, 50, strlen($logTwo . $logThree) + 1);
+check('log: byte window on a line boundary keeps complete entry', $boundaryLog['returned'] === 2);
+file_put_contents($logPath, str_replace("\n", "\r\n", $logOne . $logTwo));
+check('log: CRLF normalized', ModxMCP\Verify\LogReader::tail($logPath)['entries'][0]['message'] === "first\ntrace one\ntrace two");
+file_put_contents($logPath, "[2026-01-01 10:00:00] (ERROR @ place) bad\xff" . str_repeat('Ж', 2100) . 'needle');
+$utfLog = ModxMCP\Verify\LogReader::tail($logPath, 50, 262144, 'needle');
+check('log: invalid UTF-8 replaced and long message clipped after filtering', $utfLog['returned'] === 1
+    && mb_strlen($utfLog['entries'][0]['message'], 'UTF-8') === 2001 && strpos($utfLog['entries'][0]['message'], "\xef\xbf\xbd") !== false
+    && preg_match('//u', $utfLog['entries'][0]['message']) === 1);
+unlink($logPath);
+$emptyLog = ModxMCP\Verify\LogReader::tail($logPath);
+check('log: missing file is empty', $emptyLog === array('size' => 0, 'end_offset' => 0, 'entries' => array(), 'returned' => 0, 'truncated' => false, 'reset' => false));
 
 $blobDir = sys_get_temp_dir() . '/modxmcp-blob-' . bin2hex(random_bytes(6));
 $blobs = new BlobStore($blobDir, 2048);
@@ -500,6 +541,16 @@ check('usages: resource children and empty chunk extra', $call($usageRead, 'find
     && $call($usageRead, 'find_usages', array('kind' => 'chunk', 'id' => 12))['extra'] instanceof stdClass);
 $e = throws('usages: unsupported target', ApiException::class, function () use ($call, $usageRead) { $call($usageRead, 'find_usages', array('kind' => 'plugin', 'id' => 100)); });
 check('usages: unsupported lists supported targets', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'category') !== false);
+
+// Read log is developer-only and reads the configured MODX cache path.
+mkdir($site->getCachePath() . 'logs', 0700, true);
+file_put_contents($site->getCachePath() . 'logs/error.log', "[2026-01-01 10:00:00] (ERROR @ fake) action log\n");
+check('read_log: develop token can read', $call($dev, 'read_log')['entries'][0]['message'] === 'action log');
+foreach (array('read', 'content') as $scope) {
+    $e = throws('read_log: lesser scope refused', ApiException::class, function () use ($call, $actor, $scope) { $call($actor($scope), 'read_log'); });
+    check('read_log: forbidden and absent from manifest', $e && $e->errorCode === 'forbidden_scope'
+        && !in_array('modx_read_log', array_column(Manifest::tools($actor($scope)), 'name'), true));
+}
 
 // History and diff
 $history = $call($dev, 'history', array('kind' => 'chunk', 'id' => 1));

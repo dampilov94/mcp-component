@@ -66,3 +66,26 @@ Update tool lists/counts in both test files.
 `npm run check`, `npm test`. Files: `src/Verify/LogReader.php`, `src/Action/ReadLogAction.php`,
 `src/Action/Registry.php`, tests, `tests/php/FakeModx.php` (`getCachePath` only).
 Do not delete or change the 1.x `model/logreader.class.php`.
+
+## Report
+
+Based on: task/05-find-usages at 9f63ceb
+
+- `Verify/LogReader.php`: bounded reverse chunk reads, multiline MODX entry parsing,
+  whole-entry filtering, newest-last limits, byte cursors/reset, UTF-8 substitution and
+  2000-character message clipping. The 1.x reader remains untouched.
+- `ReadLogAction.php` / `Registry.php`: developer-only verify tool using getCachePath and
+  max_read_bytes. Both test files now expect 28 full-manifest tools; read lists unchanged.
+- `FakeModx.php`: added only getCachePath. `run.php`: pure temporary-file cases for every
+  requested behavior plus exact window boundaries, cursor inside an entry and action scopes.
+- `npm run check` and `npm test` passed: 463 PHP checks and 24 Node/HTTP tests.
+
+Interpretation: an unheaded prefix is returned only at the actual file start. A prefix of
+an interior window belongs to an older entry and is dropped, matching the required partial
+entry test. One byte of the read budget is reserved to detect the first line boundary;
+reads including that byte stay within max_read_bytes. No other deviations.
+
+Reader tests use real local files; the action was verified only with fake MODX. Check the
+configured real cache path and production log formats on the stand. Rotation with a file
+that regrows beyond the old offset is inherently undetectable with a size-only cursor.
+No blocking questions, site operations or push.
