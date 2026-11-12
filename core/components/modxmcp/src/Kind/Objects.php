@@ -28,8 +28,24 @@ final class Objects {
         return $kind;
     }
 
-    /** Find the object named by args (id or name) or fail with not_found. */
+    /**
+     * Find the object named by args or fail with not_found. Integer kinds take id or name,
+     * string-key kinds take key (or name as an alias).
+     */
     public static function resolve(Context $context, Kind $kind, array $args) {
+        if ($kind->keyType() === 'string') {
+            if (isset($args['id'])) {
+                throw new ApiException('validation_failed', "Kind '{$kind->name()}' is addressed by key, not id: use the key argument.");
+            }
+            $raw = isset($args['key']) ? $args['key'] : (isset($args['name']) ? $args['name'] : '');
+            if ($raw === '') { throw new ApiException('validation_failed', 'Provide key.'); }
+            $object = $kind->find($context->modx, isset($args['key']) ? array('key' => $raw) : array('name' => $raw));
+            if (!$object) { throw new ApiException('not_found', "No {$kind->name()} with key '{$raw}'."); }
+            return $object;
+        }
+        if (isset($args['key'])) {
+            throw new ApiException('validation_failed', "Kind '{$kind->name()}' is addressed by id (or name), not key: use the id argument.");
+        }
         if (!isset($args['id']) && (!isset($args['name']) || $args['name'] === '')) {
             throw new ApiException('validation_failed', 'Provide id or name.');
         }
@@ -39,6 +55,18 @@ final class Objects {
             throw new ApiException('not_found', "No {$kind->name()} with {$ref}.");
         }
         return $object;
+    }
+
+    /** Find the object with a known key (as returned by keyOf) or fail with not_found. */
+    public static function resolveKey(Context $context, Kind $kind, $key) {
+        $object = $kind->findByKey($context->modx, $kind->normalizeKey($key));
+        if (!$object) { throw new ApiException('not_found', "No {$kind->name()} with " . self::keyText($kind, $key) . '.'); }
+        return $object;
+    }
+
+    /** "id 5" or "key 'x'": how messages name an object of the kind. */
+    public static function keyText(Kind $kind, $key) {
+        return $kind->keyType() === 'string' ? "key '{$key}'" : 'id ' . $key;
     }
 
     /** Check and normalise field values from the API into column => value for a processor. */
@@ -82,18 +110,18 @@ final class Objects {
     }
 
     /** Fail with revision_conflict when the caller's revision is not the current one. */
-    public static function assertRevision(Context $context, Kind $kind, $id, $state, array $args) {
+    public static function assertRevision(Context $context, Kind $kind, $key, $state, array $args) {
         if (!isset($args['expected_revision'])) { return; }
         $current = Snapshot::revision($state);
         if (hash_equals((string) $current, $args['expected_revision'])) { return; }
         $details = array('current_revision' => $current);
-        $last = $context->journal()->lastChange($kind->name(), $id);
+        $last = $context->journal()->lastChange($kind->name(), $key);
         if ($last) {
             $details['last_change'] = array(
                 'changeset_id' => $last['changeset_id'], 'at' => $last['created_at'], 'source' => $last['source'], 'tool' => $last['tool'],
             );
         }
-        throw new ApiException('revision_conflict', "{$kind->name()} {$id} has changed since it was read. Read it again and retry.", $details);
+        throw new ApiException('revision_conflict', "{$kind->name()} {$key} has changed since it was read. Read it again and retry.", $details);
     }
 
     /** Run a core processor; a processor error becomes validation_failed with its messages. */
@@ -112,7 +140,7 @@ final class Objects {
     /**
      * Create or update one object through the core processors, then apply relation changes.
      * The object must already be touched in the transaction (update) or is registered after
-     * creation. Returns the object id.
+     * creation. Returns the object key.
      */
     public static function save(Context $context, Transaction $tx, Kind $kind, $id, array $columns, array $relations) {
         $modx = $context->modx;
@@ -122,13 +150,12 @@ final class Objects {
         }
         if ($id === null) {
             $created = self::process($modx, $kind->processorPath() . 'create', $columns + $kind->processorExtras('create'));
-            if (empty($created['id'])) { throw new \RuntimeException('The create processor did not return an id.'); }
-            $id = (int) $created['id'];
+            $id = $kind->createdKey($created, $columns);
             $tx->created($kind, $id);
         } elseif ($columns) {
-            $object = $kind->find($modx, array('id' => $id));
+            $object = $kind->findByKey($modx, $id);
             // The update processors expect the complete record; omitted fields would be reset.
-            $data = array('id' => $id);
+            $data = $kind->processorKey($id);
             foreach ($kind->fields() as $name => $definition) {
                 if (empty($definition['derived'])) { $data[$kind->column($name)] = $kind->processorValue($object, $name); }
             }
@@ -139,7 +166,7 @@ final class Objects {
         if ($field !== null && array_key_exists($kind->column($field), $columns)) {
             // MODX writes a static file only when the database column changed. If the column
             // was already equal but the file was not, write the file ourselves.
-            $object = $kind->find($modx, array('id' => $id));
+            $object = $kind->findByKey($modx, $id);
             $content = $kind->effectiveContent($object);
             if ($content[1] && $content[2] !== null && $content[0] !== $columns[$kind->column($field)]) {
                 Snapshot::writeFile($content[2], $kind->fileContent($columns[$kind->column($field)]));
@@ -148,12 +175,12 @@ final class Objects {
                     . '(for PHP it removes an opening <?php tag). Read the code again before editing it by line numbers.';
             }
         }
-        $saved = $kind->find($modx, array('id' => $id));
+        $saved = $kind->findByKey($modx, $id);
         if ($saved) {
             foreach ($kind->writeWarnings($saved) as $warning) { $context->warnings[] = $warning; }
         }
         if ($relations) {
-            $object = $kind->find($modx, array('id' => $id));
+            $object = $kind->findByKey($modx, $id);
             foreach ($relations as $name => $value) { $kind->writeRelation($modx, $object, $name, $value); }
             $cache = $modx->getCacheManager();
             if ($cache) { $cache->refresh(); }

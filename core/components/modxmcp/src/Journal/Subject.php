@@ -9,6 +9,9 @@ interface Subject {
     /** Key within the kind: an object id, or "s<source>:<path>" for a file. */
     public function key();
 
+    /** The key in its API type: an int for integer kinds, a string otherwise. */
+    public function publicKey();
+
     /** Current state, or null when the thing does not exist. States must JSON-encode. */
     public function capture();
 

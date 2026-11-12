@@ -1766,6 +1766,152 @@ $tagChunk = $call($tagDev, 'create', array('kind' => 'chunk', 'fields' => array(
 $tagChunkFile = str_replace('[[++core_path]]', $tagSite->getOption('core_path'), $tagSite->row('modChunk', $tagChunk['id'])['static_file']);
 check('static chunk: files are stored exactly as the content', file_get_contents($tagChunkFile) === '<?php not code');
 
+// --- Objects identified by a string key (test-only kind, see TestSettingKind.php) ---
+require_once __DIR__ . '/TestSettingKind.php';
+$keyDir = $siteDir . '/keys';
+mkdir($keyDir . '/core', 0700, true);
+$keySite = fakeSite($keyDir);
+$keyActor = function ($session = 'session-keyaaaaaaaa') use ($keySite, $dev) {
+    $c = new Context($keySite, $dev->token, $dev->corePath, function () {});
+    $c->sessionId = $session;
+    $c->kinds->register(new TestSettingKind());
+    return $c;
+};
+$keyDev = $keyActor();
+$settingState = function ($key) use ($keySite) { $row = $keySite->row('modSystemSetting', $key); return $row ? $row['value'] : null; };
+
+$setCreated = $call($keyDev, 'create', array('kind' => 'test_setting', 'fields' => array('key' => 'site_tagline', 'value' => 'Hello', 'area' => 'site')));
+check('keys: create carries key, not id', $setCreated['key'] === 'site_tagline' && !array_key_exists('id', $setCreated)
+    && preg_match('/^[a-f0-9]{64}$/', $setCreated['revision']) && $setCreated['changeset_id'] !== null && $setCreated['changed'] === array('key', 'value', 'area'));
+foreach (array('alpha' => 'one', '404' => 'numeric key', 'zeta' => 'last', 'Привет' => 'cyrillic') as $settingKey => $settingValue) {
+    $call($keyDev, 'create', array('kind' => 'test_setting', 'fields' => array('key' => (string) $settingKey, 'value' => $settingValue)));
+}
+$keyChunk = $call($keyDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'plain chunk', 'content' => 'x')));
+check('keys: an integer kind still carries id, not key', $keyChunk['id'] === 1 && !array_key_exists('key', $keyChunk));
+
+$setGot = $call($keyDev, 'get', array('kind' => 'test_setting', 'key' => 'site_tagline'));
+check('keys: get by key', $setGot['key'] === 'site_tagline' && !array_key_exists('id', $setGot) && $setGot['fields']['value'] === 'Hello'
+    && $setGot['revision'] === $setCreated['revision']);
+check('keys: name is an alias of key', $call($keyDev, 'get', array('kind' => 'test_setting', 'name' => 'site_tagline'))['revision'] === $setCreated['revision']);
+$e = throws('keys: unknown key', ApiException::class, function () use ($call, $keyDev) { $call($keyDev, 'get', array('kind' => 'test_setting', 'key' => 'missing')); });
+check('keys: unknown key is not_found', $e && $e->errorCode === 'not_found' && strpos($e->getMessage(), "key 'missing'") !== false);
+$e = throws('keys: id for a string-key kind', ApiException::class, function () use ($call, $keyDev) { $call($keyDev, 'get', array('kind' => 'test_setting', 'id' => 1)); });
+check('keys: id for a string-key kind names the key argument', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'addressed by key') !== false);
+$e = throws('keys: key for an integer kind', ApiException::class, function () use ($call, $keyDev) { $call($keyDev, 'get', array('kind' => 'chunk', 'key' => '1')); });
+check('keys: key for an integer kind names the id argument', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'addressed by id') !== false);
+foreach (array('update' => array('fields' => array('value' => 'x')), 'delete' => array(), 'duplicate' => array(), 'view_code' => array(), 'find_usages' => array()) as $actionName => $extraArgs) {
+    $e = throws("keys: {$actionName} refuses id for a string-key kind", ApiException::class, function () use ($call, $keyDev, $actionName, $extraArgs) {
+        $call($keyDev, $actionName, array('kind' => 'test_setting', 'id' => 1) + $extraArgs);
+    });
+    check("keys: {$actionName} refusal is validation_failed", $e && $e->errorCode === 'validation_failed');
+}
+foreach (array('get', 'update', 'delete', 'duplicate', 'invoke', 'view_code', 'edit_code', 'find_usages') as $actionName) {
+    $keyProperty = $keyDev->actions->get($actionName)->inputSchema()['properties']['key'];
+    check("keys: {$actionName} declares the key argument", $keyProperty['type'] === 'string' && $keyProperty['maxLength'] === 255
+        && strpos($keyProperty['description'], 'kinds without a numeric id') !== false);
+}
+
+$list = $call($keyDev, 'list', array('kind' => 'test_setting'));
+check('keys: list is sorted by key', array_column($list['items'], 'key') === array('404', 'alpha', 'site_tagline', 'zeta', 'Привет') && $list['total'] === 5 && $list['next_start'] === null);
+$page = $call($keyDev, 'list', array('kind' => 'test_setting', 'limit' => 2, 'start' => 2));
+check('keys: list pages', array_column($page['items'], 'key') === array('site_tagline', 'zeta') && $page['total'] === 5 && $page['next_start'] === 4);
+check('keys: list query and where', array_column($call($keyDev, 'list', array('kind' => 'test_setting', 'query' => 'a', 'where' => array('area' => 'site')))['items'], 'key') === array('site_tagline'));
+
+$numeric = $call($keyDev, 'get', array('kind' => 'test_setting', 'key' => '404'));
+check('keys: a numeric-looking key stays a string', $numeric['key'] === '404' && $numeric['fields']['key'] === '404' && $numeric['fields']['value'] === 'numeric key');
+
+// update, dry runs, revision checks
+$dryUpdate = $call($keyDev, 'update', array('kind' => 'test_setting', 'key' => 'site_tagline', 'fields' => array('value' => 'Changed'), 'dry_run' => true));
+check('keys: update dry run', $dryUpdate['dry_run'] === true && $dryUpdate['key'] === 'site_tagline' && $dryUpdate['would_change'] === array('value')
+    && $settingState('site_tagline') === 'Hello');
+$updated = $call($keyDev, 'update', array('kind' => 'test_setting', 'key' => 'site_tagline', 'fields' => array('value' => 'Changed'), 'expected_revision' => $setCreated['revision']));
+check('keys: update with expected_revision', $updated['key'] === 'site_tagline' && !array_key_exists('id', $updated) && $updated['changed'] === array('value')
+    && $settingState('site_tagline') === 'Changed' && $updated['revision'] !== $setCreated['revision']
+    && $keySite->row('modSystemSetting', 'site_tagline')['area'] === 'site');
+$e = throws('keys: stale expected_revision', ApiException::class, function () use ($call, $keyDev, $setCreated) {
+    $call($keyDev, 'update', array('kind' => 'test_setting', 'key' => 'site_tagline', 'fields' => array('value' => 'Lost'), 'expected_revision' => $setCreated['revision']));
+});
+check('keys: stale revision is a conflict that names the key', $e && $e->errorCode === 'revision_conflict' && strpos($e->getMessage(), 'test_setting site_tagline') === 0
+    && $settingState('site_tagline') === 'Changed');
+$e = throws('keys: duplicate key on create', ApiException::class, function () use ($call, $keyDev) { $call($keyDev, 'create', array('kind' => 'test_setting', 'fields' => array('key' => 'alpha'))); });
+check('keys: duplicate key is refused by the processor', $e && $e->errorCode === 'validation_failed');
+
+// duplicate (the key is the name)
+$copy = $call($keyDev, 'duplicate', array('kind' => 'test_setting', 'key' => 'alpha', 'new_name' => 'alpha_copy'));
+check('keys: duplicate', $copy['key'] === 'alpha_copy' && $copy['source_key'] === 'alpha' && !array_key_exists('source_id', $copy) && $settingState('alpha_copy') === 'one');
+
+// delete
+$dryDelete = $call($keyDev, 'delete', array('kind' => 'test_setting', 'key' => 'alpha_copy', 'dry_run' => true));
+check('keys: delete dry run', $dryDelete['dry_run'] === true && $dryDelete['key'] === 'alpha_copy' && $dryDelete['would_delete']['name'] === 'alpha_copy' && $settingState('alpha_copy') === 'one');
+$deleted = $call($keyDev, 'delete', array('kind' => 'test_setting', 'key' => 'alpha_copy'));
+check('keys: delete', $deleted['key'] === 'alpha_copy' && $deleted['deleted'] === true && $keySite->row('modSystemSetting', 'alpha_copy') === null);
+
+// journal: history, diff, undo
+$history = $call($keyDev, 'history', array('kind' => 'test_setting'));
+$entry = $history['changesets'][0]['objects'][0];
+check('keys: history entry shows key', $entry === array('kind' => 'test_setting', 'key' => 'alpha_copy', 'name' => 'alpha_copy', 'op' => 'delete'));
+$numericHistory = null;
+foreach ($history['changesets'] as $changeset) {
+    foreach ($changeset['objects'] as $object) { if ($object['kind'] === 'test_setting' && $object['op'] === 'create' && $object['name'] === '404') { $numericHistory = $object; } }
+}
+check('keys: a numeric-looking key is a string in history', $numericHistory !== null && $numericHistory['key'] === '404' && !array_key_exists('id', $numericHistory));
+$chunkEntry = $call($keyDev, 'history', array('kind' => 'chunk'))['changesets'][0]['objects'][0];
+check('keys: an integer kind still shows id in history', $chunkEntry['id'] === 1 && !array_key_exists('key', $chunkEntry));
+$updateDiff = $call($keyDev, 'history_diff', array('changeset_id' => $updated['changeset_id']));
+check('keys: history_diff entry shows key', $updateDiff['objects'][0]['key'] === 'site_tagline' && !array_key_exists('id', $updateDiff['objects'][0])
+    && $updateDiff['objects'][0]['changed'] === array('value' => array('old' => 'Hello', 'new' => 'Changed')));
+
+$undoDeletePlan = $call($keyDev, 'undo', array('changeset_id' => $deleted['changeset_id']));
+check('keys: undo plan names the key', $undoDeletePlan['performed'] === false && $undoDeletePlan['objects'][0]['key'] === 'alpha_copy'
+    && !array_key_exists('id', $undoDeletePlan['objects'][0]) && $undoDeletePlan['objects'][0]['action'] === 'recreate' && $undoDeletePlan['conflicts'] === 0);
+$undoDelete = $call($keyDev, 'undo', array('changeset_id' => $deleted['changeset_id'], 'confirm' => true));
+check('keys: undo of a delete brings the setting back with the same key and value', $undoDelete['performed'] === true
+    && $settingState('alpha_copy') === 'one' && $keySite->row('modSystemSetting', 'alpha_copy')['key'] === 'alpha_copy'
+    && $call($keyDev, 'get', array('kind' => 'test_setting', 'key' => 'alpha_copy'))['revision'] === $copy['revision']);
+$undoCreate = $call($keyDev, 'undo', array('changeset_id' => $copy['changeset_id'], 'confirm' => true));
+check('keys: undo of a create removes the setting', $undoCreate['objects'][0]['action'] === 'remove' && $keySite->row('modSystemSetting', 'alpha_copy') === null);
+
+// undo of the update is a conflict while a later change exists, and works without one
+$later = $call($keyDev, 'update', array('kind' => 'test_setting', 'key' => 'site_tagline', 'fields' => array('value' => 'Later')));
+$conflictPlan = $call($keyDev, 'undo', array('changeset_id' => $updated['changeset_id']));
+check('keys: undo conflict is detected', $conflictPlan['conflicts'] === 1 && $conflictPlan['objects'][0]['key'] === 'site_tagline'
+    && strpos($conflictPlan['objects'][0]['conflict'], "changed later by changeset {$later['changeset_id']}") === 0);
+$e = throws('keys: undo over a conflict is refused', ApiException::class, function () use ($call, $keyDev, $updated) { $call($keyDev, 'undo', array('changeset_id' => $updated['changeset_id'], 'confirm' => true)); });
+check('keys: refusal is undo_conflict and nothing changed', $e && $e->errorCode === 'undo_conflict' && $settingState('site_tagline') === 'Later');
+$call($keyDev, 'undo', array('changeset_id' => $later['changeset_id'], 'confirm' => true));
+check('keys: undo of an update restores the earlier value', $settingState('site_tagline') === 'Changed');
+$call($keyDev, 'undo', array('changeset_id' => $updated['changeset_id'], 'confirm' => true));
+check('keys: and the one before it', $settingState('site_tagline') === 'Hello');
+
+// numeric-looking key through undo
+$numericDelete = $call($keyDev, 'delete', array('kind' => 'test_setting', 'key' => '404'));
+check('keys: numeric-looking key in a delete result', $numericDelete['key'] === '404' && is_string($numericDelete['key']));
+$numericUndo = $call($keyDev, 'undo', array('changeset_id' => $numericDelete['changeset_id'], 'confirm' => true));
+check('keys: numeric-looking key through undo', $numericUndo['objects'][0]['key'] === '404' && $settingState('404') === 'numeric key'
+    && $call($keyDev, 'get', array('kind' => 'test_setting', 'key' => '404'))['key'] === '404');
+
+// a change made behind the journal's back is recorded as external
+$keySite->store('modSystemSetting', array('value' => 'edited in the manager') + $keySite->row('modSystemSetting', 'zeta'));
+$call($keyDev, 'update', array('kind' => 'test_setting', 'key' => 'zeta', 'fields' => array('area' => 'late')));
+$external = $call($keyDev, 'history', array('kind' => 'test_setting', 'source' => 'external'));
+check('keys: an outside change is journaled as external', count($external['changesets']) === 1 && $external['changesets'][0]['objects'][0]['key'] === 'zeta'
+    && $external['changesets'][0]['objects'][0]['op'] === 'update');
+
+// describe
+$describeSetting = $call($keyDev, 'describe', array('kind' => 'test_setting'));
+$describeChunk = $call($keyDev, 'describe', array('kind' => 'chunk'));
+check('keys: describe shows the key type and field', $describeSetting['key_type'] === 'string' && $describeSetting['key_field'] === 'key'
+    && $describeChunk['key_type'] === 'integer' && $describeChunk['key_field'] === 'id');
+
+// rollback after a failure past the save
+$stableSetting = $call($keyDev, 'get', array('kind' => 'test_setting', 'key' => 'alpha'));
+$historySize = count($call($keyDev, 'history', array('limit' => 100))['changesets']);
+$keySite->failProcessor = 'system/settings/update';
+throws('keys: failure after save', RuntimeException::class, function () use ($call, $keyDev) { $call($keyDev, 'update', array('kind' => 'test_setting', 'key' => 'alpha', 'fields' => array('value' => 'half done'))); });
+$keySite->failProcessor = null;
+check('keys: rollback restores the setting', $call($keyDev, 'get', array('kind' => 'test_setting', 'key' => 'alpha'))['revision'] === $stableSetting['revision'] && $settingState('alpha') === 'one');
+check('keys: nothing is journaled by a failed write', count($call($keyDev, 'history', array('limit' => 100))['changesets']) === $historySize);
+
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));
 check('canonical: list order is kept', Kernel::canonical(array(3, 1, 2)) === array(3, 1, 2));

@@ -21,10 +21,10 @@ function mockSite() {
     tool("site_info"),
     tool("help", { inputSchema: object({ topic: { type: "string" } }) }),
     tool("describe", { inputSchema: object({ kind: { type: "string", pattern: "^[a-z]+$" } }) }),
-    tool("get", { inputSchema: object({ kind: { type: "string" }, id: { type: "integer" } }) }),
+    tool("get", { inputSchema: object({ kind: { type: "string" }, id: { type: "integer" }, key: { type: "string" } }) }),
     tool("undo", { inputSchema: object({ confirm: { type: "boolean" } }), effect: { read_only: false, destructive: true, reversible: true, open_world: false } }),
     tool("update", {
-      inputSchema: object({ kind: { type: "string" }, id: { type: "integer" }, expected_revision: { type: "string" } }, ["kind"]),
+      inputSchema: object({ kind: { type: "string" }, id: { type: "integer" }, key: { type: "string" }, expected_revision: { type: "string" } }, ["kind"]),
       effect: { read_only: false, destructive: true, reversible: true, open_world: false },
     }),
   ] };
@@ -53,15 +53,17 @@ function mockSite() {
         case "describe":
           return reply(404, { ok: false, error: { code: "not_found", message: `Unknown kind '${body.args.kind}'. Token ${TOKEN}`, details: { hint: "list kinds" } }, meta });
         case "get":
-          return ok({ kind: body.args.kind, id: body.args.id, revision: state.revision });
+          return ok({ kind: body.args.kind, id: body.args.id, key: body.args.key, revision: state.revision });
         case "undo":
           return ok({ performed: true });
         case "update":
-          if (body.args.id === 7 && body.args.expected_revision !== state.revision) {
+          // Object 7 (by id) and the setting "s7" (by key) are the two objects the mock tracks revisions for.
+          if ((body.args.id === 7 || body.args.key === "s7") && body.args.expected_revision !== state.revision) {
             return reply(409, { ok: false, error: { code: "revision_conflict", message: "changed" }, meta });
           }
-          if (body.args.id === 7) state.revision = "r" + (Number(state.revision.slice(1)) + 1);
-          return ok({ kind: body.args.kind, id: body.args.id ?? 1, ...(body.args.id === 7 ? { revision: state.revision } : {}) });
+          if (body.args.id === 7 || body.args.key === "s7") state.revision = "r" + (Number(state.revision.slice(1)) + 1);
+          return ok({ kind: body.args.kind, ...(body.args.key !== undefined ? { key: body.args.key } : { id: body.args.id ?? 1 }),
+            ...(body.args.id === 7 || body.args.key === "s7" ? { revision: state.revision } : {}) });
         default:
           return reply(400, { ok: false, error: { code: "unknown_action", message: "Unknown action." }, meta });
       }
@@ -149,6 +151,36 @@ test("bridge serves the site's manifest and proxies calls", async (t) => {
     await client.callTool({ name: "modx_undo", arguments: { confirm: true } });
     await update({});
     assert.equal(sent(), undefined, "an undo forgets every remembered revision");
+  });
+
+  await t.test("the revision last seen is sent for an object addressed by key", async () => {
+    site.state.revision = "r1";
+    const update = (args) => client.callTool({ name: "modx_update", arguments: { kind: "system_setting", key: "s7", ...args } });
+    const sent = () => site.state.requests.at(-1).args.expected_revision;
+
+    await update({ expected_revision: "r1" });
+    assert.equal(sent(), "r1");
+    assert.equal(site.state.revision, "r2");
+    assert.equal((await update({})).isError, undefined);
+    assert.equal(sent(), "r2", "revision from the previous write, found by key");
+    assert.equal((await update({})).isError, undefined);
+    assert.equal(sent(), "r3", "and again");
+
+    await client.callTool({ name: "modx_get", arguments: { kind: "system_setting", key: "s7" } });
+    assert.equal((await update({})).isError, undefined);
+    assert.equal(sent(), "r4", "revision from the read, found by key");
+
+    // An object with the same number as an id is a different object from the one with that key.
+    await client.callTool({ name: "modx_get", arguments: { kind: "system_setting", key: "7" } });
+    await client.callTool({ name: "modx_update", arguments: { kind: "system_setting", id: 7 } });
+    assert.equal(sent(), undefined, "an id is never matched against a remembered key");
+
+    site.state.revision = "r20";   // somebody else changed the setting
+    const conflict = await update({});
+    assert.equal(conflict.isError, true);
+    assert.match(conflict.content[0].text, /revision_conflict/);
+    assert.equal((await update({})).isError, true, "the stale revision was forgotten, so the write is refused again");
+    assert.equal(sent(), undefined);
   });
 
   await t.test("invalid arguments are rejected before any request", async () => {

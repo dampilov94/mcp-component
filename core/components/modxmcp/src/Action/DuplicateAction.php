@@ -21,6 +21,7 @@ final class DuplicateAction extends WriteAction {
             'kind'    => Schema::str('Object kind; see modx_describe.', array('pattern' => '^[a-z][a-z0-9_]{0,63}$')),
             'id'      => Schema::int(null, array('minimum' => 1)),
             'name'    => Schema::str('Name of the source, when its id is not known.', array('maxLength' => 255)),
+            'key'     => self::keyArgument(),
             'new_name' => Schema::str('Name of the copy; default "<source name> copy".', array('minLength' => 1, 'maxLength' => 255)),
             'fields'  => Schema::obj(array(), array(), true) + array('description' => 'Overrides for the copied fields.'),
             'dry_run' => Schema::bool('Validate and report without creating anything.'),
@@ -30,7 +31,7 @@ final class DuplicateAction extends WriteAction {
     public function run(array $args, Context $context) {
         $kind = Objects::kind($context, $args['kind'], true);
         $source = Objects::resolve($context, $kind, $args);
-        $sourceId = (int) $source->get('id');
+        $sourceId = $kind->keyOf($source);
         $overrides = isset($args['fields']) ? $args['fields'] : array();
         Objects::normalize($kind, $overrides, false);
         $values = array();
@@ -73,7 +74,7 @@ final class DuplicateAction extends WriteAction {
         Objects::lint($context, $kind, $columns);
         if ($this->isDryRun($args, $context)) {
             return $this->plan($context, array(
-                'kind' => $kind->name(), 'source_id' => $sourceId, 'would_create' => array('name' => $newName),
+                'kind' => $kind->name(), 'source_' . $kind->keyField() => $sourceId, 'would_create' => array('name' => $newName),
                 'relations' => array_keys($relations), 'reversible' => true,
             ));
         }
@@ -82,6 +83,6 @@ final class DuplicateAction extends WriteAction {
             $id = Objects::save($context, $tx, $kind, null, $columns, $relations);
             return array('result' => array(), 'summary' => "duplicate {$kind->name()} {$sourceId} as {$id}");
         });
-        return $this->written($kind->name(), $id, $info, array('source_id' => $sourceId, 'name' => $newName));
+        return $this->written($kind, $id, $info, array('source_' . $kind->keyField() => $sourceId, 'name' => $newName));
     }
 }

@@ -24,6 +24,7 @@ final class GetAction extends Action {
             'kind'   => Schema::str('Object kind; see modx_describe.', array('pattern' => '^[a-z][a-z0-9_]{0,63}$')),
             'id'     => Schema::int(null, array('minimum' => 1)),
             'name'   => Schema::str('Name, when the id is not known.', array('maxLength' => 255)),
+            'key'    => self::keyArgument(),
             'fields' => Schema::arr(Schema::str(), 'Fields to return; default all.', array('maxItems' => 40)),
             'full'   => Schema::bool('Return code in full.'),
         ), array('kind'));
@@ -33,11 +34,12 @@ final class GetAction extends Action {
         return Schema::obj(array(
             'kind'      => Schema::str(),
             'id'        => Schema::int(),
+            'key'       => Schema::str(),
             'revision'  => Schema::str(),
             'fields'    => Schema::obj(array(), array(), true),
             'relations' => Schema::obj(array(), array(), true),
             'truncated' => Schema::obj(array(), array(), true),
-        ), array('kind', 'id', 'revision', 'fields', 'relations'), true);
+        ), array('kind', 'revision', 'fields', 'relations'), true);
     }
 
     public function run(array $args, Context $context) {
@@ -61,10 +63,10 @@ final class GetAction extends Action {
         foreach ($kind->relationSpecs() as $name => $spec) {
             if (empty($spec['delete_only'])) { $relations[$name] = $kind->presentRelation($context->modx, $object, $name); }
         }
-        $id = (int) $object->get('id');
+        $id = $kind->keyOf($object);
         $result = array(
             'kind'      => $kind->name(),
-            'id'        => $id,
+            $kind->keyField() => $id,
             'revision'  => Snapshot::revision(Snapshot::capture($context->modx, $kind, $id)),
             'fields'    => $fields,
             'relations' => $relations ? $relations : new \stdClass(),

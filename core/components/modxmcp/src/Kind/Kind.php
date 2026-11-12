@@ -87,7 +87,60 @@ abstract class Kind {
 
     /** Default order of modx_list: [[column, direction], …]. */
     public function defaultSort() {
-        return array(array($this->column($this->nameField()), 'ASC'), array('id', 'ASC'));
+        return array(array($this->column($this->nameField()), 'ASC'), array($this->keyColumn(), 'ASC'));
+    }
+
+    // ---- object key: how one object of the kind is identified ----
+
+    /** 'integer' (a numeric id) or 'string' (e.g. a setting key). */
+    public function keyType() {
+        return 'integer';
+    }
+
+    /** Canonical PHP value of a key: int for integer kinds, string for string kinds. */
+    public function normalizeKey($raw) {
+        return (int) $raw;
+    }
+
+    /** xPDO criteria that select the object with this key. */
+    public function keyCriteria($key) {
+        return array('id' => (int) $key);
+    }
+
+    /** Key of a loaded object. */
+    public function keyOf($object) {
+        return (int) $object->get('id');
+    }
+
+    /** Column used as the last sort key in modx_list. */
+    public function keyColumn() {
+        return 'id';
+    }
+
+    /** Properties that identify the object to its update and remove processors. */
+    public function processorKey($key) {
+        return array('id' => $key);
+    }
+
+    /** Key of an object just created, from the create processor's response object and the columns sent. */
+    public function createdKey(array $response, array $columns) {
+        if (empty($response['id'])) { throw new \RuntimeException('The create processor did not return an id.'); }
+        return (int) $response['id'];
+    }
+
+    /** Name of the result field that carries the key: "id" for integer kinds, "key" for string kinds. */
+    public function keyField() {
+        return $this->keyType() === 'string' ? 'key' : 'id';
+    }
+
+    /** A key in the type the API shows it in. */
+    public function publicKey($key) {
+        return $this->keyType() === 'string' ? (string) $key : (int) $key;
+    }
+
+    /** Find an object by its key; null when it does not exist. Never cached. */
+    public function findByKey(\modX $modx, $key) {
+        return $modx->getObject($this->modelClass(), $this->keyCriteria($key), false);
     }
 
     /**
@@ -99,9 +152,9 @@ abstract class Kind {
     }
 
     /**
-     * Ids of other objects of this kind that the operation will also change (MODX cascades),
+     * Keys of other objects of this kind that the operation will also change (MODX cascades),
      * so they are locked, journaled and restored together with the main object.
-     * @param int|null $id      null for a create
+     * @param int|string|null $id null for a create
      * @param array    $columns column => new value for create/update
      * @param string   $op      create | update | delete | undelete
      */
@@ -152,7 +205,7 @@ abstract class Kind {
             'read_only' => false, 'needs_object' => true, 'input' => Schema::obj(), 'handler' => 'opMakeStatic'));
     }
     public function opMakeStatic(Context $context, Transaction $tx, $object, array $args): array {
-        return StaticFiles::makeStatic($context, $tx, $this, (int) $object->get('id'));
+        return StaticFiles::makeStatic($context, $tx, $this, $this->keyOf($object));
     }
 
     /** Replace a writable relation. $value is the API form (a list). */
@@ -202,10 +255,16 @@ abstract class Kind {
         );
     }
 
-    /** Find an object by ['id' => …] or ['name' => …]; null when it does not exist. Never cached. */
+    /**
+     * Find an object by ['id' => …], ['key' => …] or ['name' => …]; null when it does not exist.
+     * Never cached. For a string-key kind the name is an alias of the key.
+     */
     public function find(\modX $modx, array $ref) {
-        if (isset($ref['id'])) {
-            return $modx->getObject($this->modelClass(), array('id' => (int) $ref['id']), false);
+        foreach (array('id', 'key') as $part) {
+            if (isset($ref[$part])) { return $this->findByKey($modx, $this->normalizeKey($ref[$part])); }
+        }
+        if (isset($ref['name']) && $ref['name'] !== '' && $this->keyType() === 'string') {
+            return $this->findByKey($modx, $this->normalizeKey($ref['name']));
         }
         if (isset($ref['name']) && $ref['name'] !== '') {
             return $modx->getObject($this->modelClass(), array($this->column($this->nameField()) => (string) $ref['name']), false);
@@ -297,7 +356,7 @@ abstract class Kind {
     public function presentRelation(\modX $modx, $object, $name) {
         $specs = $this->relationSpecs();
         $spec = $specs[$name];
-        $criteria = array($spec['fk'] => $object->get('id')) + (isset($spec['where']) ? $spec['where'] : array());
+        $criteria = array($spec['fk'] => $this->keyOf($object)) + (isset($spec['where']) ? $spec['where'] : array());
         $out = array();
         foreach ($modx->getCollection($spec['class'], $criteria) as $row) {
             if (is_array($spec['present'])) {
@@ -344,6 +403,8 @@ abstract class Kind {
             'label'       => $this->label(),
             'group'       => $this->group(),
             'name_field'  => $this->nameField(),
+            'key_type'    => $this->keyType(),
+            'key_field'   => $this->keyField(),
             'read_scope'  => $this->readScope(),
             'write_scope' => $this->writeScope(),
             'fields'      => $fields,

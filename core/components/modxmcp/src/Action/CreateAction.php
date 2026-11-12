@@ -38,6 +38,6 @@ final class CreateAction extends WriteAction {
             $id = Objects::save($context, $tx, $kind, null, $columns, $relations);
             return array('result' => array(), 'summary' => "create {$kind->name()} {$id}");
         });
-        return $this->written($kind->name(), $id, $info);
+        return $this->written($kind, $id, $info);
     }
 }

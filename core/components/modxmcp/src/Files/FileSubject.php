@@ -19,6 +19,8 @@ final class FileSubject implements Subject {
 
     public function key() { return $this->root->id . ':' . $this->relative; }
 
+    public function publicKey() { return $this->key(); }
+
     public function relative() { return $this->relative; }
 
     /** Split a journal key into [root id, relative path]. */

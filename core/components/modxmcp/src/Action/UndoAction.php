@@ -3,6 +3,7 @@ namespace ModxMCP\Action;
 
 use ModxMCP\ApiException;
 use ModxMCP\Context;
+use ModxMCP\Journal\Subjects;
 use ModxMCP\Journal\Undo;
 use ModxMCP\Schema;
 use ModxMCP\Write\Writer;
@@ -78,7 +79,8 @@ final class UndoAction extends WriteAction {
         $plan = Undo::plan($context, $changesets);
         $objects = array();
         foreach ($plan['items'] as $item) {
-            $objects[] = array('kind' => $item['subject']->kindName(), 'id' => ctype_digit((string) $item['key']) ? (int) $item['key'] : $item['key'], 'name' => $item['label'], 'action' => $item['action'])
+            $kindName = $item['subject']->kindName();
+            $objects[] = array('kind' => $kindName, Subjects::keyField($context, $kindName) => Subjects::publicKey($context, $kindName, $item['key']), 'name' => $item['label'], 'action' => $item['action'])
                 + ($item['conflict'] !== null ? array('conflict' => $item['conflict']) : array());
         }
         $summary = array('changesets' => $ids, 'objects' => $objects, 'conflicts' => $plan['conflicts']);

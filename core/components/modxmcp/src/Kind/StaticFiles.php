@@ -8,7 +8,7 @@ use ModxMCP\Write\Transaction;
 /** Files owned by automatic/static conversion, always reserved without overwriting. */
 final class StaticFiles {
     public static function makeStatic(Context $context, Transaction $tx, Kind $kind, $id): array {
-        $object = Objects::resolve($context, $kind, array('id' => $id));
+        $object = Objects::resolveKey($context, $kind, $id);
         if ($object->get('static')) { return array('status' => 'already_static', 'static_file' => (string) $object->get('static_file')); }
         $map = array('chunk' => array('chunks', 'tpl'), 'snippet' => array('snippets', 'php'),
             'template' => array('templates', 'tpl'), 'plugin' => array('plugins', 'php'));
@@ -44,7 +44,7 @@ final class StaticFiles {
             $handle = null;
             $stored = '[[++core_path]]elements/' . $folder . '/' . $file;
             Objects::save($context, $tx, $kind, $id, array('static' => 1, 'static_file' => $stored, 'source' => 0), array());
-            $content = $kind->effectiveContent(Objects::resolve($context, $kind, array('id' => $id)));
+            $content = $kind->effectiveContent(Objects::resolveKey($context, $kind, $id));
             if (!$content[1] || $content[3] || $content[0] !== $code) { throw new \RuntimeException('Static conversion verification failed.'); }
             return array('status' => 'converted', 'static_file' => $stored);
         } catch (\Throwable $e) {

@@ -21,6 +21,7 @@ final class UpdateAction extends WriteAction {
             'kind'      => Schema::str('Object kind; see modx_describe.', array('pattern' => '^[a-z][a-z0-9_]{0,63}$')),
             'id'        => Schema::int(null, array('minimum' => 1)),
             'name'      => Schema::str('Current name, when the id is not known.', array('maxLength' => 255)),
+            'key'       => self::keyArgument(),
             'fields'    => Schema::obj(array(), array(), true) + array('description' => 'Fields to change.'),
             'relations' => Schema::obj(array(), array(), true) + array('description' => 'Writable relations to replace.'),
             'skip_lint' => Schema::bool('Save PHP code even if it does not parse.'),
@@ -29,7 +30,7 @@ final class UpdateAction extends WriteAction {
 
     public function run(array $args, Context $context) {
         $kind = Objects::kind($context, $args['kind'], true);
-        $id = (int) Objects::resolve($context, $kind, $args)->get('id');
+        $id = $kind->keyOf(Objects::resolve($context, $kind, $args));
         $columns = Objects::normalize($kind, isset($args['fields']) ? $args['fields'] : array(), false);
         $relations = isset($args['relations']) ? $args['relations'] : array();
         Objects::assertWritableRelations($kind, $relations);
@@ -38,7 +39,7 @@ final class UpdateAction extends WriteAction {
 
         list($result, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $kind, $id, $columns, $relations, $args, $dry) {
             $before = $tx->touch($kind, $id);
-            if ($before === null) { throw new ApiException('not_found', "No {$kind->name()} with id {$id}."); }
+            if ($before === null) { throw new ApiException('not_found', "No {$kind->name()} with " . Objects::keyText($kind, $id) . '.'); }
             Objects::assertRevision($context, $kind, $id, $before, $args);
             Objects::lint($context, $kind, $columns, !empty($args['skip_lint']));
             if ($dry) {
@@ -48,7 +49,7 @@ final class UpdateAction extends WriteAction {
                     if ((string) $current !== (string) (is_bool($value) ? (int) $value : $value)) { $would[] = $name; }
                 }
                 return array('result' => array(
-                    'kind' => $kind->name(), 'id' => $id, 'revision' => Snapshot::revision($before),
+                    'kind' => $kind->name(), $kind->keyField() => $id, 'revision' => Snapshot::revision($before),
                     'would_change' => array_merge($would, array_keys($relations)), 'reversible' => true,
                 ));
             }
@@ -56,6 +57,6 @@ final class UpdateAction extends WriteAction {
             return array('result' => array(), 'summary' => "update {$kind->name()} {$id}");
         });
         if ($dry) { return $this->plan($context, $result); }
-        return $this->written($kind->name(), $id, $info, array('revision' => Snapshot::revision(Snapshot::capture($context->modx, $kind, $id))));
+        return $this->written($kind, $id, $info, array('revision' => Snapshot::revision(Snapshot::capture($context->modx, $kind, $id))));
     }
 }

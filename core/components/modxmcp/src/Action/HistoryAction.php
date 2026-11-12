@@ -2,6 +2,7 @@
 namespace ModxMCP\Action;
 
 use ModxMCP\Context;
+use ModxMCP\Journal\Subjects;
 use ModxMCP\Schema;
 
 final class HistoryAction extends Action {
@@ -41,7 +42,8 @@ final class HistoryAction extends Action {
         $byChangeset = array();
         foreach ($journal->changes(array_column($changesets, 'id')) as $change) {
             $byChangeset[$change['changeset_id']][] = array(
-                'kind' => $change['kind'], 'id' => ctype_digit($change['object_key']) ? (int) $change['object_key'] : $change['object_key'], 'name' => $change['label'], 'op' => $change['op'],
+                'kind' => $change['kind'], Subjects::keyField($context, $change['kind']) => Subjects::publicKey($context, $change['kind'], $change['object_key']),
+                'name' => $change['label'], 'op' => $change['op'],
             );
         }
         $out = array();

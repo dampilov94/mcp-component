@@ -16,14 +16,14 @@ final class FindUsagesAction extends Action {
     }
     public function inputSchema() {
         return Schema::obj(array('kind' => Schema::str(), 'id' => Schema::int(null, array('minimum' => 1)),
-            'name' => Schema::str(null, array('maxLength' => 255)),
+            'name' => Schema::str(null, array('maxLength' => 255)), 'key' => self::keyArgument(),
             'limit' => Schema::int('Objects, default 50.', array('minimum' => 1, 'maximum' => 200))), array('kind'));
     }
     public function outputSchema() {
-        return Schema::obj(array('kind' => Schema::str(), 'id' => Schema::int(), 'name' => Schema::str(),
+        return Schema::obj(array('kind' => Schema::str(), 'id' => Schema::int(), 'key' => Schema::str(), 'name' => Schema::str(),
             'objects' => Schema::int(), 'truncated' => Schema::bool(),
             'usages' => Schema::arr(Schema::obj(array(), array(), true)), 'extra' => Schema::obj(array(), array(), true)),
-            array('kind', 'id', 'name', 'objects', 'truncated', 'usages', 'extra'));
+            array('kind', 'name', 'objects', 'truncated', 'usages', 'extra'));
     }
     public function run(array $args, Context $context) {
         $kind = Objects::kind($context, $args['kind']);
@@ -31,7 +31,7 @@ final class FindUsagesAction extends Action {
             throw new ApiException('validation_failed', 'Supported targets: chunk, snippet, tv, resource, template, category.');
         }
         $object = Objects::resolve($context, $kind, $args);
-        return array('kind' => $kind->name(), 'id' => (int) $object->get('id'),
+        return array('kind' => $kind->name(), $kind->keyField() => $kind->keyOf($object),
             'name' => (string) $kind->value($object, $kind->nameField()))
             + Usages::find($context, $kind, $object, isset($args['limit']) ? $args['limit'] : 50);
     }

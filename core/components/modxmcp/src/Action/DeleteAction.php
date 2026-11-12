@@ -26,19 +26,20 @@ final class DeleteAction extends WriteAction {
             'kind' => Schema::str('Object kind; see modx_describe.', array('pattern' => '^[a-z][a-z0-9_]{0,63}$')),
             'id'   => Schema::int(null, array('minimum' => 1)),
             'name' => Schema::str('Name, when the id is not known.', array('maxLength' => 255)),
+            'key'  => self::keyArgument(),
         ) + $this->commonInput(), array('kind'));
     }
 
     public function run(array $args, Context $context) {
         $kind = Objects::kind($context, $args['kind'], true);
         $object = Objects::resolve($context, $kind, $args);
-        $id = (int) $object->get('id');
+        $id = $kind->keyOf($object);
         $label = (string) $kind->value($object, $kind->nameField());
         $dry = $this->isDryRun($args, $context);
 
         list($result, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $kind, $id, $label, $args, $dry) {
             $before = $tx->touch($kind, $id);
-            if ($before === null) { throw new ApiException('not_found', "No {$kind->name()} with id {$id}."); }
+            if ($before === null) { throw new ApiException('not_found', "No {$kind->name()} with " . Objects::keyText($kind, $id) . '.'); }
             Objects::assertRevision($context, $kind, $id, $before, $args);
             $tx->keepDeleteExtra($kind, $id);
             if ($dry) {
@@ -47,24 +48,24 @@ final class DeleteAction extends WriteAction {
                     if ($rows) { $related[$name] = count($rows); }
                 }
                 return array('result' => array(
-                    'kind' => $kind->name(), 'id' => $id, 'revision' => Snapshot::revision($before),
+                    'kind' => $kind->name(), $kind->keyField() => $id, 'revision' => Snapshot::revision($before),
                     'would_delete' => array('name' => $label, 'related_rows' => $related ? $related : new \stdClass()),
                     'reversible' => true,
                 ) + $this->usagePlan($context, $kind, $id));
             }
             foreach ($kind->alsoAffected($context->modx, $id, array(), 'delete') as $other) { $tx->touch($kind, $other); }
-            $staticPath = $kind->effectiveContent(Objects::resolve($context, $kind, array('id' => $id)))[2];
-            Objects::process($context->modx, $kind->processorPath() . $kind->deleteProcessor(), array('id' => $id));
+            $staticPath = $kind->effectiveContent(Objects::resolveKey($context, $kind, $id))[2];
+            Objects::process($context->modx, $kind->processorPath() . $kind->deleteProcessor(), $kind->processorKey($id));
             StaticFiles::removeManaged($context->modx, $staticPath);
             return array('result' => array(), 'summary' => "delete {$kind->name()} {$id} ({$label})");
         });
         if ($dry) { return $this->plan($context, $result); }
-        return $this->written($kind->name(), $id, $info, array('deleted' => true));
+        return $this->written($kind, $id, $info, array('deleted' => true));
     }
     private function usagePlan(Context $context, $kind, $id) {
         if (!Usages::supports($kind)) { return array(); }
         try {
-            $found = Usages::find($context, $kind, Objects::resolve($context, $kind, array('id' => $id)), 10);
+            $found = Usages::find($context, $kind, Objects::resolveKey($context, $kind, $id), 10);
             $items = array();
             foreach ($found['usages'] as $item) { unset($item['matches']); $items[] = $item; }
             $out = array('usages' => array('objects' => $found['objects'], 'truncated' => $found['truncated'], 'items' => $items, 'extra' => $found['extra']));
