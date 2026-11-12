@@ -2,6 +2,8 @@
 namespace ModxMCP\Kind;
 
 use ModxMCP\ApiException;
+use ModxMCP\Context;
+use ModxMCP\Schema;
 
 final class TvKind extends Kind {
     public function name() { return 'tv'; }
@@ -70,4 +72,19 @@ final class TvKind extends Kind {
             if (!$row->save()) { throw new \RuntimeException('Cannot attach the TV to a template.'); }
         }
     }
+    public function operations() {
+        return array(
+            'list_input_types' => array('description' => 'List core and installed custom TV input types.', 'read_only' => true,
+                'needs_object' => false, 'input' => Schema::obj(), 'handler' => 'opListInputTypes'),
+            'suggest_type' => array('description' => 'Suggest TV input types for a need described in English or Russian.', 'read_only' => true,
+                'needs_object' => false, 'input' => Schema::obj(array('description' => Schema::str()), array('description')), 'handler' => 'opSuggestType'),
+        );
+    }
+    public function opListInputTypes(Context $context, $object, array $args): array {
+        return TvInputTypes::listTvInputTypes($context->modx);
+    }
+    public function opSuggestType(Context $context, $object, array $args): array {
+        return TvInputTypes::suggestTvType($context->modx, $args);
+    }
+
 }

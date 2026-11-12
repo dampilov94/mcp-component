@@ -2,6 +2,7 @@
 
 Call `modx_help` with a `topic` for a focused guide.
 
+- `tv_input_types` — choose a TV input type and attach it to templates.
 - `getting_started` — how to work on a site: orient, read, change safely, undo.
 
 Quick reference:

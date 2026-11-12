@@ -1120,6 +1120,52 @@ $invokeNoop = $call($invokeFixtureContext, 'invoke', array('kind' => 'invoke_fix
 check('invoke: no-op returns current revision', $invokeNoop['changeset_id'] === null && $invokeNoop['changed'] === array()
     && $invokeNoop['revision'] === ModxMCP\Journal\Snapshot::revision($noOpState));
 
+// TV input operations preserve the legacy recommendation data, including Cyrillic matching.
+$tvRuntime = new class extends modX {
+    public $inputEvent = array();
+    public function invokeEvent($name, array $params = array()) {
+        if ($name === 'OnTVInputRenderList') {
+            if ($this->inputEvent instanceof Throwable) { throw $this->inputEvent; }
+            return $this->inputEvent;
+        }
+        return parent::invokeEvent($name, $params);
+    }
+};
+$tvRead = new Context($tvRuntime, array('scope' => 'read') + $dev->token, $dev->corePath, function () {});
+$types = $call($tvRead, 'invoke', array('kind' => 'tv', 'op' => 'list_input_types'));
+check('tv inputs: core and empty custom match legacy values', count($types['core']) === 20 && $types['custom'] === array()
+    && $types['core']['image'] === array('label' => 'Image', 'use' => 'pick/upload an image', 'requires' => array('media_source (id)')));
+$imageSuggestion = $call($tvRead, 'invoke', array('kind' => 'tv', 'op' => 'suggest_type', 'args' => array('description' => 'IMAGE PHOTO')));
+check('tv inputs: ranked image suggestion exact values', $imageSuggestion['description'] === 'IMAGE PHOTO' && $imageSuggestion['recommended'] === 'image'
+    && $imageSuggestion['candidates'] === array(array('type' => 'image', 'why' => 'a single image', 'score' => 2, 'matched' => array('image', 'photo'), 'order' => 1))
+    && $imageSuggestion['create_skeleton'] === array('action' => 'create_element', 'type' => 'tv', 'data' => array('name' => '<tv_name>', 'caption' => '<Caption>',
+        'field_type' => 'image', 'templates' => array('<template id>'), 'media_source' => '<media source id — see modx_list_media_sources>')) && $imageSuggestion['note'] === null);
+$colorSuggestion = $call($tvRead, 'invoke', array('kind' => 'tv', 'op' => 'suggest_type', 'args' => array('description' => 'ЦВЕТ')));
+check('tv inputs: Cyrillic and unavailable color fallback', $colorSuggestion['recommended'] === 'text' && $colorSuggestion['candidates'][0]['matched'] === array('цвет')
+    && $colorSuggestion['note'] === 'No colorpicker input type is installed; suggesting text. Install a colorpicker add-on for a real picker.');
+$unknownSuggestion = $call($tvRead, 'invoke', array('kind' => 'tv', 'op' => 'suggest_type', 'args' => array('description' => 'xyz')));
+check('tv inputs: no-keyword fallback', $unknownSuggestion['candidates'] === array(array('type' => 'text', 'why' => 'no strong signal — short single-line text is the safe default', 'score' => 0, 'matched' => array())));
+$tvRuntime->inputEvent = array("fancy==Выбор\n/path/to/render\nplain", array('other==Другой'));
+$customTypes = $call($tvRead, 'invoke', array('kind' => 'tv', 'op' => 'list_input_types'));
+check('tv inputs: custom parsing skips paths', $customTypes['custom'] === array('fancy' => 'Выбор', 'plain' => 'plain', 'other' => 'Другой'));
+$tvRuntime->store('modNamespace', array('name' => 'migx'));
+$tvRuntime->store('modNamespace', array('name' => 'colorpicker'));
+$tvRuntime->inputEvent = new RuntimeException('Headless plugin failure');
+$customTypes = $call($tvRead, 'invoke', array('kind' => 'tv', 'op' => 'list_input_types'));
+check('tv inputs: plugin failure still allows installed fallbacks', $customTypes['custom'] === array('migx' => 'MIGX', 'migxdb' => 'MIGXdb', 'colorpicker' => 'ColorPicker'));
+check('tv inputs: installed colorpicker recommended', $call($tvRead, 'invoke', array('kind' => 'tv', 'op' => 'suggest_type', 'args' => array('description' => 'ЦВЕТ')))['recommended'] === 'colorpicker');
+foreach (array(array(), array('description' => 7), array('description' => ' '), array('description' => 'text', 'extra' => true)) as $badSuggestion) {
+    $e = throws('tv inputs: argument validation', ApiException::class, function () use ($call, $tvRead, $badSuggestion) { $call($tvRead, 'invoke', array('kind' => 'tv', 'op' => 'suggest_type', 'args' => $badSuggestion)); });
+    check('tv inputs: validation code', $e && $e->errorCode === 'validation_failed');
+}
+$e = throws('tv inputs: object reference forbidden', ApiException::class, function () use ($call, $tvRead) { $call($tvRead, 'invoke', array('kind' => 'tv', 'id' => 1, 'op' => 'list_input_types')); });
+check('tv inputs: object-less validation', $e && $e->errorCode === 'validation_failed');
+$tvHelp = $call($dev, 'help', array('topic' => 'tv_input_types'))['content'];
+check('tv inputs: help is rewritten', strpos($tvHelp, 'modx_invoke') !== false);
+foreach (array('modx_suggest_tv_type', 'modx_list_tv_input_types', 'modx_get_element', 'modx_update_element', 'modx_create_element', 'modx_get_resource_tvs') as $legacyName) {
+    check('tv inputs: no legacy help tool ' . $legacyName, strpos($tvHelp, $legacyName) === false);
+}
+
 // --- Files ---
 use ModxMCP\Files\FileRoot;
 
