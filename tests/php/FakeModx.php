@@ -169,6 +169,7 @@ trait FakeResourceProcessors {
 
 class modX extends xPDO {
     use FakeResourceProcessors;
+    public $maintenanceProcessors = array();
     const LOG_LEVEL_ERROR = 1;
     public $user;
     public $events = array();
@@ -292,6 +293,19 @@ class modX extends xPDO {
 
     /** Minimal create / update / remove processors with the validation the real ones have. */
     public function runProcessor($path, array $data = array()) {
+        if (in_array($path, array('system/refreshuris', 'system/remove_locks', 'security/access/flush', 'resource/emptyrecyclebin'), true)) {
+            $this->maintenanceProcessors[] = $path;
+            if ($this->failProcessor === $path) { return new FakeResponse('Maintenance processor refused.'); }
+            if ($path === 'resource/emptyrecyclebin') {
+                $this->invokeEvent('OnBeforeEmptyTrash');
+                foreach ($this->getCollection('modResource', array('deleted' => 1)) as $resource) {
+                    $this->removeCollection('modResourceGroupResource', array('document' => $resource->get('id')));
+                    $resource->remove();
+                }
+                $this->invokeEvent('OnEmptyTrash');
+            }
+            return new FakeResponse(null);
+        }
         $action = basename($path);
         $base = substr($path, 0, -strlen($action));
         if ($base === 'resource/') { return $this->resourceProcessor($action, $data, $path); }

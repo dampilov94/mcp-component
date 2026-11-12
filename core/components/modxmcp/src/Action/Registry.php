@@ -35,6 +35,7 @@ final class Registry {
         UndoAction::class,
         CheckpointAction::class,
         ReadLogAction::class,
+        MaintenanceAction::class,
         RequestStatusAction::class,
     );
 

@@ -116,7 +116,7 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
       "modx_request_status",
     ]);
     const full = (await call(admin, "manifest")).body.result;
-    assert.equal(full.tools.length, 28);
+    assert.equal(full.tools.length, 29);
     assert.equal(full.tools[full.tools.findIndex((item) => item.name === "modx_delete") + 1].name, "modx_duplicate");
     assert.equal(full.tools.find((item) => item.name === "modx_duplicate").effect.read_only, false);
     assert.notEqual(full.hash, result.hash);
@@ -227,7 +227,7 @@ test("bridge + kernel end to end", { skip: available ? false : "PHP with pdo_sql
   t.after(async () => { await client.close(); site.stop(); });
 
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 28);
+  assert.equal(tools.length, 29);
   const run = async (name, args = {}) => {
     const result = await client.callTool({ name, arguments: args });
     assert.equal(result.isError, undefined, `${name}: ${result.content[0].text}`);

@@ -120,7 +120,7 @@ foreach ($tools as $tool) {
     check("manifest: {$tool['name']} is read-only", $tool['effect']['read_only'] === true && $tool['effect']['destructive'] === false);
 }
 $all = array_column(Manifest::tools($context('admin')), null, 'name');
-check('manifest: full tool count', count($all) === 28);
+check('manifest: full tool count', count($all) === 29);
 check('manifest: duplicate is a reversible write after delete', $all['modx_duplicate']['effect']['read_only'] === false
     && $all['modx_duplicate']['effect']['reversible'] === true && $all['modx_duplicate']['effect']['destructive'] === false
     && array_search('modx_duplicate', array_keys($all), true) === array_search('modx_delete', array_keys($all), true) + 1);
@@ -846,6 +846,55 @@ $site->store('modResource', array('class_key' => 'msProduct') + $site->row('modR
 $warned = $actor('content');
 $call($warned, 'update', array('kind' => 'resource', 'id' => $news['id'], 'fields' => array('longtitle' => 'Product')));
 check('resource: extended classes get a journaling warning', count($warned->warnings) === 1 && strpos($warned->warnings[0], 'msProduct') !== false);
+
+// Maintenance operations use a separate site; irreversible cleanup must not affect other tests.
+$maintenanceDir = $siteDir . '/maintenance';
+mkdir($maintenanceDir . '/core', 0700, true);
+$maintenanceSite = fakeSite($maintenanceDir);
+$maintenanceAdmin = new Context($maintenanceSite, array('scope' => 'admin') + $dev->token, $dev->corePath, function () {});
+$maintenancePlan = new Context($maintenanceSite, array('scope' => 'admin', 'plan_only' => true) + $dev->token, $dev->corePath, function () {});
+$trashParent = $call($maintenanceAdmin, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Parent')));
+$trashChild = $call($maintenanceAdmin, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Child', 'parent' => $trashParent['id'])));
+$trashOther = $call($maintenanceAdmin, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Other')));
+$keepPage = $call($maintenanceAdmin, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Keep')));
+$maintenanceSite->store('modTemplateVarResource', array('contentid' => $trashChild['id'], 'tmplvarid' => 20, 'value' => 'trash'));
+$maintenanceSite->store('modResourceGroupResource', array('document' => $trashChild['id'], 'document_group' => 2));
+$call($maintenanceAdmin, 'delete', array('kind' => 'resource', 'id' => $trashParent['id']));
+$call($maintenanceAdmin, 'delete', array('kind' => 'resource', 'id' => $trashOther['id']));
+$maintenanceHistory = $maintenanceAdmin->journal()->lastChangesetId();
+$trashPlan = $call($maintenanceAdmin, 'maintenance', array('operation' => 'empty_trash'));
+check('maintenance: unconfirmed trash previews descendants too', !$trashPlan['performed'] && $trashPlan['would_remove'] === 3
+    && array_column($trashPlan['resources'], 'id') === array($trashParent['id'], $trashChild['id'], $trashOther['id'])
+    && $maintenanceSite->getCount('modResource') === 4);
+$refreshes = $maintenanceSite->getCacheManager()->refreshes;
+foreach (array('clear_cache', 'refresh_uris', 'remove_locks', 'flush_permissions', 'empty_trash') as $operation) {
+    check('maintenance: plan-only never performs ' . $operation, !$call($maintenancePlan, 'maintenance', array('operation' => $operation, 'confirm' => true))['performed']);
+}
+check('maintenance: plans cause no cache/processor work', $maintenanceSite->getCacheManager()->refreshes === $refreshes && $maintenanceSite->maintenanceProcessors === array());
+check('maintenance: clear cache calls refresh', $call($maintenanceAdmin, 'maintenance', array('operation' => 'clear_cache'))['performed']
+    && $maintenanceSite->getCacheManager()->refreshes === $refreshes + 1);
+foreach (array('refresh_uris' => 'system/refreshuris', 'remove_locks' => 'system/remove_locks', 'flush_permissions' => 'security/access/flush') as $operation => $path) {
+    check('maintenance: correct processor for ' . $operation, $call($maintenanceAdmin, 'maintenance', array('operation' => $operation))['performed']
+        && end($maintenanceSite->maintenanceProcessors) === $path);
+}
+$maintenanceSite->failProcessor = 'system/refreshuris';
+$e = throws('maintenance: processor refusal', ApiException::class, function () use ($call, $maintenanceAdmin) { $call($maintenanceAdmin, 'maintenance', array('operation' => 'refresh_uris')); });
+check('maintenance: processor message passes through', $e && $e->errorCode === 'validation_failed' && $e->getMessage() === 'Maintenance processor refused.');
+$maintenanceSite->failProcessor = null;
+foreach (array('read', 'content', 'develop') as $scope) {
+    $e = throws('maintenance: non-admin refused', ApiException::class, function () use ($call, $actor, $scope) { $call($actor($scope), 'maintenance', array('operation' => 'clear_cache')); });
+    check('maintenance: forbidden scope and hidden tool', $e && $e->errorCode === 'forbidden_scope'
+        && !in_array('modx_maintenance', array_column(Manifest::tools($actor($scope)), 'name'), true));
+}
+$maintenanceTool = array_column(Manifest::tools($maintenanceAdmin), null, 'name')['modx_maintenance'];
+check('maintenance: admin manifest marks irreversible destructive write', !$maintenanceTool['effect']['read_only'] && !$maintenanceTool['effect']['reversible'] && $maintenanceTool['effect']['destructive']);
+$emptied = $call($maintenanceAdmin, 'maintenance', array('operation' => 'empty_trash', 'confirm' => true));
+check('maintenance: confirmed purge removes exactly trashed pages and relations', $emptied['performed'] && $emptied['removed'] === 3
+    && $maintenanceSite->getCount('modResource') === 1 && $maintenanceSite->row('modResource', $keepPage['id']) !== null
+    && $maintenanceSite->getCount('modTemplateVarResource') === 0 && $maintenanceSite->getCount('modResourceGroupResource') === 0
+    && end($maintenanceSite->maintenanceProcessors) === 'resource/emptyrecyclebin');
+check('maintenance: purge warns and never journals', $maintenanceAdmin->warnings === array('Resources removed from the trash cannot be restored by modx_undo.')
+    && $maintenanceAdmin->journal()->lastChangesetId() === $maintenanceHistory);
 
 // --- Files ---
 use ModxMCP\Files\FileRoot;

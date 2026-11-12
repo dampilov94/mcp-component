@@ -65,3 +65,26 @@ Update tool lists/counts in both test files (admin manifest only).
 
 `npm run check`, `npm test`. Files: `src/Action/MaintenanceAction.php`, `src/Action/Registry.php`,
 tests, `tests/php/FakeModx.php`.
+
+## Report
+
+Based on: task/06-read-log at 0b12561
+
+- `MaintenanceAction.php` / `Registry.php`: admin-only destructive, irreversible tool;
+  dispatches the specified operations through MODX/cache manager, previews trash without
+  confirmation, honors plan-only for every operation and warns after confirmed purging.
+- `FakeModx.php`: records maintenance processor calls, supports refusal injection, and
+  removes trashed resources with TV/resource-group links and trash events in outline.
+- Both test files: 29 full-manifest tools; read lists unchanged. Isolated PHP cases verify
+  cache/processor selection, cascade trash preview/purge, scopes, plan-only, errors and no
+  journal entries.
+- Read the real MODX 2.8.8 processors and 1.x implementations before implementation.
+  `npm run check` and `npm test` passed: 487 PHP checks and 24 Node/HTTP tests.
+
+Interpretation: the preview's list key is `resources` (the brief leaves its name open).
+A false cache refresh result is surfaced as validation_failed. Otherwise no deviations.
+Only fake MODX was exercised: verify service-user permissions, registry lock removal,
+URI regeneration, permission flushing, cache behavior and purge events on the stand.
+The real purge processor may skip resources denied by delete policy; `removed` deliberately
+reports the pre-run count as specified, not independently verified deletion count.
+No blocking questions, site operations or push.
