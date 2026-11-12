@@ -41,8 +41,8 @@ difference from this list):
 - `namespace`: `key` (column `name`; required, list, not changeable), `path`,
   `assets_path`.
 
-Name field = the key for all four (so `name` is an alias of `key` in lookups, and
-`modx_list` `query` searches the key; for settings also search `value`? **No** — key only).
+Name field = the key for all four, so `name` is an alias of `key` in lookups, and the
+`query` argument of `modx_list` searches the key only (never the value).
 
 After a successful write of a setting or context the configuration MODX has in memory and
 its settings cache must be current: do what the 1.x methods do after their processor calls
