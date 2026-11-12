@@ -301,6 +301,15 @@ trait FakeMiniShop2 {
         $this->ms2Calls[] = array($path, $data, $options);
         $root = isset($options['processors_path']) ? $options['processors_path'] : $this->getOption('core_path') . 'processors/';
         if (!$this->ms2On() || !is_file($root . $path . '.class.php')) { return null; }
+        if (in_array($path, array('mgr/settings/link/create', 'mgr/settings/link/update'), true)) { return $this->ms2LinkSave($path === 'mgr/settings/link/create', $data); }
+        if ($path === 'mgr/settings/link/remove') {
+            $link = $this->getObject('msLink', array('id' => $data['id']));
+            if (!$link) { return new FakeResponse('Link type not found.'); }
+            $link->remove();   // xPDO composite: the product links go with it
+            return new FakeResponse(null, array('id' => $data['id']));
+        }
+        if ($path === 'mgr/product/productlink/create') { return $this->ms2ProductLinkCreate($data); }
+        if ($path === 'mgr/product/productlink/remove') { return $this->ms2ProductLinkRemove($data); }
         if (in_array($path, array('mgr/settings/option/create', 'mgr/settings/option/update'), true)) { return $this->ms2OptionSave($path === 'mgr/settings/option/create', $data); }
         if ($path === 'mgr/settings/option/remove') {
             $option = $this->getObject('msOption', array('id' => $data['id']));
@@ -334,6 +343,91 @@ trait FakeMiniShop2 {
         return null;
     }
 
+    /** msLinkCreateProcessor / msLinkUpdateProcessor: name and type required on create, name unique, type ignored on update. */
+    private function ms2LinkSave($creating, array $data) {
+        $name = isset($data['name']) ? trim((string) $data['name']) : '';
+        if ($name === '') { return new FakeResponse('The field name is required.'); }
+        if ($creating && trim(isset($data['type']) ? (string) $data['type'] : '') === '') { return new FakeResponse('The field type is required.'); }
+        $object = $creating ? $this->newObject('msLink') : $this->getObject('msLink', array('id' => $data['id']));
+        if (!$object) { return new FakeResponse('Link type not found.'); }
+        foreach ($this->getCollection('msLink', array('name' => $name)) as $other) {
+            if ($creating || (string) $other->get('id') !== (string) $data['id']) { return new FakeResponse('A link type with this name already exists.'); }
+        }
+        $row = array('name' => $name, 'description' => array_key_exists('description', $data) ? $data['description'] : null);
+        if ($creating) { $row['type'] = trim((string) $data['type']); $row['id'] = $this->nextId('msLink'); }
+        $object->fromArray($row, '', true, true);
+        $object->save();
+        return new FakeResponse(null, $object->toArray());
+    }
+
+    /** msProductLinkCreateProcessor::addLink(): INSERT … ON DUPLICATE KEY UPDATE (a row that exists stays). */
+    private function ms2AddLink($link, $master, $slave) {
+        if ($link && $master && $slave && !$this->getCount('msProductLink', array('link' => $link, 'master' => $master, 'slave' => $slave))) {
+            $this->store('msProductLink', array('link' => $link, 'master' => $master, 'slave' => $slave));
+        }
+    }
+
+    /** msProductLinkCreateProcessor::process(), by link type. */
+    private function ms2ProductLinkCreate(array $data) {
+        $master = isset($data['master']) ? $data['master'] : 0;
+        $slave = isset($data['slave']) ? $data['slave'] : 0;
+        $link = isset($data['link']) ? $data['link'] : 0;
+        if (!$master || !$slave || !$link) { return new FakeResponse('A required field is missing.'); }
+        if ($master == $slave) { return new FakeResponse('A product cannot be linked to itself.'); }
+        $msLink = $this->getObject('msLink', array('id' => $link));
+        if (!$msLink) { return new FakeResponse('There is no such link type.'); }
+        switch ($msLink->get('type')) {
+            case 'many_to_many':
+                $this->ms2AddLink($link, $master, $slave);
+                $this->ms2AddLink($link, $slave, $master);
+                $slaves = array();
+                foreach ($this->getCollection('msProductLink', array('link' => $link, 'master:IN' => array($master, $slave))) as $row) { $slaves[(string) $row->get('slave')] = true; }
+                foreach (array_keys($slaves) as $v) { foreach (array_keys($slaves) as $v2) { if ((string) $v !== (string) $v2) { $this->ms2AddLink($link, $v, $v2); } } }
+                break;
+            case 'one_to_many': $this->ms2AddLink($link, $master, $slave); break;
+            case 'many_to_one': $this->ms2AddLink($link, $slave, $master); break;
+            case 'one_to_one': $this->ms2AddLink($link, $master, $slave); $this->ms2AddLink($link, $slave, $master); break;
+        }
+        return new FakeResponse(null);
+    }
+
+    /** msProductLinkRemoveProcessor::process(), by link type (many_to_many removes every row of the slave). */
+    private function ms2ProductLinkRemove(array $data) {
+        $link = isset($data['link']) ? $data['link'] : 0;
+        $master = isset($data['master']) ? $data['master'] : 0;
+        $slave = isset($data['slave']) ? $data['slave'] : 0;
+        if (!$link || !$master || !$slave) { return new FakeResponse('Wrong object key'); }
+        $msLink = $this->getObject('msLink', array('id' => $link));
+        if (!$msLink) { return new FakeResponse('There is no such link type.'); }
+        switch ($msLink->get('type')) {
+            case 'many_to_many':
+                $this->removeCollection('msProductLink', array('link' => $link, 'master' => $slave));
+                $this->removeCollection('msProductLink', array('link' => $link, 'slave' => $slave));
+                break;
+            case 'one_to_one':
+                $this->removeCollection('msProductLink', array('link' => $link, 'master' => $master, 'slave' => $slave));
+                $this->removeCollection('msProductLink', array('link' => $link, 'master' => $slave, 'slave' => $master));
+                break;
+            default:
+                $this->removeCollection('msProductLink', array('link' => $link, 'master' => $master, 'slave' => $slave));
+        }
+        $this->ms2Removed[] = array($link, $master, $slave);
+        return new FakeResponse(null);
+    }
+
+    public $ms2Removed = array();
+    /** E-mails miniShop2 "sent" (the fake service records them instead of mailing). */
+    public $sentMails = array();
+    public $services = array();
+    /** Like modX::getService(): only the miniShop2 service is modelled. */
+    public function getService($name, $class = '', $path = '') {
+        if ($name === 'miniShop2' && $this->ms2On()) {
+            if (!isset($this->services[$name])) { $this->services[$name] = new FakeMs2Service($this); }
+            return $this->services[$name];
+        }
+        return null;
+    }
+
     private function ms2OptionSave($creating, array $data) {
         $columns = array('key', 'caption', 'description', 'measure_unit', 'category', 'type', 'properties');
         $key = isset($data['key']) ? (string) $data['key'] : '';
@@ -360,6 +454,57 @@ trait FakeMiniShop2 {
             foreach ($this->getCollection('msProductOption', array('key' => $oldKey)) as $value) { $this->drop('msProductOption', $value->fields); $value->fields['key'] = $key; $this->store('msProductOption', $value->fields); }
         }
         return new FakeResponse(null, $object->toArray());
+    }
+}
+
+/**
+ * miniShop2::changeOrderStatus() of 3.0.7 as read in the source: the checks, the order log, the two events and the e-mails
+ * (recorded in modX::$sentMails). The options fake_ms2_before_refuse and fake_ms2_after_failure make a plugin answer the
+ * events with a failure; fake_ms2_throw_before_save / fake_ms2_throw_after_save make the service throw before or once the status is saved.
+ */
+class FakeMs2Service {
+    public $calls = array();
+    private $modx;
+    public function __construct(modX $modx) { $this->modx = $modx; }
+    public function changeOrderStatus($orderId, $statusId) {
+        $modx = $this->modx;
+        $this->calls[] = array($orderId, $statusId);
+        $order = $modx->getObject('msOrder', array('id' => $orderId), false);
+        if (!$order) { return 'Order not found.'; }
+        $error = '';
+        $status = $modx->getObject('msOrderStatus', array('id' => $statusId, 'active' => 1));
+        if (!$status) { $error = 'Status not found.'; }
+        else {
+            $old = $modx->getObject('msOrderStatus', array('id' => $order->get('status'), 'active' => 1));
+            if ($old) {
+                if ($old->get('final')) { $error = 'The order is in a final status.'; }
+                elseif ($old->get('fixed') && $status->get('rank') <= $old->get('rank')) { $error = 'The order is in a fixed status.'; }
+            }
+        }
+        if ($order->get('status') == $statusId) { $error = 'The order already has this status.'; }
+        if ($error !== '') { return $error; }
+        $modx->invokeEvent('msOnBeforeChangeOrderStatus');
+        if ($modx->getOption('fake_ms2_before_refuse')) { return (string) $modx->getOption('fake_ms2_before_refuse'); }
+        if ($modx->getOption('fake_ms2_throw_before_save')) { throw new RuntimeException((string) $modx->getOption('fake_ms2_throw_before_save')); }
+        $order->set('status', $statusId);
+        $order->save();
+        $modx->store('msOrderLog', array('id' => $modx->nextId('msOrderLog'), 'user_id' => $order->get('user_id'), 'order_id' => $orderId, 'timestamp' => date('Y-m-d H:i:s'),
+            'action' => 'status', 'entry' => (string) $statusId, 'ip' => '"203.0.113.7"'));
+        if ($modx->getOption('fake_ms2_throw_after_save')) { throw new RuntimeException((string) $modx->getOption('fake_ms2_throw_after_save')); }
+        $modx->invokeEvent('msOnChangeOrderStatus');
+        if ($modx->getOption('fake_ms2_after_failure')) { return (string) $modx->getOption('fake_ms2_after_failure'); }
+        if ($status->get('email_manager') && (string) $status->get('subject_manager') !== '') {
+            foreach (explode(',', (string) $modx->getOption('ms2_email_manager', null, $modx->getOption('emailsender'))) as $email) {
+                if (preg_match('#.*?@.*#', trim($email))) { $modx->sentMails[] = array('to' => trim($email), 'subject' => $status->get('subject_manager'), 'order' => $orderId); }
+            }
+        }
+        if ($status->get('email_user')) {
+            $profile = $modx->getObject('modUserProfile', array('internalKey' => $order->get('user_id')));
+            if ($profile && (string) $status->get('subject_user') !== '' && preg_match('#.*?@.*#', (string) $profile->get('email'))) {
+                $modx->sentMails[] = array('to' => $profile->get('email'), 'subject' => $status->get('subject_user'), 'order' => $orderId);
+            }
+        }
+        return true;
     }
 }
 
@@ -569,6 +714,8 @@ class modX extends xPDO {
         array('modNamespace', 'modLexiconEntry', 'namespace', array(), 'name'),
         // miniShop2: an option takes its category links (whose remove() deletes the product values of the category's products).
         array('msOption', 'msCategoryOption', 'option_id', array()),
+        // miniShop2: a link type takes its product links.
+        array('msLink', 'msProductLink', 'link', array()),
         // Access control: a policy removes its child policies; a template its permissions and policies (which remove theirs).
         array('modAccessPolicy', 'modAccessPolicy', 'parent', array()),
         array('modAccessPolicyTemplate', 'modAccessPermission', 'template', array()),
@@ -595,7 +742,7 @@ class modX extends xPDO {
     private function persist() { if ($this->file) { file_put_contents($this->file, json_encode($this->tables)); } }
     /** Primary key column(s) per class; rows of other classes are matched by id (or by their whole content without one). */
     public static $primaryKeys = array('modSystemSetting' => 'key', 'modContext' => 'key', 'modNamespace' => 'name', 'modContextSetting' => array('context_key', 'key'), 'modUserSetting' => array('user', 'key'), 'transport.modTransportPackage' => 'signature',
-        'msCategoryMember' => array('product_id', 'category_id'), 'msCategoryOption' => array('option_id', 'category_id'),
+        'msCategoryMember' => array('product_id', 'category_id'), 'msCategoryOption' => array('option_id', 'category_id'), 'msProductLink' => array('link', 'master', 'slave'),
         // xPDO class without a primary key: rows are told apart by their whole content.
         'msProductOption' => null);
     public static function primaryKey($class) { return array_key_exists($class, self::$primaryKeys) ? self::$primaryKeys[$class] : 'id'; }

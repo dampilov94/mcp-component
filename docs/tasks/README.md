@@ -58,7 +58,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 19 | [Packages](19-packages.md) | `task/19-packages` | merged |
 | 20 | [run_processor and query_db](20-escape-hatches.md) | `task/20-escape-hatches` | merged |
 | 21 | [miniShop2 products and options](21-minishop2-products.md) | `task/21-minishop2-products` | merged |
-| 22 | [miniShop2 links and orders](22-minishop2-links-orders.md) | `task/22-minishop2-links-orders` | ready for the executor |
+| 22 | [miniShop2 links and orders](22-minishop2-links-orders.md) | `task/22-minishop2-links-orders` | merged |
 
 ## Doing several briefs in a row
 

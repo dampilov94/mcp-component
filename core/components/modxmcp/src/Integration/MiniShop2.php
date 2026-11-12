@@ -43,6 +43,12 @@ final class MiniShop2 {
     /** Option types miniShop2 3.0.7 ships (processors/mgr/settings/option/types). */
     const OPTION_TYPES = array('checkbox', 'combo-boolean', 'combo-multiple', 'combo-options', 'combobox', 'datefield', 'numberfield', 'textarea', 'textfield');
 
+    /** Link types of msLink (the cases of the productlink processors; the map has no list). */
+    const LINK_TYPES = array('many_to_many', 'one_to_many', 'many_to_one', 'one_to_one');
+
+    /** Rows of product links that one operation may journal as a side effect (link-type cascades, many_to_many closures). */
+    const ROW_LIMIT = 1000;
+
     /** The integration is installed, its code is there and the group is not switched off for the site. */
     public static function siteAvailable(Context $context) {
         $caps = $context->capabilities;
@@ -78,5 +84,19 @@ final class MiniShop2 {
         if (!isset($modx->packages[self::PACKAGE]) || $modx->packages[self::PACKAGE]['path'] !== $model) {
             $modx->addPackage(self::PACKAGE, $model);
         }
+    }
+
+    /**
+     * The miniShop2 service (class miniShop2), for the one thing that only it does: changing the status of an order, which
+     * writes the order log, fires miniShop2's events and sends the e-mails. Its constructor registers the package and
+     * loads pdoTools; nothing else is initialised until changeOrderStatus() asks for the order's context.
+     */
+    public static function service(\modX $modx) {
+        self::load($modx);
+        $service = $modx->getService('miniShop2', 'miniShop2', self::corePath($modx) . 'model/minishop2/');
+        if (!is_object($service) || !method_exists($service, 'changeOrderStatus')) {
+            throw new \RuntimeException('The miniShop2 service could not be loaded.');
+        }
+        return $service;
     }
 }

@@ -144,6 +144,10 @@ After stage 3:
 - miniShop2: a product's data (`ms2_data`), option values (`ms2_options`) and extra categories
   (`ms2_categories`) are relations of the resource, journaled and undone with it; kind
   `ms2_option` with category assignment. Only present when miniShop2 is installed and enabled.
+- miniShop2: kinds `ms2_link`, `ms2_product_link` (every row the link type writes is
+  journaled), `ms2_order` (admin, read-only, operation `change_status` with a plan showing
+  whether e-mails go out; never undone) and `ms2_order_status`.
+- `modx_list` items of string-key kinds always carry their `key`.
 
 - Offline tests (`npm test`): pure PHP logic, the real kernel behind PHP's built-in server with
   stubbed MODX classes, and the Node bridge end to end. CI runs them.

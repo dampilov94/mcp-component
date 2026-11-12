@@ -30,7 +30,7 @@ const cfg = require(path.join(repo, ".mcp.json")).mcpServers.modx.env;
   const before = (await run("modx_site_info")).counts;
   const log0 = (await run("modx_read_log", { limit: 1 })).end_offset;
   for (const kind of ["resource", "ms2_option"]) {
-    if ((await run("modx_list", { kind, query: "mcp2test" })).total) throw new Error(`leftover mcp2test ${kind}; remove it first`);
+    if ((await run("modx_list", { kind, query: "mcp2test", ...(kind === "resource" ? { where: { deleted: false } } : {}) })).total) throw new Error(`leftover mcp2test ${kind}; remove it first`);
   }
 
   // Real catalogue: read only.
@@ -86,7 +86,7 @@ const cfg = require(path.join(repo, ".mcp.json")).mcpServers.modx.env;
 
   const back = await run("modx_undo", { to_checkpoint: checkpoint.checkpoint_id, confirm: true });
   assert.equal(back.performed, true, JSON.stringify(back).slice(0, 500));
-  for (const kind of ["resource", "ms2_option"]) assert.equal((await run("modx_list", { kind, query: "mcp2test" })).total, 0, `${kind} leftovers`);
+  for (const kind of ["resource", "ms2_option"]) assert.equal((await run("modx_list", { kind, query: "mcp2test", ...(kind === "resource" ? { where: { deleted: false } } : {}) })).total, 0, `${kind} leftovers`);
   assert.deepEqual((await run("modx_site_info")).counts, before);
   const log1 = await run("modx_read_log", { after_offset: log0 });
   step(`undo to checkpoint (${back.changesets.length} changesets): nothing left; new error-log entries: ${log1.returned}`);
