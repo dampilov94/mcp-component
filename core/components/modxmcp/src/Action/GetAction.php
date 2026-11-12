@@ -63,7 +63,10 @@ final class GetAction extends Action {
         }
         $relations = array();
         foreach ($kind->relationSpecs() as $name => $spec) {
-            if (empty($spec['delete_only']) && empty($spec['hidden'])) { $relations[$name] = $kind->presentRelation($context->modx, $object, $name); }
+            if (!empty($spec['delete_only']) || !empty($spec['hidden'])) { continue; }
+            // A relation that does not apply to this object, or that this token may not use, is absent.
+            if (!$kind->hasRelation($context->modx, $object, $name) || $kind->relationBlockReason($context, $name) !== null) { continue; }
+            $relations[$name] = $kind->presentRelation($context->modx, $object, $name);
         }
         // Values this token must not see are replaced (credentials of settings); flags such as "secret" are added.
         list($fields, $relations, $flags) = $kind->redact($context, $object, $fields, $relations);

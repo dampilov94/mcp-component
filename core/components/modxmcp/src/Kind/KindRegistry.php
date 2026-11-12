@@ -29,9 +29,16 @@ final class KindRegistry {
         ResourceGroupAccessKind::class,
         PackageKind::class,
         ProviderKind::class,
+        Ms2OptionKind::class,
     );
 
     private $kinds = null;
+    private $context;
+
+    /** @param Context|null $context given to the kinds that depend on the site (Kind::attach) */
+    public function __construct(Context $context = null) {
+        $this->context = $context;
+    }
 
     /** @return Kind[] keyed by kind name */
     public function all() {
@@ -39,6 +46,7 @@ final class KindRegistry {
             $this->kinds = array();
             foreach (self::KINDS as $class) {
                 $kind = new $class();
+                if ($this->context) { $kind->attach($this->context); }
                 $this->kinds[$kind->name()] = $kind;
             }
         }

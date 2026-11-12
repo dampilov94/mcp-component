@@ -25,6 +25,7 @@ final class Objects {
         if ($reason !== null) {
             throw new ApiException('unavailable', "Kind '{$name}' is unavailable: {$reason}.", array('reason' => $reason));
         }
+        $kind->prepare($context->modx);
         return $kind;
     }
 
@@ -85,7 +86,7 @@ final class Objects {
             }
             $type = $fields[$name]['type'];
             if ($type === 'object') {
-                $out[$kind->column($name)] = self::normalizeObject($kind, $name, $value);
+                $out[$kind->column($name)] = !empty($fields[$name]['json']) ? self::normalizeJson($name, $value) : self::normalizeObject($kind, $name, $value);
                 continue;
             }
             $ok = ($type === 'integer' && is_int($value)) || ($type === 'boolean' && is_bool($value)) || ($type === 'string' && is_string($value));
@@ -123,9 +124,21 @@ final class Objects {
         return $out;
     }
 
+    /** A field of type object with the json flag: any JSON object. Returns its JSON text (an empty object is "{}"). */
+    public static function normalizeJson($name, $value) {
+        if ($value instanceof \stdClass) { $value = json_decode(json_encode($value), true); }
+        if (!is_array($value) || ($value && array_keys($value) === range(0, count($value) - 1))) {
+            throw new ApiException('validation_failed', "Field '{$name}' must be a JSON object.");
+        }
+        return $value ? json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '{}';
+    }
+
     /** True when a stored value of a field equals the value a caller sent for it (maps compare as maps). */
     public static function sameValue(Kind $kind, $name, $stored, $value) {
         $fields = $kind->fields();
+        if ($fields[$name]['type'] === 'object' && !empty($fields[$name]['json'])) {
+            return Kind::canonicalJson($stored) === Kind::canonicalJson($value instanceof \stdClass || is_array($value) ? $value : null);
+        }
         if ($fields[$name]['type'] === 'object') {
             $a = (array) Kind::objectValue($stored);
             $b = $value instanceof \stdClass || is_array($value) ? (array) Kind::objectValue((array) $value) : null;
@@ -180,8 +193,8 @@ final class Objects {
     }
 
     /** Run a core processor and return its response; a processor error becomes validation_failed with its messages. */
-    public static function run(\modX $modx, $processor, array $data) {
-        $response = $modx->runProcessor($processor, $data);
+    public static function run(\modX $modx, $processor, array $data, array $options = array()) {
+        $response = $modx->runProcessor($processor, $data, $options);
         if (!$response) { throw new \RuntimeException("Processor {$processor} did not respond."); }
         if ($response->isError()) {
             $messages = array_filter(array_merge(array((string) $response->getMessage()), (array) $response->getAllErrors()));
@@ -192,8 +205,8 @@ final class Objects {
     }
 
     /** Run a core processor; a processor error becomes validation_failed with its messages. Returns the response object. */
-    public static function process(\modX $modx, $processor, array $data) {
-        $object = self::run($modx, $processor, $data)->getObject();
+    public static function process(\modX $modx, $processor, array $data, array $options = array()) {
+        $object = self::run($modx, $processor, $data, $options)->getObject();
         return is_array($object) ? $object : array();
     }
 
@@ -210,7 +223,7 @@ final class Objects {
         }
         if ($id === null) {
             $after = $kind->beforeCreate($context, $columns);
-            $created = self::process($modx, $kind->processorPath() . 'create', $kind->processorData('create', $columns + $kind->processorExtras('create')));
+            $created = self::process($modx, $kind->processorPath() . 'create', $kind->processorData('create', $columns + $kind->processorExtras('create')), $kind->processorOptions());
             $id = $kind->createdKey($created, $columns);
             $tx->created($kind, $id);
             if ($after) { $after($tx, $id); }
@@ -222,7 +235,7 @@ final class Objects {
                 // A write-only field (a password) is never sent back; its stored value is a hash.
                 if (empty($definition['derived']) && empty($definition['write_only'])) { $data[$kind->column($name)] = $kind->processorValue($object, $name); }
             }
-            self::process($modx, $kind->processorPath() . 'update', $kind->processorData('update', $columns + $data + $kind->processorExtras('update')));
+            self::process($modx, $kind->processorPath() . 'update', $kind->processorData('update', $columns + $data + $kind->processorExtras('update')), $kind->processorOptions());
         }
 
         $field = $kind->codeField();
@@ -256,12 +269,16 @@ final class Objects {
         return $id;
     }
 
-    /** Check that every named relation exists and can be written. */
-    public static function assertWritableRelations(Kind $kind, array $relations) {
+    /** Check that every named relation exists and can be written (and, given the context, that this token may use it). */
+    public static function assertWritableRelations(Kind $kind, array $relations, Context $context = null) {
         $specs = $kind->relationSpecs();
         foreach ($relations as $name => $value) {
             if (!isset($specs[$name]) || !empty($specs[$name]['delete_only'])) {
                 throw new ApiException('validation_failed', "Unknown relation '{$name}' for {$kind->name()}. See modx_describe.");
+            }
+            $blocked = $context ? $kind->relationBlockReason($context, $name) : null;
+            if ($blocked !== null) {
+                throw new ApiException('unavailable', "Relation '{$name}' of {$kind->name()} is unavailable: {$blocked}.", array('reason' => $blocked));
             }
             if (empty($specs[$name]['writable'])) {
                 throw new ApiException('validation_failed', "Relation '{$name}' of {$kind->name()} cannot be changed through the API.");

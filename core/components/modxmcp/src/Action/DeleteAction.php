@@ -61,7 +61,7 @@ final class DeleteAction extends WriteAction {
             }
             foreach ($kind->alsoAffected($context->modx, $id, array(), 'delete') as $other) { $tx->touch($kind, $other); }
             $staticPath = $kind->effectiveContent(Objects::resolveKey($context, $kind, $id))[2];
-            Objects::process($context->modx, $kind->processorPath() . $kind->deleteProcessor(), $kind->processorKey($id));
+            Objects::process($context->modx, $kind->processorPath() . $kind->deleteProcessor(), $kind->processorKey($id), $kind->processorOptions());
             StaticFiles::removeManaged($context->modx, $staticPath);
             $kind->afterWrite($context->modx);
             return array('result' => array(), 'summary' => "delete {$kind->name()} {$id} ({$label})");

@@ -29,7 +29,7 @@ final class CreateAction extends WriteAction {
         Objects::assertGenericWrites($kind);
         $columns = Objects::normalize($kind, $args['fields'], true);
         $relations = isset($args['relations']) ? $args['relations'] : array();
-        Objects::assertWritableRelations($kind, $relations);
+        Objects::assertWritableRelations($kind, $relations, $context);
         Objects::lint($context, $kind, $columns, !empty($args['skip_lint']));
         if ($this->isDryRun($args, $context)) {
             return $this->plan($context, array('kind' => $kind->name(), 'would_create' => array_keys($args['fields']), 'reversible' => true));

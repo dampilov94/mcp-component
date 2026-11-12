@@ -307,3 +307,42 @@ test("escape hatches: tools appear with the settings on", { skip: available ? fa
   assert.equal((await call(admin, "run_processor", { processor: "Resource/GetList" })).body.error.code, "validation_failed");
   assert.equal((await call(admin, "run_processor", { processor: "resource/getlist" })).body.error.code, "not_found");
 });
+
+test("miniShop2: the option kind and the product relations appear when it is installed", { skip: available ? false : "PHP with pdo_sqlite is not available" }, async (t) => {
+  const site = await startSite({ MODXMCP_TEST_MS2: "1" });
+  t.after(site.stop);
+  const { admin, read } = site.info.tokens;
+  const call = (token, action, args = {}) => site.post(token, { v: 2, action, args });
+  // 22 kinds without miniShop2 (see "kernel: wire protocol"), one more with it; readable by a read token.
+  const adminKinds = (await call(admin, "describe")).body.result.kinds.map((kind) => kind.kind);
+  assert.equal(adminKinds.length, 23);
+  assert.equal(adminKinds[adminKinds.length - 1], "ms2_option");
+  const readKinds = (await call(read, "describe")).body.result.kinds.map((kind) => kind.kind);
+  assert.equal(readKinds.length, 18);
+  assert.ok(readKinds.includes("ms2_option"));
+  const integration = (await call(read, "capabilities")).body.result.integrations.find((item) => item.key === "minishop2");
+  assert.equal(integration.available, true);
+
+  const option = (await call(admin, "create", { kind: "ms2_option", fields: { key: "brand", caption: "Бренд", properties: { values: ["Звезда", "Ёлка"] } } })).body;
+  assert.equal(option.ok, true, JSON.stringify(option));
+  const category = (await call(admin, "create", { kind: "resource", fields: { pagetitle: "Телефоны", class_key: "msCategory" } })).body.result;
+  const product = (await call(admin, "create", {
+    kind: "resource",
+    fields: { pagetitle: "Смартфон «Звезда»", class_key: "msProduct", parent: category.id },
+    relations: { ms2_data: { price: 1500, tags: ["новинка"] }, ms2_options: { brand: ["Ёлка"] } },
+  })).body;
+  assert.equal(product.ok, true, JSON.stringify(product));
+  const shown = (await call(read, "get", { kind: "resource", id: product.result.id })).body.result.relations;
+  assert.equal(shown.ms2_data.price, 1500);
+  assert.deepEqual(shown.ms2_data.tags, ["новинка"]);
+  assert.deepEqual(shown.ms2_options, { brand: ["Ёлка"] });
+  assert.deepEqual(shown.ms2_categories, []);
+  const plain = (await call(admin, "update", { kind: "resource", id: product.result.id, fields: { pagetitle: "Смартфон «Заря»" } })).body.result;
+  assert.deepEqual(plain.changed, ["pagetitle"]);
+  const after = (await call(read, "get", { kind: "resource", id: product.result.id })).body.result.relations;
+  assert.deepEqual(after.ms2_data, shown.ms2_data);
+  assert.deepEqual(after.ms2_options, shown.ms2_options);
+  const refused = (await call(admin, "update", { kind: "resource", id: product.result.id, relations: { ms2_options: { nonexistent: ["x"] } } })).body;
+  assert.equal(refused.error.code, "validation_failed");
+  assert.equal(refused.error.message, "Unknown miniShop2 option 'nonexistent'.");
+});

@@ -39,7 +39,7 @@ final class Context {
         $this->corePath = rtrim($corePath, '/\\') . '/';
         $this->capabilities = new Capabilities($modx);
         $this->actions = new Registry();
-        $this->kinds = new KindRegistry();
+        $this->kinds = new KindRegistry($this);
         $this->requestStoreFactory = $requestStoreFactory;
     }
 
