@@ -45,6 +45,12 @@ below) or append a `## Review` section to the brief with numbered change request
 | 06 | [modx_read_log](06-read-log.md) | `task/06-read-log` | merged |
 | 07 | [modx_maintenance](07-maintenance.md) | `task/07-maintenance` | merged |
 | 08 | [Access kinds](08-access-kinds.md) | `task/08-access-kinds` | merged |
+| 09 | [Usages in the delete dry run](09-delete-usages.md) | `task/09-delete-usages` | ready for the executor |
+| 10 | [modx_invoke and membership](10-invoke.md) | `task/10-invoke` | ready for the executor |
+| 11 | [TV operations](11-tv-operations.md) | `task/11-tv-operations` | ready for the executor |
+| 12 | [make_static and auto-static](12-make-static.md) | `task/12-make-static` | ready for the executor |
+| 13 | [modx_check_page](13-check-page.md) | `task/13-check-page` | ready for the executor |
+| 14 | [modx_dependency_graph](14-dependency-graph.md) | `task/14-dependency-graph` | ready for the executor |
 
 ## Doing several briefs in a row
 
@@ -62,6 +68,16 @@ simply accumulate. Rules for a stack:
   and list it under deviations;
 - if `main` moved because the architect merged something with changes, do not merge or
   rebase onto it yourself — keep stacking; the architect integrates.
+
+Lessons from briefs 01–08 (all of the architect's corrections came from these):
+
+- The fake MODX is ASCII-clean and tidy; real sites are not. Use Unicode-aware functions
+  for anything that compares or folds text (`mb_*`, `/u` patterns), and include Cyrillic
+  in your test data.
+- Do not add checks the brief does not ask for on return values of MODX calls: several
+  MODX methods return false in normal situations (e.g. `modCacheManager::refresh()`).
+- When MODX's real behaviour or data format matters, read it in `modx-example-2-8-8/`
+  rather than trusting the brief's summary, and say in the report where the two differ.
 
 Stop and report after each brief only if you are blocked; otherwise continue with the next
 one and tell the user at the end which branches are ready.
