@@ -542,6 +542,30 @@ check('usages: resource children and empty chunk extra', $call($usageRead, 'find
 $e = throws('usages: unsupported target', ApiException::class, function () use ($call, $usageRead) { $call($usageRead, 'find_usages', array('kind' => 'plugin', 'id' => 100)); });
 check('usages: unsupported lists supported targets', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'category') !== false);
 
+// Delete previews reuse the exact usage lookup without deleting or changing it.
+$usageAdmin = new Context($usageSite, array('scope' => 'admin') + $dev->token, $dev->corePath, function () {});
+$beforeUsages = json_encode($call($usageRead, 'find_usages', array('kind' => 'chunk', 'id' => 12)));
+$deleteUsed = $call($usageAdmin, 'delete', array('kind' => 'chunk', 'id' => 12, 'dry_run' => true));
+check('delete usages: users and compact warning', $deleteUsed['usages']['objects'] === 3 && !isset($deleteUsed['usages']['items'][0]['matches'])
+    && $deleteUsed['warning'] === 'Still used in 3 object(s); deleting it will break them.' && $usageSite->row('modChunk', 12) !== null);
+check('delete usages: standalone lookup unchanged', json_encode($call($usageRead, 'find_usages', array('kind' => 'chunk', 'id' => 12))) === $beforeUsages);
+$usageSite->store('modChunk', array('id' => 200, 'name' => 'Свободный чанк', 'snippet' => ''));
+$unusedDelete = $call($usageAdmin, 'delete', array('kind' => 'chunk', 'id' => 200, 'dry_run' => true));
+check('delete usages: unused object has no warning', $unusedDelete['usages']['objects'] === 0 && !isset($unusedDelete['warning']));
+foreach (array('template' => array(2, '23 resource(s) use this template.'), 'tv' => array(14, '2 resource(s) have a value for this TV.'),
+    'category' => array(3, 'The category is not empty.'), 'resource' => array(12, '1 child resource(s) go to the trash with it.')) as $kindName => $expect) {
+    $dryUsage = $call($usageAdmin, 'delete', array('kind' => $kindName, 'id' => $expect[0], 'dry_run' => true));
+    check('delete usages: structural warning ' . $kindName, strpos($dryUsage['warning'], $expect[1]) !== false);
+}
+$usageSite->store('modUserGroup', array('id' => 5, 'name' => 'Group'));
+foreach (array('plugin' => 100, 'user_group' => 5) as $kindName => $id) {
+    $dryUsage = $call($usageAdmin, 'delete', array('kind' => $kindName, 'id' => $id, 'dry_run' => true));
+    check('delete usages: unsupported kind omitted', !isset($dryUsage['usages']) && !isset($dryUsage['warning']));
+}
+$lookupDenied = new Context($usageSite, array('scope' => 'admin', 'denied_groups' => array('resources')) + $dev->token, $dev->corePath, function () {});
+$lookupFailure = $call($lookupDenied, 'delete', array('kind' => 'chunk', 'id' => 12, 'dry_run' => true));
+check('delete usages: lookup failure preserves dry run', $lookupFailure['dry_run'] && !isset($lookupFailure['usages']) && count($lookupDenied->warnings) === 1);
+
 // Read log is developer-only and reads the configured MODX cache path.
 mkdir($site->getCachePath() . 'logs', 0700, true);
 file_put_contents($site->getCachePath() . 'logs/error.log', "[2026-01-01 10:00:00] (ERROR @ fake) action log\n");

@@ -46,3 +46,18 @@ before (existing tests pass untouched).
 
 `npm run check`, `npm test`. Files: `src/Code/Usages.php` (new), `src/Action/FindUsagesAction.php`,
 `src/Action/DeleteAction.php`, tests.
+
+## Report
+
+Based on: main at e01492a
+
+- `Code/Usages.php`: extracted the existing lookup unchanged, with supports/find entry points.
+- `FindUsagesAction.php`: thin wrapper preserving output and existing tests.
+- `DeleteAction.php`: dry-run-only compact usages, structural/code warnings and lookup
+  failure isolation; actual deletion is unchanged.
+- `tests/php/run.php`: used/unused, all structural warning cases, unsupported kinds,
+  byte-identical standalone lookup and lookup failure; includes a Cyrillic name.
+- `npm run check` and `npm test` passed: 781 PHP checks, 24 Node/HTTP tests.
+
+No deviations. Only fake MODX/local files tested; verify real usage queries and dry-run
+warnings on the stand. No open questions, deployment or push.
