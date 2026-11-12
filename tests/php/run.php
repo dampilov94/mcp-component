@@ -120,7 +120,7 @@ foreach ($tools as $tool) {
     check("manifest: {$tool['name']} is read-only", $tool['effect']['read_only'] === true && $tool['effect']['destructive'] === false);
 }
 $all = array_column(Manifest::tools($context('admin')), null, 'name');
-check('manifest: full tool count', count($all) === 25);
+check('manifest: full tool count', count($all) === 26);
 check('manifest: duplicate is a reversible write after delete', $all['modx_duplicate']['effect']['read_only'] === false
     && $all['modx_duplicate']['effect']['reversible'] === true && $all['modx_duplicate']['effect']['destructive'] === false
     && array_search('modx_duplicate', array_keys($all), true) === array_search('modx_delete', array_keys($all), true) + 1);
@@ -358,6 +358,75 @@ unlink($searchFile);
 $missing = $call($dev, 'search', array('query' => 'Z search'))['results'][0];
 check('search: missing static file permits name-only hit', $missing['name_match'] && $missing['match_count'] === 0);
 foreach ($searchRows as $row) { $site->removeCollection($row[0], array('id' => $row[1]['id'])); }
+
+// Replace uses its own fake site so the history assertions below remain independent.
+$replaceDir = $siteDir . '/replace';
+mkdir($replaceDir . '/core', 0700, true);
+$replaceSite = fakeSite($replaceDir);
+$replaceDev = new Context($replaceSite, $dev->token, $dev->corePath, function () { throw new RuntimeException('no store'); });
+$replaceDev->sessionId = 'replace-session-0001';
+$replaceFile = $replaceDir . '/static.tpl';
+file_put_contents($replaceFile, 'replA replA');
+$replaceSite->store('modChunk', array('id' => 1, 'name' => 'replace a', 'snippet' => "replA\nreplA repla"));
+$replaceSite->store('modChunk', array('id' => 2, 'name' => 'replace static', 'snippet' => 'stale', 'static' => 1, 'static_file' => $replaceFile));
+$replaceSite->store('modSnippet', array('id' => 1, 'name' => 'replace php', 'snippet' => "return 'replA';"));
+foreach (array('chunk', 'snippet') as $kindName) {
+    $kind = $replaceDev->kinds->get($kindName);
+    $defaults = array();
+    foreach ($kind->fields() as $field => $definition) { $defaults[$kind->column($field)] = $definition['type'] === 'string' ? '' : 0; }
+    foreach ($replaceSite->getCollection($kind->modelClass()) as $object) { $replaceSite->store($kind->modelClass(), $object->toArray() + $defaults); }
+}
+$replaceArgs = array('find' => 'replA', 'replacement' => 'done');
+$plan = $call($replaceDev, 'replace', $replaceArgs + array('dry_run' => true));
+check('replace: dry run counts occurrences and supplies revisions', count($plan['objects']) === 3 && $plan['total_occurrences'] === 5
+    && !$plan['truncated'] && array_keys($plan['revisions']) === array('chunk:1', 'chunk:2', 'snippet:1')
+    && $plan['objects'][0]['matches'] === array(array('line' => 1, 'text' => 'replA'), array('line' => 2, 'text' => 'replA repla'))
+    && $replaceDev->journal()->lastChangesetId() === 0 && file_get_contents($replaceFile) === 'replA replA');
+check('replace: case-insensitive preview counts all casings', $call($replaceDev, 'replace', $replaceArgs + array('dry_run' => true, 'case_sensitive' => false))['total_occurrences'] === 6);
+check('replace: bounded preview', $call($replaceDev, 'replace', $replaceArgs + array('dry_run' => true, 'limit' => 1))['truncated']);
+$e = throws('replace: real run requires a reviewed map', ApiException::class, function () use ($call, $replaceDev, $replaceArgs) { $call($replaceDev, 'replace', $replaceArgs); });
+check('replace: missing map error', $e && $e->errorCode === 'validation_failed');
+$applied = $call($replaceDev, 'replace', $replaceArgs + array('expected_revisions' => $plan['revisions']));
+check('replace: one changeset replaces all reviewed objects', $applied['total_occurrences'] === 5 && $applied['changeset_id'] === 1
+    && count($replaceDev->journal()->changes(array(1))) === 3 && file_get_contents($replaceFile) === 'done done'
+    && $replaceSite->row('modChunk', 1)['snippet'] === "done\ndone repla");
+$call($replaceDev, 'undo', array('changeset_id' => 1, 'confirm' => true));
+check('replace: undo restores all objects including static file', file_get_contents($replaceFile) === 'replA replA'
+    && $call($replaceDev, 'get', array('kind' => 'chunk', 'id' => 1))['revision'] === $plan['revisions']['chunk:1']
+    && $call($replaceDev, 'get', array('kind' => 'snippet', 'id' => 1))['revision'] === $plan['revisions']['snippet:1']);
+$e = throws('replace: lint preflights every object', ApiException::class, function () use ($call, $replaceDev, $plan) {
+    $call($replaceDev, 'replace', array('find' => 'replA', 'replacement' => "'", 'expected_revisions' => $plan['revisions']));
+});
+check('replace: lint identifies object and leaves chunks untouched', $e && $e->errorCode === 'lint_failed' && $e->details['object'] === 'snippet:1'
+    && file_get_contents($replaceFile) === 'replA replA' && $replaceSite->row('modChunk', 1)['snippet'] === "replA\nreplA repla");
+$call($replaceDev, 'update', array('kind' => 'snippet', 'id' => 1, 'fields' => array('description' => 'changed since preview')));
+$e = throws('replace: stale revision refuses the whole batch', ApiException::class, function () use ($call, $replaceDev, $replaceArgs, $plan) {
+    $call($replaceDev, 'replace', $replaceArgs + array('expected_revisions' => $plan['revisions']));
+});
+check('replace: conflict names changed object', $e && $e->errorCode === 'revision_conflict' && $e->details['changed'] === array('snippet:1')
+    && file_get_contents($replaceFile) === 'replA replA');
+foreach (array('bad' => 'validation_failed', 'resource:1' => 'validation_failed', 'chunk:999' => 'not_found') as $key => $error) {
+    $e = throws('replace: invalid selection', ApiException::class, function () use ($call, $replaceDev, $replaceArgs, $key) {
+        $call($replaceDev, 'replace', $replaceArgs + array('expected_revisions' => array($key => str_repeat('0', 64))));
+    });
+    check('replace: selection error code', $e && $e->errorCode === $error);
+}
+$replacePlanOnly = new Context($replaceSite, array('plan_only' => true) + $dev->token, $dev->corePath, function () {});
+check('replace: plan-only forces preview', $call($replacePlanOnly, 'replace', $replaceArgs)['planned']);
+$e = throws('replace: content cannot write chunks', ApiException::class, function () use ($call, $actor, $replaceArgs) { $call($actor('content'), 'replace', $replaceArgs + array('dry_run' => true)); });
+check('replace: scope enforced during preview', $e && $e->errorCode === 'forbidden_scope');
+$insensitive = $call($replaceDev, 'replace', $replaceArgs + array('dry_run' => true, 'case_sensitive' => false));
+$done = $call($replaceDev, 'replace', $replaceArgs + array('expected_revisions' => $insensitive['revisions'], 'case_sensitive' => false));
+check('replace: insensitive real run', $done['total_occurrences'] === 6 && $replaceSite->row('modChunk', 1)['snippet'] === "done\ndone done");
+$zeroPlan = $call($replaceDev, 'replace', array('find' => 'done', 'replacement' => 'x', 'dry_run' => true));
+$zero = $call($replaceDev, 'replace', $replaceArgs + array('expected_revisions' => $zeroPlan['revisions']));
+check('replace: zero occurrences are returned without a changeset', $zero['total_occurrences'] === 0 && $zero['changeset_id'] === null && count($zero['objects']) === 3);
+unlink($replaceFile);
+$missingRevision = $call($replaceDev, 'get', array('kind' => 'chunk', 'id' => 2))['revision'];
+$e = throws('replace: missing static file is refused', ApiException::class, function () use ($call, $replaceDev, $replaceArgs, $missingRevision) {
+    $call($replaceDev, 'replace', $replaceArgs + array('expected_revisions' => array('chunk:2' => $missingRevision)));
+});
+check('replace: missing file identifies object', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'chunk:2') !== false);
 
 // History and diff
 $history = $call($dev, 'history', array('kind' => 'chunk', 'id' => 1));
