@@ -30,6 +30,7 @@ final class DuplicateAction extends WriteAction {
 
     public function run(array $args, Context $context) {
         $kind = Objects::kind($context, $args['kind'], true);
+        Objects::assertGenericWrites($kind);
         $source = Objects::resolve($context, $kind, $args);
         $sourceId = $kind->keyOf($source);
         $kind->assertObjectWritable($context->modx, $source, 'duplicate');

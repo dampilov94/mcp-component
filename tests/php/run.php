@@ -120,7 +120,7 @@ foreach ($tools as $tool) {
     check("manifest: {$tool['name']} is read-only", $tool['name'] === 'modx_invoke' || ($tool['effect']['read_only'] === true && $tool['effect']['destructive'] === false));
 }
 $all = array_column(Manifest::tools($context('admin')), null, 'name');
-check('manifest: full tool count', count($all) === 32);
+check('manifest: full tool count', count($all) === 34);
 check('manifest: duplicate is a reversible write after delete', $all['modx_duplicate']['effect']['read_only'] === false
     && $all['modx_duplicate']['effect']['reversible'] === true && $all['modx_duplicate']['effect']['destructive'] === false
     && array_search('modx_duplicate', array_keys($all), true) === array_search('modx_delete', array_keys($all), true) + 1);
@@ -133,7 +133,7 @@ check('manifest: encodes', is_string(json_encode($tools, JSON_THROW_ON_ERROR)));
 
 $describe = $read->actions->get('describe');
 $list = $describe->run(array(), $read);
-check('describe: lists element kinds', array_column($list['kinds'], 'kind') === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source', 'user_group', 'role', 'resource_group', 'system_setting', 'context', 'context_setting', 'namespace'));
+check('describe: lists element kinds', array_column($list['kinds'], 'kind') === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source', 'user_group', 'role', 'resource_group', 'system_setting', 'context', 'context_setting', 'namespace', 'package', 'provider'));
 $chunk = $describe->run(array('kind' => 'chunk'), $read);
 $fields = array_column($chunk['fields'], null, 'name');
 check('describe: chunk exposes content as code', !empty($fields['content']['code']) && $fields['name']['required'] === true && $fields['id']['read_only'] === true);
@@ -3250,6 +3250,392 @@ $gEdit = $call($aAdmin, 'update', array('kind' => 'resourcegroup_access', 'id' =
 $aSite->store('modAccessResourceGroup', array('principal' => '1') + $aRow('modAccessResourceGroup', $gRuleId));
 $aRefuse('undo of an edit of a resource group rule that now belongs to group 1', function () use ($call, $aAdmin, $gEdit) { $call($aAdmin, 'undo', array('changeset_id' => $gEdit['changeset_id'], 'confirm' => true, 'force' => true)); }, 'not_reversible');
 check('access: the Administrator resource group rule is untouched', $aRow('modAccessResourceGroup', 1) === $adminGroupRule);
+
+// --- Packages: kinds package and provider, tools install_package and uninstall_package (task 19) ---
+$pkDir = $siteDir . '/packages';
+mkdir($pkDir . '/core', 0700, true);
+$pSite = fakeSite($pkDir);
+$pActor = function ($scope, array $token = array()) use ($pSite, $dev) {
+    $c = new Context($pSite, $token + array('scope' => $scope) + $dev->token, $dev->corePath, function () {});
+    $c->sessionId = 'session-package001';
+    return $c;
+};
+$pAdmin = $pActor('admin');
+$pPlan = $pActor('admin', array('plan_only' => true));
+$pPlant = function ($signature, $name, $installed, $provider = 1) use ($pSite) {
+    $parts = explode('-', $signature);
+    $version = explode('.', $parts[1]);
+    $release = isset($parts[2]) ? preg_split('/([0-9]+)/', $parts[2], -1, PREG_SPLIT_DELIM_CAPTURE) : array('', '0');
+    $pSite->store('transport.modTransportPackage', array('signature' => $signature, 'created' => '2026-01-01 00:00:00', 'updated' => null, 'installed' => $installed, 'state' => 1,
+        'workspace' => 1, 'provider' => $provider, 'disabled' => 0, 'source' => $signature . '.transport.zip', 'package_name' => $name,
+        'manifest' => '[]', 'attributes' => '[]', 'metadata' => '[]',
+        'version_major' => $version[0], 'version_minor' => $version[1], 'version_patch' => $version[2], 'release' => $release[0], 'release_index' => isset($release[1]) ? $release[1] : '0'));
+};
+$pSite->store('transport.modTransportProvider', array('id' => 1, 'name' => 'modx.com', 'description' => 'The official provider', 'service_url' => 'https://rest.modx.com/extras/', 'username' => '', 'api_key' => '', 'active' => 1, 'priority' => 10));
+$pSite->store('transport.modTransportProvider', array('id' => 2, 'name' => 'modstore.pro', 'description' => '', 'service_url' => 'https://modstore.pro/extras/', 'username' => 'shop-owner', 'api_key' => 'live-key-123', 'active' => 1, 'priority' => 5));
+$pPlant('pdotools-2.13.1-pl', 'pdoTools', '2026-01-05 10:00:00');
+$pPlant('formit-5.0.2-pl', 'FormIt', '2026-01-06 11:00:00');
+$pPlant('modxmcp-2.0.0-pl', 'modxMCP', '2026-01-07 12:00:00', 0);
+$pPlant('migx-2.13.0-pl', 'MIGX', null);
+$pPlant('каталог-1.2.0-beta1', 'Каталог', null, 2);
+$pPlant('zero-1.0.0-pl', 'Zero', '0000-00-00 00:00:00');
+$pPlant('sneaky-1.0.0-pl', 'modxMCP', null);          // another signature, but the package name is modxMCP's
+$pRowOf = function ($name, $version, $release, $description = 'Description', $downloads = '1,234') {
+    $signature = mb_strtolower($name, 'UTF-8') . '-' . $version . '-' . $release;
+    return array('id' => crc32($signature), 'name' => $name, 'version' => $version, 'release' => $release, 'version-compiled' => $version . '-' . $release, 'signature' => $signature,
+        'description' => $description, 'downloads' => $downloads, 'location' => 'https://example.invalid/download/' . $signature);
+};
+$longText = str_repeat('Очень длинное описание. ', 30);
+$pSite->providerCatalog[1] = array(
+    $pRowOf('pdoTools', '2.13.1', 'pl'), $pRowOf('pdoTools', '2.13.2', 'pl', '<p>Fast <b>chunks</b> &amp; snippets. ' . $longText . '</p>'), $pRowOf('pdoTools', '2.13.3', 'rc'),
+    $pRowOf('FormIt', '5.0.2', 'pl'), $pRowOf('Галерея', '1.0.0', 'pl', 'Фото'), $pRowOf('modxMCP', '2.0.1', 'pl'), $pRowOf('Tickets', '3.0.0', 'pl', 'Comments'),
+    $pRowOf('modxMCP-fork', '1.0.0', 'pl'),
+);
+$pSite->providerCatalog[2] = array($pRowOf('Tickets', '4.0.0', 'pl', 'Comments of modstore'));
+$pTables = function () use ($pSite) { return json_encode(array($pSite->tableDump('transport.modTransportPackage'), $pSite->tableDump('transport.modTransportProvider'))); };
+$pLast = function () use ($pAdmin) { return $pAdmin->journal()->lastChangesetId(); };
+$pCalls = function () use ($pSite) { return array_column($pSite->packageCalls, 0); };
+// A refused call: the right error, no changeset, the workspace and the providers as they were, and exactly the expected processor calls.
+$pRefuse = function ($label, callable $fn, $code = 'validation_failed', $message = null, $calls = 0) use ($pTables, $pLast, $pSite) {
+    $tables = $pTables();
+    $last = $pLast();
+    $before = count($pSite->packageCalls);
+    $e = throws("package: {$label}", ApiException::class, $fn);
+    check("package: {$label} is {$code} and changes nothing", $e && $e->errorCode === $code && $pLast() === $last && $pTables() === $tables
+        && count($pSite->packageCalls) - $before === $calls && ($message === null || strpos($e->getMessage(), $message) !== false));
+    return $e;
+};
+
+// ---- kind package: read only ----
+$pkDescribe = $call($pAdmin, 'describe', array('kind' => 'package'));
+check('package: describe', $pkDescribe['group'] === 'package_management' && $pkDescribe['read_scope'] === 'read' && $pkDescribe['write_scope'] === 'admin' && $pkDescribe['key_type'] === 'string'
+    && $pkDescribe['key_field'] === 'key' && $pkDescribe['name_field'] === 'signature' && $pkDescribe['generic_writes'] === false
+    && array_column($pkDescribe['fields'], 'name') === array('signature', 'package_name', 'version', 'installed', 'provider', 'source', 'updated', 'workspace'));
+$pkList = $call($pActor('read'), 'list', array('kind' => 'package'));
+$pkSignatures = array_column($pkList['items'], 'signature');
+sort($pkSignatures);
+check('package: a read token lists the workspace, installed or only downloaded', $pkList['total'] === 7
+    && $pkSignatures === array('formit-5.0.2-pl', 'migx-2.13.0-pl', 'modxmcp-2.0.0-pl', 'pdotools-2.13.1-pl', 'sneaky-1.0.0-pl', 'zero-1.0.0-pl', 'каталог-1.2.0-beta1')
+    && array_keys($pkList['items'][0]) === array('signature', 'package_name', 'version', 'installed'));
+$pkItems = array_column($pkList['items'], null, 'signature');
+check('package: computed version, installed datetime, "" for downloaded or never installed', $pkItems['pdotools-2.13.1-pl']['version'] === '2.13.1-pl' && $pkItems['pdotools-2.13.1-pl']['installed'] === '2026-01-05 10:00:00'
+    && $pkItems['migx-2.13.0-pl']['installed'] === '' && $pkItems['zero-1.0.0-pl']['installed'] === '' && $pkItems['каталог-1.2.0-beta1']['version'] === '1.2.0-beta1'
+    && $pkItems['каталог-1.2.0-beta1']['package_name'] === 'Каталог');
+check('package: query and where', array_column($call($pActor('read'), 'list', array('kind' => 'package', 'query' => 'pdo'))['items'], 'signature') === array('pdotools-2.13.1-pl')
+    && array_column($call($pActor('read'), 'list', array('kind' => 'package', 'query' => 'тал'))['items'], 'signature') === array('каталог-1.2.0-beta1')
+    && $call($pActor('read'), 'list', array('kind' => 'package', 'where' => array('provider' => 2)))['total'] === 1);
+$pRefuse('where on the computed version', function () use ($call, $pAdmin) { $call($pAdmin, 'list', array('kind' => 'package', 'where' => array('version' => '2.13.1-pl'))); });
+$pkGot = $call($pActor('read'), 'get', array('kind' => 'package', 'key' => 'pdotools-2.13.1-pl'));
+check('package: get by signature', $pkGot['key'] === 'pdotools-2.13.1-pl' && $pkGot['fields']['version'] === '2.13.1-pl' && $pkGot['fields']['provider'] === 1 && $pkGot['fields']['workspace'] === 1
+    && $pkGot['fields']['updated'] === '' && preg_match('/^[a-f0-9]{64}$/', $pkGot['revision']) === 1);
+check('package: get by name is the signature', $call($pActor('read'), 'get', array('kind' => 'package', 'name' => 'migx-2.13.0-pl'))['fields']['package_name'] === 'MIGX');
+$pRefuse('get by numeric id', function () use ($call, $pAdmin) { $call($pAdmin, 'get', array('kind' => 'package', 'id' => 1)); });
+$pRefuse('get of a missing package', function () use ($call, $pAdmin) { $call($pAdmin, 'get', array('kind' => 'package', 'key' => 'nope-1.0.0-pl')); }, 'not_found');
+$pkMessage = 'Packages are installed and removed with modx_install_package / modx_uninstall_package.';
+foreach (array(
+    'create' => array('kind' => 'package', 'fields' => array('package_name' => 'X')),
+    'create (dry run)' => array('kind' => 'package', 'fields' => array('package_name' => 'X'), 'dry_run' => true),
+    'update' => array('kind' => 'package', 'key' => 'pdotools-2.13.1-pl', 'fields' => array('provider' => 2)),
+    'update (dry run)' => array('kind' => 'package', 'key' => 'pdotools-2.13.1-pl', 'fields' => array('provider' => 2), 'dry_run' => true),
+    'delete' => array('kind' => 'package', 'key' => 'migx-2.13.0-pl'),
+    'delete (dry run)' => array('kind' => 'package', 'key' => 'migx-2.13.0-pl', 'dry_run' => true),
+    'duplicate' => array('kind' => 'package', 'key' => 'migx-2.13.0-pl'),
+    'duplicate (dry run)' => array('kind' => 'package', 'key' => 'migx-2.13.0-pl', 'dry_run' => true),
+) as $label => $args) {
+    $action = explode(' ', $label)[0];
+    $pRefuse("admin {$label} of a package", function () use ($call, $pAdmin, $action, $args) { $call($pAdmin, $action, $args); }, 'validation_failed', $pkMessage);
+    $pRefuse("plan-only {$label} of a package", function () use ($call, $pPlan, $action, $args) { $call($pPlan, $action, $args); }, 'validation_failed', $pkMessage);
+}
+$pRefuse('create of a package by a develop token', function () use ($call, $pActor) { $call($pActor('develop'), 'create', array('kind' => 'package', 'fields' => array('package_name' => 'X'))); }, 'forbidden_scope');
+check('package: the kind is never in the journal', $pAdmin->journal()->changesets(array('kind' => 'package'), 50) === array() && $pLast() === 0);
+
+// ---- kind provider ----
+$prDescribe = $call($pAdmin, 'describe', array('kind' => 'provider'));
+$prFields = array_column($prDescribe['fields'], null, 'name');
+check('provider: describe', $prDescribe['group'] === 'package_management' && $prDescribe['read_scope'] === 'read' && $prDescribe['write_scope'] === 'admin' && $prDescribe['key_type'] === 'integer'
+    && $prDescribe['name_field'] === 'name' && array_column($prDescribe['fields'], 'name') === array('id', 'name', 'service_url', 'description', 'username', 'api_key', 'priority')
+    && $prFields['name']['required'] === true && $prFields['service_url']['required'] === true && !isset($prDescribe['generic_writes'])
+    && array_column($prDescribe['operations'], 'op') === array('search') && $prDescribe['operations'][0]['read_only'] === true);
+$prCreated = $call($pAdmin, 'create', array('kind' => 'provider', 'fields' => array('name' => 'Провайдер Ёлка', 'service_url' => 'https://elka.example/extras/', 'username' => 'ёлка', 'api_key' => 'elka-key-001', 'description' => 'Мой', 'priority' => 3)));
+$prId = $prCreated['id'];
+check('provider: create is journaled', is_int($prId) && $prCreated['changeset_id'] !== null && $prCreated['reversible'] === true
+    && $pSite->row('transport.modTransportProvider', $prId)['api_key'] === 'elka-key-001' && $pSite->row('transport.modTransportProvider', $prId)['name'] === 'Провайдер Ёлка');
+$prAdminGet = $call($pAdmin, 'get', array('kind' => 'provider', 'id' => $prId));
+check('provider: an admin token sees the api key', $prAdminGet['fields']['api_key'] === 'elka-key-001' && $prAdminGet['secret'] === true && $prAdminGet['fields']['name'] === 'Провайдер Ёлка');
+foreach (array('read', 'content', 'develop') as $scope) {
+    $get = $call($pActor($scope), 'get', array('kind' => 'provider', 'id' => $prId));
+    $list = $call($pActor($scope), 'list', array('kind' => 'provider', 'fields' => array('name', 'api_key', 'username')));
+    $listedKeys = array_column($list['items'], 'api_key');
+    sort($listedKeys);
+    check("provider: a {$scope} token gets [hidden] in get and list", $get['fields']['api_key'] === '[hidden]' && $get['secret'] === true && $get['fields']['username'] === 'ёлка'
+        && strpos(json_encode($get), 'elka-key-001') === false && strpos(json_encode($list), 'live-key-123') === false && strpos(json_encode($list), 'elka-key-001') === false
+        && $listedKeys === array('', '[hidden]', '[hidden]'));
+    $e = throws("provider: {$scope} token cannot write", ApiException::class, function () use ($call, $pActor, $scope, $prId) { $call($pActor($scope), 'update', array('kind' => 'provider', 'id' => $prId, 'fields' => array('priority' => 1))); });
+    check("provider: {$scope} token write is forbidden_scope", $e && $e->errorCode === 'forbidden_scope');
+}
+$pRefuse('filtering providers by api_key', function () use ($call, $pActor) { $call($pActor('read'), 'list', array('kind' => 'provider', 'where' => array('api_key' => 'live-key-123'))); });
+check('provider: query and where on name', array_column($call($pActor('read'), 'list', array('kind' => 'provider', 'query' => 'айдер'))['items'], 'id') === array($prId)
+    && array_column($call($pActor('read'), 'list', array('kind' => 'provider', 'where' => array('name' => 'modx.com')))['items'], 'id') === array(1));
+$prDiff = $call($pAdmin, 'history_diff', array('changeset_id' => $prCreated['changeset_id']));
+check('provider: the create diff hides the api key even for an admin token', $prDiff['objects'][0]['changed']['api_key'] === array('old' => '[hidden]', 'new' => '[hidden]')
+    && $prDiff['objects'][0]['changed']['name']['new'] === 'Провайдер Ёлка' && strpos(json_encode($prDiff), 'elka-key-001') === false);
+$prUpdated = $call($pAdmin, 'update', array('kind' => 'provider', 'id' => $prId, 'expected_revision' => $prAdminGet['revision'], 'fields' => array('api_key' => 'elka-key-002', 'priority' => 4)));
+check('provider: update sends the whole record', $prUpdated['changed'] === array('api_key', 'priority') && $pSite->row('transport.modTransportProvider', $prId)['api_key'] === 'elka-key-002'
+    && $pSite->row('transport.modTransportProvider', $prId)['username'] === 'ёлка' && $pSite->row('transport.modTransportProvider', $prId)['description'] === 'Мой');
+$prUpdateDiff = $call($pAdmin, 'history_diff', array('changeset_id' => $prUpdated['changeset_id']));
+check('provider: the update diff hides the api key, old and new', $prUpdateDiff['objects'][0]['changed']['api_key'] === array('old' => '[hidden]', 'new' => '[hidden]')
+    && $prUpdateDiff['objects'][0]['changed']['priority'] === array('old' => '3', 'new' => '4') && strpos(json_encode($prUpdateDiff), 'elka-key') === false);
+$pRefuse('update to a url the provider cannot verify', function () use ($call, $pAdmin, $prId) { $call($pAdmin, 'update', array('kind' => 'provider', 'id' => $prId, 'fields' => array('service_url' => 'https://unverified.example/'))); }, 'validation_failed', 'could not be verified');
+$pRefuse('create without a service url', function () use ($call, $pAdmin) { $call($pAdmin, 'create', array('kind' => 'provider', 'fields' => array('name' => 'Bare'))); }, 'validation_failed', 'service_url');
+$call($pAdmin, 'undo', array('changeset_id' => $prUpdated['changeset_id'], 'confirm' => true));
+check('provider: undo of the update restores the real api key', $pSite->row('transport.modTransportProvider', $prId)['api_key'] === 'elka-key-001' && $pSite->row('transport.modTransportProvider', $prId)['priority'] === '3');
+$prCopy = $call($pAdmin, 'duplicate', array('kind' => 'provider', 'id' => $prId, 'new_name' => 'Копия Ёлки'));
+check('provider: duplicate copies the key for an admin', $pSite->row('transport.modTransportProvider', $prCopy['id'])['api_key'] === 'elka-key-001' && $prCopy['name'] === 'Копия Ёлки');
+$pRefuse('duplicate by a develop token', function () use ($call, $pActor, $prId) { $call($pActor('develop'), 'duplicate', array('kind' => 'provider', 'id' => $prId, 'new_name' => 'Leak')); }, 'forbidden_scope');
+$prDeleted = $call($pAdmin, 'delete', array('kind' => 'provider', 'id' => $prCopy['id']));
+check('provider: delete removes the row', $pSite->row('transport.modTransportProvider', $prCopy['id']) === null && $prDeleted['deleted'] === true);
+$call($pAdmin, 'undo', array('changeset_id' => $prDeleted['changeset_id'], 'confirm' => true));
+check('provider: undo of the delete brings it back with its key and id', $pSite->row('transport.modTransportProvider', $prCopy['id'])['api_key'] === 'elka-key-001');
+$call($pAdmin, 'undo', array('changeset_id' => $prCopy['changeset_id'], 'confirm' => true));
+$call($pAdmin, 'undo', array('changeset_id' => $prCreated['changeset_id'], 'confirm' => true, 'force' => true));
+check('provider: undo of the creates removes both again', $pSite->row('transport.modTransportProvider', $prId) === null && $pSite->row('transport.modTransportProvider', $prCopy['id']) === null);
+
+// ---- the search operation of a provider ----
+$pSite->packageCalls = array();
+$pBeforeSearch = $pLast();
+$pSearch = $call($pActor('read'), 'invoke', array('kind' => 'provider', 'id' => 1, 'op' => 'search', 'args' => array('query' => 'pdo')));
+check('provider search: a read token searches the catalogue', $pSearch['kind'] === 'provider' && $pSearch['op'] === 'search' && $pSearch['id'] === 1 && $pSearch['total'] === 3 && count($pSearch['items']) === 3
+    && array_keys($pSearch['items'][0]) === array('name', 'signature', 'version', 'description', 'downloads', 'installed') && $pCalls() === array('workspace/packages/rest/getlist')
+    && $pSite->packageCalls[0][1] === array('provider' => 1, 'query' => 'pdo', 'limit' => 20, 'start' => 0));
+check('provider search: version, downloads and installed flag', $pSearch['items'][0]['version'] === '2.13.1-pl' && $pSearch['items'][0]['installed'] === true && $pSearch['items'][1]['installed'] === false
+    && $pSearch['items'][1]['downloads'] === 1234 && $pSearch['items'][2]['version'] === '2.13.3-rc');
+check('provider search: the description is plain text of at most 300 characters', mb_strlen($pSearch['items'][1]['description'], 'UTF-8') === 300 && strpos($pSearch['items'][1]['description'], '<') === false
+    && strpos($pSearch['items'][1]['description'], 'Fast chunks & snippets. Очень') === 0 && mb_substr($pSearch['items'][1]['description'], -1, 1, 'UTF-8') === '…');
+check('provider search: Cyrillic query, limit and start', array_column($call($pActor('read'), 'invoke', array('kind' => 'provider', 'id' => 1, 'op' => 'search', 'args' => array('query' => 'галер')))['items'], 'name') === array('Галерея')
+    && count($call($pActor('read'), 'invoke', array('kind' => 'provider', 'id' => 1, 'op' => 'search', 'args' => array('query' => 'pdo', 'limit' => 1, 'start' => 1)))['items']) === 1);
+check('provider search: nothing is journaled', $pLast() === $pBeforeSearch);
+$pRefuse('search without a query', function () use ($call, $pActor) { $call($pActor('read'), 'invoke', array('kind' => 'provider', 'id' => 1, 'op' => 'search', 'args' => new stdClass())); });
+$pRefuse('search of an unknown provider', function () use ($call, $pActor) { $call($pActor('read'), 'invoke', array('kind' => 'provider', 'id' => 99, 'op' => 'search', 'args' => array('query' => 'x'))); }, 'not_found');
+$pSite->failProcessor = 'workspace/packages/rest/getlist';
+$pRefuse('search when the provider cannot be reached', function () use ($call, $pActor) { $call($pActor('read'), 'invoke', array('kind' => 'provider', 'id' => 1, 'op' => 'search', 'args' => array('query' => 'x'))); }, 'validation_failed', 'Simulated failure', 1);
+$pSite->failProcessor = null;
+
+// ---- install_package: input, plan, plan-only token ----
+$pStart = $pLast();
+$pSite->packageCalls = array();
+$pTablesBefore = $pTables();
+$pPlanned = $call($pAdmin, 'install_package', array('package_name' => 'pdotools'));
+check('install: without confirm only the plan comes back', $pPlanned['performed'] === false && $pPlanned['signature'] === 'pdotools-2.13.2-pl' && $pPlanned['version'] === '2.13.2-pl' && $pPlanned['provider'] === 1
+    && $pPlanned['provider_name'] === 'modx.com' && $pPlanned['needs_download'] === true && $pPlanned['replaces'] === array('signature' => 'pdotools-2.13.1-pl', 'version' => '2.13.1-pl')
+    && $pPlanned['reversible'] === false && strpos($pPlanned['warning'], 'modx_undo') !== false && strpos($pPlanned['warning'], 'modx_uninstall_package') !== false && strpos($pPlanned['warning'], 'resolvers') !== false
+    && strpos($pPlanned['warning'], 'upgrades the installed pdotools-2.13.1-pl') !== false && !isset($pPlanned['planned']));
+check('install: the plan ran the search and nothing else; the newest stable release is chosen', $pCalls() === array('workspace/packages/rest/getlist') && $pTables() === $pTablesBefore && $pLast() === $pStart);
+$pSite->packageCalls = array();
+$pPlanToken = $call($pPlan, 'install_package', array('package_name' => 'pdoTools', 'confirm' => true));
+check('install: a plan-only token never installs, even with confirm: true', $pPlanToken['performed'] === false && $pPlanToken['planned'] === true && $pPlanToken['signature'] === 'pdotools-2.13.2-pl'
+    && $pCalls() === array('workspace/packages/rest/getlist') && $pTables() === $pTablesBefore && $pLast() === $pStart);
+check('install: a pre-release only when its version is asked for', $call($pAdmin, 'install_package', array('package_name' => 'pdoTools', 'version' => '2.13.3'))['signature'] === 'pdotools-2.13.3-rc'
+    && $call($pAdmin, 'install_package', array('package_name' => 'pdoTools', 'version' => '2.13.3-rc'))['signature'] === 'pdotools-2.13.3-rc'
+    && $call($pAdmin, 'install_package', array('package_name' => 'pdoTools', 'version' => '2.13.2'))['version'] === '2.13.2-pl');
+$pSite->packageCalls = array();
+$pTickets = $call($pAdmin, 'install_package', array('package_name' => 'Tickets'));
+check('install: the default provider is modx.com', $pTickets['provider'] === 1 && $pTickets['signature'] === 'tickets-3.0.0-pl' && $pTickets['replaces'] === null && $pSite->packageCalls[0][1]['provider'] === 1);
+$pTickets2 = $call($pAdmin, 'install_package', array('package_name' => 'Tickets', 'provider' => 2));
+check('install: another provider by id', $pTickets2['provider'] === 2 && $pTickets2['provider_name'] === 'modstore.pro' && $pTickets2['signature'] === 'tickets-4.0.0-pl' && $pTickets2['version'] === '4.0.0-pl');
+$pSite->providerCatalog[3] = array();
+$pSite->store('transport.modTransportProvider', array('id' => 3, 'name' => 'Другой', 'description' => '', 'service_url' => 'https://other.example/', 'username' => '', 'api_key' => '', 'active' => 1, 'priority' => 1));
+$pSite->packageCalls = array();
+$pByName = $call($pAdmin, 'install_package', array('package_name' => 'ГАЛЕРЕЯ'));
+check('install: package names match without regard to case, Cyrillic too', $pByName['signature'] === 'галерея-1.0.0-pl' && $pByName['package_name'] === 'Галерея' && $pByName['needs_download'] === true);
+$pRefuse('a package the provider does not have', function () use ($call, $pAdmin) { $call($pAdmin, 'install_package', array('package_name' => 'Nonexistent')); }, 'not_found', null, 1);
+$pRefuse('a version the provider does not have', function () use ($call, $pAdmin) { $call($pAdmin, 'install_package', array('package_name' => 'pdoTools', 'version' => '9.9.9')); }, 'not_found', '9.9.9', 1);
+$pRefuse('an unknown provider id', function () use ($call, $pAdmin) { $call($pAdmin, 'install_package', array('package_name' => 'Tickets', 'provider' => 99)); }, 'not_found');
+$pRefuse('a provider that does not have the package', function () use ($call, $pAdmin) { $call($pAdmin, 'install_package', array('package_name' => 'Tickets', 'provider' => 3)); }, 'not_found', null, 1);
+$pRefuse('neither signature nor package_name', function () use ($call, $pAdmin) { $call($pAdmin, 'install_package', array('confirm' => true)); });
+$pRefuse('both signature and package_name', function () use ($call, $pAdmin) { $call($pAdmin, 'install_package', array('signature' => 'migx-2.13.0-pl', 'package_name' => 'MIGX')); });
+$pRefuse('a signature with a version', function () use ($call, $pAdmin) { $call($pAdmin, 'install_package', array('signature' => 'migx-2.13.0-pl', 'version' => '2.13.0')); });
+$pRefuse('a signature that is not downloaded', function () use ($call, $pAdmin) { $call($pAdmin, 'install_package', array('signature' => 'nothing-1.0.0-pl')); }, 'not_found');
+$pRefuse('a package that is already installed (by signature)', function () use ($call, $pAdmin) { $call($pAdmin, 'install_package', array('signature' => 'formit-5.0.2-pl', 'confirm' => true)); }, 'validation_failed', 'already installed');
+$pRefuse('a package that is already installed (by name)', function () use ($call, $pAdmin) { $call($pAdmin, 'install_package', array('package_name' => 'FormIt', 'confirm' => true)); }, 'validation_failed', 'already installed', 1);
+$pRefuse('an installed version asked for again', function () use ($call, $pAdmin) { $call($pAdmin, 'install_package', array('package_name' => 'pdoTools', 'version' => '2.13.1-pl')); }, 'validation_failed', 'already installed', 1);
+$pSite->packageCalls = array();
+$pDownloaded = $call($pAdmin, 'install_package', array('signature' => 'migx-2.13.0-pl'));
+check('install: a downloaded package needs no download and no search', $pDownloaded['performed'] === false && $pDownloaded['needs_download'] === false && $pDownloaded['version'] === '2.13.0-pl'
+    && $pDownloaded['package_name'] === 'MIGX' && $pDownloaded['replaces'] === null && $pCalls() === array());
+check('install: a package whose recorded installation date is all zeros counts as not installed', $call($pAdmin, 'install_package', array('signature' => 'zero-1.0.0-pl'))['performed'] === false);
+check('install: a case-different signature finds the downloaded package', $call($pAdmin, 'install_package', array('signature' => 'MIGX-2.13.0-PL'))['signature'] === 'migx-2.13.0-pl');
+
+// ---- install_package: modxMCP itself, on every path ----
+$pOwnCases = array(
+    'the installed package by signature' => array('signature' => 'modxmcp-2.0.0-pl'),
+    'a signature in other case that is not in the workspace' => array('signature' => 'ModxMCP-9.9.9-pl'),
+    'a downloaded package whose recorded name is modxMCP' => array('signature' => 'sneaky-1.0.0-pl'),
+    'the name modxMCP' => array('package_name' => 'modxMCP'),
+    'the name in capitals' => array('package_name' => 'MODXMCP'),
+    'a version of it' => array('package_name' => 'modxMCP', 'version' => '2.0.1-pl', 'provider' => 1),
+);
+foreach ($pOwnCases as $label => $args) {
+    foreach (array('' => array(), ' with confirm' => array('confirm' => true)) as $suffix => $more) {
+        $pRefuse("install of {$label}{$suffix}", function () use ($call, $pAdmin, $args, $more) { $call($pAdmin, 'install_package', $args + $more); }, 'validation_failed', 'cannot install, replace or remove itself');
+        $pRefuse("plan-only install of {$label}{$suffix}", function () use ($call, $pPlan, $args, $more) { $call($pPlan, 'install_package', $args + $more); }, 'validation_failed', 'cannot install, replace or remove itself');
+    }
+}
+$pSite->providerCatalog[1][] = array('name' => 'Другое имя', 'version' => '3.0.0', 'release' => 'pl', 'version-compiled' => '3.0.0-pl', 'signature' => 'modxmcp-3.0.0-pl', 'description' => 'Bad row',
+    'downloads' => '1', 'location' => 'https://example.invalid/x');
+$pRefuse('a provider row that is named otherwise but has modxMCP\'s signature', function () use ($call, $pAdmin) { $call($pAdmin, 'install_package', array('package_name' => 'Другое имя', 'confirm' => true)); }, 'validation_failed', 'cannot install, replace or remove itself', 1);
+check('install: a package merely starting with modxmcp- is not modxMCP', $call($pAdmin, 'install_package', array('package_name' => 'modxMCP-fork'))['signature'] === 'modxmcp-fork-1.0.0-pl');
+
+// ---- install_package: confirmed ----
+$pSite->packageCalls = array();
+$pSite->packageLogLines = array('Resolver warning: таблица modx_catalog не найдена');
+$pRefreshes = $pSite->getCacheManager()->refreshes;
+$pBefore = $pLast();
+$pInstalled = $call($pAdmin, 'install_package', array('package_name' => 'pdoTools', 'confirm' => true));
+check('install: confirm searches, downloads, installs, then refreshes the cache', $pCalls() === array('workspace/packages/rest/getlist', 'workspace/packages/rest/download', 'workspace/packages/install')
+    && $pSite->packageCalls[1][1] === array('info' => 'https://example.invalid/download/pdotools-2.13.2-pl::pdotools-2.13.2-pl', 'provider' => 1)
+    && $pSite->packageCalls[2][1] === array('signature' => 'pdotools-2.13.2-pl') && $pSite->getCacheManager()->refreshes === $pRefreshes + 1);
+check('install: the result names what was installed', $pInstalled['performed'] === true && $pInstalled['signature'] === 'pdotools-2.13.2-pl' && $pInstalled['installed'] === '2026-02-03 04:05:06'
+    && $pInstalled['version'] === '2.13.2-pl' && $pInstalled['needs_download'] === true && $pInstalled['replaces']['signature'] === 'pdotools-2.13.1-pl' && $pInstalled['reversible'] === false
+    && $pSite->row('transport.modTransportPackage', 'pdotools-2.13.2-pl')['installed'] === '2026-02-03 04:05:06' && in_array('The install cannot be undone by modx_undo; remove the package with modx_uninstall_package.', $pAdmin->warnings, true));
+check('install: the error-log entries written during the install come back', $pInstalled['log']['new_entries'] === 1 && $pInstalled['log']['entries'][0]['level'] === 'ERROR'
+    && strpos($pInstalled['log']['entries'][0]['message'], 'таблица modx_catalog не найдена') !== false && $pInstalled['log']['truncated'] === false);
+check('install: one changeset, no change rows', $pInstalled['changeset_id'] === $pBefore + 1 && $pLast() === $pBefore + 1 && $pAdmin->journal()->changes(array($pInstalled['changeset_id'])) === array());
+$pHistory = $call($pAdmin, 'history', array('limit' => 1))['changesets'][0];
+check('install: modx_history shows it as irreversible and without objects', $pHistory['changeset_id'] === $pInstalled['changeset_id'] && $pHistory['summary'] === 'install package pdotools-2.13.2-pl' && $pHistory['reversible'] === false
+    && $pHistory['tool'] === 'install_package' && $pHistory['source'] === 'mcp' && $pHistory['status'] === 'committed' && $pHistory['objects'] === array() && $pHistory['this_session'] === true);
+$pHistoryDiff = $call($pAdmin, 'history_diff', array('changeset_id' => $pInstalled['changeset_id']));
+check('install: modx_history_diff works for it with no objects', $pHistoryDiff['objects'] === array() && $pHistoryDiff['summary'] === 'install package pdotools-2.13.2-pl' && $pHistoryDiff['tool'] === 'install_package');
+$pRefuse('installing it again', function () use ($call, $pAdmin) { $call($pAdmin, 'install_package', array('package_name' => 'pdoTools', 'confirm' => true)); }, 'validation_failed', 'already installed', 1);
+check('install: the package list shows it installed', $call($pActor('read'), 'get', array('kind' => 'package', 'key' => 'pdotools-2.13.2-pl'))['fields']['installed'] === '2026-02-03 04:05:06');
+
+// The informational changeset is skipped by every bulk selection and cannot be undone by id; other undos work across it.
+$pCheckpoint = $call($pAdmin, 'checkpoint', array('label' => 'around an install'))['checkpoint_id'];
+$pBefore = $call($pAdmin, 'create', array('kind' => 'provider', 'fields' => array('name' => 'Before', 'service_url' => 'https://before.example/')));
+$pSite->packageLogLines = array();
+$pSite->packageCalls = array();
+$pMigx = $call($pAdmin, 'install_package', array('signature' => 'migx-2.13.0-pl', 'confirm' => true));
+check('install: a downloaded package is installed without download or search', $pMigx['performed'] === true && $pMigx['needs_download'] === false && $pMigx['log']['new_entries'] === 0 && $pMigx['log']['entries'] === array()
+    && $pCalls() === array('workspace/packages/install') && $pMigx['installed'] === '2026-02-03 04:05:06');
+$pAfter = $call($pAdmin, 'create', array('kind' => 'provider', 'fields' => array('name' => 'After', 'service_url' => 'https://after.example/')));
+$pUndoInstall = $pMigx['changeset_id'];
+$pRefuse('undo of the install by changeset id', function () use ($call, $pAdmin, $pUndoInstall) { $call($pAdmin, 'undo', array('changeset_id' => $pUndoInstall)); }, 'not_reversible', 'only records');
+$pRefuse('confirmed undo of the install by changeset id', function () use ($call, $pAdmin, $pUndoInstall) { $call($pAdmin, 'undo', array('changeset_id' => $pUndoInstall, 'confirm' => true, 'force' => true)); }, 'not_reversible', 'only records');
+$pUndoLast = $call($pAdmin, 'undo', array('last' => 2, 'confirm' => true));
+check('install: undo last 2 skips the install and undoes the two changes around it', $pUndoLast['performed'] === true && $pUndoLast['changesets'] === array($pAfter['changeset_id'], $pBefore['changeset_id'])
+    && $pSite->row('transport.modTransportProvider', $pAfter['id']) === null && $pSite->row('transport.modTransportProvider', $pBefore['id']) === null);
+$pHistoryById = array_column($call($pAdmin, 'history', array('limit' => 10))['changesets'], null, 'changeset_id');
+check('install: the install changeset is still committed and the package still installed', $pHistoryById[$pUndoInstall]['status'] === 'committed' && $pHistoryById[$pUndoInstall]['reversible'] === false
+    && !isset($pHistoryById[$pUndoInstall]['undone_by']) && $pSite->row('transport.modTransportPackage', 'migx-2.13.0-pl')['installed'] === '2026-02-03 04:05:06');
+$pToCheckpoint = $call($pAdmin, 'undo', array('to_checkpoint' => $pCheckpoint, 'confirm' => true));
+check('install: undo to a checkpoint finds nothing to undo but the install', $pToCheckpoint['performed'] === false && $pToCheckpoint['changesets'] === array() && $pToCheckpoint['objects'] === array());
+$pSessionUndo = $call($pAdmin, 'undo', array('this_session' => true));
+check('install: undo of this session does not list it either', !in_array($pUndoInstall, $pSessionUndo['changesets'], true) && !in_array($pInstalled['changeset_id'], $pSessionUndo['changesets'], true));
+
+// ---- install_package: failures leave a record ----
+$pSite->packageCalls = array();
+$pSite->failProcessor = 'workspace/packages/rest/download';
+$pFail = throws('package: a failing download', ApiException::class, function () use ($call, $pAdmin) { $call($pAdmin, 'install_package', array('package_name' => 'Tickets', 'confirm' => true)); });
+check('install: a failing download is the processor\'s message, with the log and a changeset', $pFail && $pFail->errorCode === 'validation_failed' && strpos($pFail->getMessage(), 'Simulated failure') !== false
+    && isset($pFail->details['log']['entries']) && is_int($pFail->details['changeset_id']) && $pSite->row('transport.modTransportPackage', 'tickets-3.0.0-pl') === null
+    && $pAdmin->journal()->changeset($pFail->details['changeset_id'])['summary'] === 'install package tickets-3.0.0-pl (failed)' && $pAdmin->journal()->changeset($pFail->details['changeset_id'])['reversible'] === false
+    && $pCalls() === array('workspace/packages/rest/getlist', 'workspace/packages/rest/download'));
+$pSite->failProcessor = 'workspace/packages/install';
+$pFail = throws('package: a failing install', ApiException::class, function () use ($call, $pAdmin) { $call($pAdmin, 'install_package', array('signature' => 'zero-1.0.0-pl', 'confirm' => true)); });
+check('install: a failing install is reported and recorded; the package stays not installed', $pFail && $pFail->errorCode === 'validation_failed' && strpos($pFail->getMessage(), 'Simulated failure') !== false
+    && $pAdmin->journal()->changeset($pFail->details['changeset_id'])['summary'] === 'install package zero-1.0.0-pl (failed)' && $pSite->row('transport.modTransportPackage', 'zero-1.0.0-pl')['installed'] === '0000-00-00 00:00:00');
+$pSite->failProcessor = null;
+$pSite->packageLogLines = array();
+$pSite->packageCalls = array();
+$pGallery = $call($pAdmin, 'install_package', array('package_name' => 'Галерея', 'confirm' => true));
+check('install: Cyrillic package name end to end', $pGallery['performed'] === true && $pGallery['signature'] === 'галерея-1.0.0-pl' && $pSite->row('transport.modTransportPackage', 'галерея-1.0.0-pl')['package_name'] === 'Галерея'
+    && $pSite->row('transport.modTransportPackage', 'галерея-1.0.0-pl')['installed'] === '2026-02-03 04:05:06');
+
+// ---- install and uninstall: scopes, tools, groups ----
+foreach (array('read', 'content', 'develop') as $scope) {
+    foreach (array('install_package' => array('package_name' => 'Tickets'), 'uninstall_package' => array('signature' => 'formit-5.0.2-pl')) as $action => $args) {
+        $e = throws("package: {$scope} token, {$action}", ApiException::class, function () use ($call, $pActor, $scope, $action, $args) { $call($pActor($scope), $action, $args); });
+        check("package: {$scope} token cannot {$action}", $e && $e->errorCode === 'forbidden_scope'
+            && !in_array('modx_' . $action, array_column(Manifest::tools($pActor($scope)), 'name'), true));
+    }
+}
+$pTools = array_column(Manifest::tools($pAdmin), null, 'name');
+check('package: the manifest marks both tools destructive and irreversible', $pTools['modx_install_package']['effect'] === array('read_only' => false, 'destructive' => true, 'reversible' => false, 'open_world' => true)
+    && $pTools['modx_uninstall_package']['effect'] === array('read_only' => false, 'destructive' => true, 'reversible' => false, 'open_world' => false)
+    && $pTools['modx_install_package']['scope'] === 'admin' && $pTools['modx_install_package']['group'] === 'package_management'
+    && array_search('modx_install_package', array_keys($pTools), true) === array_search('modx_maintenance', array_keys($pTools), true) + 1);
+$pSite->options['modxmcp.disabled_groups'] = 'package_management';
+$pOffTools = array_column(Manifest::tools($pAdmin), 'name');
+check('package: with the group disabled both tools leave the manifest', !in_array('modx_install_package', $pOffTools, true) && !in_array('modx_uninstall_package', $pOffTools, true));
+foreach (array('install_package' => array('package_name' => 'Tickets', 'confirm' => true), 'uninstall_package' => array('signature' => 'formit-5.0.2-pl', 'confirm' => true)) as $action => $args) {
+    $e = throws("package: disabled group, {$action}", ApiException::class, function () use ($call, $pAdmin, $action, $args) { $call($pAdmin, $action, $args); });
+    check("package: {$action} is unavailable when the group is off", $e && $e->errorCode === 'unavailable');
+}
+foreach (array('package', 'provider') as $kindName) {
+    foreach (array('list' => array('kind' => $kindName), 'describe' => array('kind' => $kindName), 'get' => array('kind' => $kindName, 'key' => 'formit-5.0.2-pl', 'id' => 1)) as $action => $args) {
+        if ($kindName === 'package') { unset($args['id']); } else { unset($args['key']); }
+        $e = throws("package: disabled group, {$action} {$kindName}", ApiException::class, function () use ($call, $pAdmin, $action, $args) { $call($pAdmin, $action, $args); });
+        check("package: kind {$kindName} is unavailable for {$action} when the group is off", $e && $e->errorCode === 'unavailable');
+    }
+}
+$e = throws('package: disabled group, provider search', ApiException::class, function () use ($call, $pActor) { $call($pActor('read'), 'invoke', array('kind' => 'provider', 'id' => 1, 'op' => 'search', 'args' => array('query' => 'x'))); });
+check('package: the search is unavailable when the group is off', $e && $e->errorCode === 'unavailable');
+check('package: the kinds leave the kind list', count(array_intersect(array('package', 'provider'), array_column($call($pAdmin, 'describe')['kinds'], 'kind'))) === 0);
+$pSite->options['modxmcp.disabled_groups'] = '';
+check('package: and come back when it is enabled', count(array_intersect(array('package', 'provider'), array_column($call($pAdmin, 'describe')['kinds'], 'kind'))) === 2);
+
+// ---- uninstall_package ----
+$pSite->packageCalls = array();
+$pTablesBefore = $pTables();
+$pStart = $pLast();
+$pUPlan = $call($pAdmin, 'uninstall_package', array('signature' => 'formit-5.0.2-pl'));
+check('uninstall: without confirm only the plan comes back', $pUPlan['performed'] === false && $pUPlan['signature'] === 'formit-5.0.2-pl' && $pUPlan['package_name'] === 'FormIt' && $pUPlan['version'] === '5.0.2-pl'
+    && $pUPlan['installed'] === '2026-01-06 11:00:00' && $pUPlan['will_uninstall'] === true && $pUPlan['will_remove'] === false && $pUPlan['reversible'] === false
+    && strpos($pUPlan['warning'], 'resolvers') !== false && strpos($pUPlan['warning'], 'modx_undo') !== false && !isset($pUPlan['planned']));
+$pUPlanToken = $call($pPlan, 'uninstall_package', array('signature' => 'formit-5.0.2-pl', 'remove' => true, 'confirm' => true));
+check('uninstall: a plan-only token never uninstalls, even with confirm: true', $pUPlanToken['performed'] === false && $pUPlanToken['planned'] === true && $pUPlanToken['will_remove'] === true
+    && $pCalls() === array() && $pTables() === $pTablesBefore && $pLast() === $pStart);
+check('uninstall: a package that is only downloaded can be planned for removal', $call($pAdmin, 'uninstall_package', array('signature' => 'каталог-1.2.0-beta1', 'remove' => true))['will_uninstall'] === false
+    && $call($pAdmin, 'uninstall_package', array('signature' => 'каталог-1.2.0-beta1', 'remove' => true))['will_remove'] === true && $pCalls() === array());
+$pRefuse('uninstalling a package that is not installed', function () use ($call, $pAdmin) { $call($pAdmin, 'uninstall_package', array('signature' => 'каталог-1.2.0-beta1', 'confirm' => true)); }, 'validation_failed', 'not installed');
+$pRefuse('uninstalling an unknown package', function () use ($call, $pAdmin) { $call($pAdmin, 'uninstall_package', array('signature' => 'nothing-1.0.0-pl', 'confirm' => true)); }, 'not_found');
+foreach (array(
+    'the installed package' => array('signature' => 'modxmcp-2.0.0-pl'),
+    'its signature in other case, not in the workspace' => array('signature' => 'MODXMCP-1.0.0-pl'),
+    'a downloaded package whose recorded name is modxMCP' => array('signature' => 'sneaky-1.0.0-pl', 'remove' => true),
+) as $label => $args) {
+    foreach (array('' => array(), ' with confirm' => array('confirm' => true), ' with remove and confirm' => array('remove' => true, 'confirm' => true)) as $suffix => $more) {
+        $pRefuse("uninstall of {$label}{$suffix}", function () use ($call, $pAdmin, $args, $more) { $call($pAdmin, 'uninstall_package', $more + $args); }, 'validation_failed', 'cannot install, replace or remove itself');
+        $pRefuse("plan-only uninstall of {$label}{$suffix}", function () use ($call, $pPlan, $args, $more) { $call($pPlan, 'uninstall_package', $more + $args); }, 'validation_failed', 'cannot install, replace or remove itself');
+    }
+}
+$pSite->packageLogLines = array('Uninstall resolver: файлы удалены');
+$pBefore = $pLast();
+$pUninstalled = $call($pAdmin, 'uninstall_package', array('signature' => 'formit-5.0.2-pl', 'confirm' => true));
+check('uninstall: confirm runs the uninstall processor', $pCalls() === array('workspace/packages/uninstall') && $pSite->packageCalls[0][1] === array('signature' => 'formit-5.0.2-pl')
+    && $pUninstalled['performed'] === true && $pUninstalled['uninstalled'] === true && $pUninstalled['removed'] === false && $pUninstalled['installed'] === '' && $pUninstalled['reversible'] === false
+    && $pSite->row('transport.modTransportPackage', 'formit-5.0.2-pl')['installed'] === null);
+check('uninstall: the log entries come back and one changeset without changes is recorded', $pUninstalled['log']['new_entries'] === 1 && strpos($pUninstalled['log']['entries'][0]['message'], 'файлы удалены') !== false
+    && $pUninstalled['changeset_id'] === $pBefore + 1 && $pAdmin->journal()->changes(array($pUninstalled['changeset_id'])) === []
+    && $call($pAdmin, 'history', array('limit' => 1))['changesets'][0]['summary'] === 'uninstall package formit-5.0.2-pl' && $call($pAdmin, 'history', array('limit' => 1))['changesets'][0]['reversible'] === false);
+$pRefuse('undo of the uninstall by changeset id', function () use ($call, $pAdmin, $pUninstalled) { $call($pAdmin, 'undo', array('changeset_id' => $pUninstalled['changeset_id'], 'confirm' => true)); }, 'not_reversible');
+$pSite->packageCalls = array();
+$pSite->packageLogLines = array();
+$pRemoved = $call($pAdmin, 'uninstall_package', array('signature' => 'pdotools-2.13.1-pl', 'remove' => true, 'confirm' => true));
+check('uninstall: with remove the package is uninstalled and then deleted', $pCalls() === array('workspace/packages/uninstall', 'workspace/packages/remove') && $pRemoved['uninstalled'] === true && $pRemoved['removed'] === true
+    && $pSite->row('transport.modTransportPackage', 'pdotools-2.13.1-pl') === null && $pRemoved['installed'] === ''
+    && $pAdmin->journal()->changeset($pRemoved['changeset_id'])['summary'] === 'uninstall package pdotools-2.13.1-pl and remove it');
+$pSite->packageCalls = array();
+$pRemovedOnly = $call($pAdmin, 'uninstall_package', array('signature' => 'каталог-1.2.0-beta1', 'remove' => true, 'confirm' => true));
+check('uninstall: a downloaded package is only removed', $pCalls() === array('workspace/packages/remove') && $pRemovedOnly['uninstalled'] === false && $pRemovedOnly['removed'] === true
+    && $pSite->row('transport.modTransportPackage', 'каталог-1.2.0-beta1') === null);
+$pSite->packageCalls = array();
+$pSite->failProcessor = 'workspace/packages/uninstall';
+$pFail = throws('package: a failing uninstall', ApiException::class, function () use ($call, $pAdmin) { $call($pAdmin, 'uninstall_package', array('signature' => 'pdotools-2.13.2-pl', 'remove' => true, 'confirm' => true)); });
+check('uninstall: a failure stops before remove, is reported with the log and recorded', $pFail && $pFail->errorCode === 'validation_failed' && strpos($pFail->getMessage(), 'Simulated failure') !== false
+    && $pCalls() === array('workspace/packages/uninstall') && $pSite->row('transport.modTransportPackage', 'pdotools-2.13.2-pl')['installed'] === '2026-02-03 04:05:06'
+    && $pAdmin->journal()->changeset($pFail->details['changeset_id'])['summary'] === 'uninstall package pdotools-2.13.2-pl and remove it (failed)' && isset($pFail->details['log']['entries']));
+$pSite->failProcessor = null;
+check('package: nothing in the whole section ever put a package into the journal', $pAdmin->journal()->changesets(array('kind' => 'package'), 100) === array());
 
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));

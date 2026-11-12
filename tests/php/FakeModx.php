@@ -127,6 +127,9 @@ class FakeResponse {
     public function getMessage() { return (string) $this->error; }
     public function getAllErrors() { return array(); }
     public function getObject() { return $this->object; }
+    /** The raw response body of list processors (a JSON string), as modProcessorResponse::getResponse() returns it. */
+    public $body = null;
+    public function getResponse() { return $this->body; }
 }
 class FakeCache {
     public $refreshes = 0;
@@ -217,8 +220,101 @@ trait FakeResourceProcessors {
     }
 }
 
+/**
+ * Stand-in for the package processors (workspace/packages/*, workspace/providers/*): they do what the real ones do in
+ * outline, record what they were asked ($packageCalls) and never touch the network. Provider catalogues are
+ * $providerCatalog (provider id => rows as modTransportProvider::find() returns them).
+ */
+trait FakePackageProcessors {
+    public $packageCalls = array();
+    public $providerCatalog = array();
+    /** Lines the next install/uninstall appends to the error log, like a resolver that reports a problem. */
+    public $packageLogLines = array();
+
+    private function logLines() {
+        $path = $this->getCachePath() . 'logs/error.log';
+        if (!is_dir(dirname($path))) { mkdir(dirname($path), 0700, true); }
+        foreach ($this->packageLogLines as $line) { file_put_contents($path, '[2026-02-03 04:05:06] (ERROR @ /core/package.php : 1) ' . $line . "\n", FILE_APPEND); }
+    }
+    private function listResponse(array $results, $total) {
+        $response = new FakeResponse(null);
+        $response->body = json_encode(array('success' => true, 'message' => '', 'total' => $total, 'results' => $results));
+        return $response;
+    }
+    private function providerProcessor($action, array $data) {
+        if ($action === 'remove') {
+            $provider = $this->getObject('transport.modTransportProvider', array('id' => $data['id']));
+            if (!$provider) { return new FakeResponse('Provider not found.'); }
+            $provider->remove();
+            return new FakeResponse(null, array('id' => $data['id']));
+        }
+        $provider = $action === 'create' ? $this->newObject('transport.modTransportProvider') : $this->getObject('transport.modTransportProvider', array('id' => $data['id']));
+        if (!$provider) { return new FakeResponse('Provider not found.'); }
+        if (empty($data['name'])) { return new FakeResponse('Please specify a name.'); }
+        if (empty($data['service_url'])) { return new FakeResponse('Please specify the service URL.'); }
+        // modTransportProvider::verify() asks the provider service; the fake knows one address that fails.
+        if (strpos($data['service_url'], 'unverified') !== false) { return new FakeResponse('The provider could not be verified.'); }
+        foreach ($this->getCollection('transport.modTransportProvider', array('name' => $data['name'])) as $other) {
+            if ($action === 'create' || (string) $other->get('id') !== (string) $data['id']) { return new FakeResponse('A provider with that name already exists.'); }
+        }
+        if ($action === 'create') { $data += array('description' => '', 'username' => '', 'api_key' => '', 'active' => 1, 'priority' => 10, 'properties' => '', 'created' => '2026-01-01 00:00:00'); }
+        $provider->fromArray($data, '', false, true);
+        $provider->save();
+        return new FakeResponse(null, array('id' => $provider->get('id')));
+    }
+    public function packageProcessor($path, array $data) {
+        if (strpos($path, 'workspace/providers/') === 0) { return $this->providerProcessor(basename($path), $data); }
+        $this->packageCalls[] = array($path, $data);
+        if ($this->failProcessor === $path) { return new FakeResponse('Simulated failure of ' . $path . '.'); }
+        $action = substr($path, strlen('workspace/packages/'));
+        if ($action === 'rest/getlist') {
+            if (!$this->getObject('transport.modTransportProvider', array('id' => isset($data['provider']) ? $data['provider'] : 0))) { return new FakeResponse('The provider was not found.'); }
+            $rows = array();
+            foreach (isset($this->providerCatalog[$data['provider']]) ? $this->providerCatalog[$data['provider']] : array() as $row) {
+                if ($data['query'] === '' || mb_stripos($row['name'] . ' ' . $row['description'], $data['query'], 0, 'UTF-8') !== false) { $rows[] = $row; }
+            }
+            return $this->listResponse(array_slice($rows, (int) $data['start'], (int) $data['limit']), count($rows));
+        }
+        if ($action === 'rest/download') {
+            list($location, $signature) = explode('::', $data['info'], 2);
+            foreach ($this->providerCatalog[$data['provider']] as $row) {
+                if ($row['signature'] !== $signature) { continue; }
+                if ($row['location'] !== $location) { return new FakeResponse('Could not get the download URL.'); }
+                $parts = explode('-', $signature);
+                $version = explode('.', $parts[1]);
+                $release = isset($parts[2]) ? preg_split('/([0-9]+)/', $parts[2], -1, PREG_SPLIT_DELIM_CAPTURE) : array('', '0');
+                $this->store('transport.modTransportPackage', array(
+                    'signature' => $signature, 'created' => '2026-02-03 04:05:06', 'updated' => null, 'installed' => null, 'state' => 1, 'workspace' => 1,
+                    'provider' => $data['provider'], 'disabled' => 0, 'source' => $signature . '.transport.zip', 'package_name' => $row['name'],
+                    'version_major' => $version[0], 'version_minor' => $version[1], 'version_patch' => $version[2],
+                    'release' => $release[0], 'release_index' => isset($release[1]) ? $release[1] : '0',
+                ));
+                return new FakeResponse(null, array('signature' => $signature));
+            }
+            return new FakeResponse('Could not download the package.');
+        }
+        $package = $this->getObject('transport.modTransportPackage', array('signature' => isset($data['signature']) ? $data['signature'] : ''));
+        if (!$package) { return new FakeResponse('Package not found.'); }
+        $installed = $package->get('installed') !== null && $package->get('installed') !== '';
+        if ($action === 'install') {
+            $package->set('installed', '2026-02-03 04:05:06');
+            $package->save();
+            $this->logLines();
+            return new FakeResponse(null);
+        }
+        if ($action === 'uninstall' || $action === 'remove') {
+            // The real remove processor uninstalls first when the package is still installed.
+            if ($installed) { $package->set('installed', null); $package->save(); $this->logLines(); }
+            if ($action === 'remove') { $package->remove(); }
+            return new FakeResponse(null);
+        }
+        return null;
+    }
+}
+
 class modX extends xPDO {
     use FakeResourceProcessors;
+    use FakePackageProcessors;
     public $maintenanceProcessors = array();
     const LOG_LEVEL_ERROR = 1;
     public $user;
@@ -266,7 +362,7 @@ class modX extends xPDO {
     }
     private function persist() { if ($this->file) { file_put_contents($this->file, json_encode($this->tables)); } }
     /** Primary key column(s) per class; rows of other classes are matched by id (or by their whole content without one). */
-    public static $primaryKeys = array('modSystemSetting' => 'key', 'modContext' => 'key', 'modNamespace' => 'name', 'modContextSetting' => array('context_key', 'key'), 'modUserSetting' => array('user', 'key'));
+    public static $primaryKeys = array('modSystemSetting' => 'key', 'modContext' => 'key', 'modNamespace' => 'name', 'modContextSetting' => array('context_key', 'key'), 'modUserSetting' => array('user', 'key'), 'transport.modTransportPackage' => 'signature');
     public static function primaryKey($class) { return isset(self::$primaryKeys[$class]) ? self::$primaryKeys[$class] : 'id'; }
     /** The identity of a row as one string, or null when a primary key column is missing. */
     private static function identity($class, array $fields) {
@@ -790,6 +886,7 @@ class modX extends xPDO {
             }
             return new FakeResponse(null);
         }
+        if (strpos($path, 'workspace/packages/') === 0 || strpos($path, 'workspace/providers/') === 0) { return $this->packageProcessor($path, $data); }
         $action = basename($path);
         $base = substr($path, 0, -strlen($action));
         if ($base === 'security/user/') { return $this->userProcessor($action, $data); }

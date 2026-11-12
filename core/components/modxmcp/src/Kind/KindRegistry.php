@@ -27,6 +27,8 @@ final class KindRegistry {
         PolicyTemplateKind::class,
         ContextAccessKind::class,
         ResourceGroupAccessKind::class,
+        PackageKind::class,
+        ProviderKind::class,
     );
 
     private $kinds = null;

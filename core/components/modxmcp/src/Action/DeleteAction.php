@@ -32,6 +32,7 @@ final class DeleteAction extends WriteAction {
 
     public function run(array $args, Context $context) {
         $kind = Objects::kind($context, $args['kind'], true);
+        Objects::assertGenericWrites($kind);
         $object = Objects::resolve($context, $kind, $args);
         $id = $kind->keyOf($object);
         $kind->assertObjectWritable($context->modx, $object, 'delete');

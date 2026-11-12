@@ -119,3 +119,45 @@ Update tool and kind lists/counts in both test files.
 `src/Action/Registry.php`, `src/Kind/KindRegistry.php`, `src/Kind/Kind.php` and the four
 generic write actions for the `genericWrites()` hook, `src/Journal/Journal.php` only if a
 change-less changeset needs it, tests, `tests/php/FakeModx.php`.
+
+## Report
+
+Based on: main at 98e2f7d
+
+Counts: before, `npm run check` OK (142 PHP files, 18 JS files), PHP 1952 checks, Node 25 tests. After: check OK (146 PHP files), PHP 2235 checks, Node 25 tests (all pass). Three existing assertions changed because the brief adds two tools and two kinds: `manifest: full tool count` 32 to 34; `describe: lists element kinds` (a read token) now ends with `package, provider`; in `endpoint.test.js` the admin tool count 32 to 34 (twice: manifest and bridge), the read kind count 15 to 17 and the admin kind count 20 to 22. Nothing weakened or deleted.
+
+Implemented, file by file:
+
+- `src/Kind/PackageKind.php` (new): read-only kind `package`, string key `signature`, group `package_management`, read `read`, write `admin`. Computed `version` (`major.minor.patch[-release[index]]`), `installed` datetime (`""` for downloaded or the all-zero date). `genericWrites()` false with the brief's message. Helpers shared by the tools: `isOwn()`, `isInstalled()`, `versionOf()`, `logOffset()` / `logSince()` (uses `LogReader`). `stateColumns()` drops `manifest`, `attributes`, `metadata` from the (never journaled) state.
+- `src/Kind/ProviderKind.php` (new): kind `provider` (integer key, `name`, processors `workspace/providers/`), `api_key` through `secretColumns()` (hidden in every diff) and `redact()` (`[hidden]` plus `secret: true` for non-admin tokens; `no_filter` so it cannot be probed with `where`). Read-only op `search` (`modx_invoke`), and static helpers `defaultProviderId()`, `search()`, `rowVersion()` used by the install tool.
+- `src/Action/InstallPackageAction.php`, `UninstallPackageAction.php` (new, registered after `maintenance`): as the brief; admin scope, group `package_management`, destructive, irreversible. `install_package` is `open_world: true` (it reaches the provider).
+- `Kind.php`: hooks `genericWrites()` / `genericWritesMessage()`, `describe()` adds `generic_writes: false` and `note` for such a kind, `datetime()` treats `0000-00-00…` as `""`. `Objects.php`: `assertGenericWrites()`, and `run()` (processor call that returns the response) split out of `process()`. `CreateAction`, `UpdateAction`, `DeleteAction`, `DuplicateAction`: call `assertGenericWrites()` right after the kind is resolved (so a token without the write scope still gets `forbidden_scope`).
+- Journal: `Journal::commit()` accepts no changes (reversible 0, always); filter `with_changes`. `Transaction::commit(..., $informational)` records such a changeset when nothing journaled changed, `Transaction::lock()` takes a non-object lock (both install tools lock `package:workspace`), `Writer` passes `informational` from the body. `Undo::plan()` throws `not_reversible` for a changeset without changes that is not reversible; `UndoAction` adds `with_changes` to the `last` / `this_session` / `to_checkpoint` selections.
+- Tests: `FakeModx.php` (trait `FakePackageProcessors`: stubs for `workspace/packages/rest/getlist`, `rest/download`, `install`, `uninstall`, `remove`, `workspace/providers/*`; they record calls in `packageCalls`, change rows in outline, append to the error log; `FakeResponse::getResponse()`; primary key `signature`), `run.php` (section "Packages", 283 checks: both kinds, search, plan / plan-only / confirm on every path, every refusal for modxMCP on each path, history and `history_diff`, undo across the install, failures, scopes, disabled group), `endpoint.test.js` counts.
+
+Deviations and conservative readings:
+
+- A failed install or uninstall (processor error) still records the change-less changeset, summary `... (failed)`, and the error carries `details.log` and `details.changeset_id`; the processors may have partly run (a download, resolvers). The brief only describes the success case.
+- Without `version`, the newest **stable** release (`pl` or none) is chosen even if a newer pre-release exists; a pre-release is installed only when its version is given. Exact name match only (case-insensitive, `mb_*`): 1.x fell back to the first result, which could install a different package.
+- `signature` cannot be combined with `provider` or `version` (`validation_failed`). An already installed signature or version is refused. `package_name` lookup asks the provider for 50 rows once; a version that is not in them is `not_found`.
+- modxMCP detection: package name `modxMCP`, or the name part of the signature (before the first `-<digit>`) equals `modxmcp`, case-insensitive, checked before any search, on the signature, the stored package name and every provider row. `modxMCP-fork` is therefore not refused.
+- Default provider: `modx.com`, else `modxcms.com` (as `modPackageDownloadProcessor` does), else the first.
+- `remove: true` on an installed package runs `uninstall` and then `remove` as two processor calls (the real `remove` processor would also uninstall, but without `uninstall`'s own checks).
+- A plan-only token returns `planned: true` instead of `dry_run`; the install plan result is not a `WriteAction::plan()`.
+- Extra files touched that the brief did not list: `Transaction.php` (`lock()`, `$informational`), `Writer.php`, `Undo.php`, `UndoAction.php`, `Objects.php`, `Kind.php` (hooks above).
+
+MODX source vs brief:
+
+- `workspace/providers/create` and `update` call `$object->verify()`, a request to the provider's `service_url`; creating or updating a provider therefore needs network access and fails when the service does not answer. The fake refuses the address `unverified`.
+- `workspace/packages/rest/getlist` answers with `outputArray` (no `object`), so the rows are read from `getResponse()` (JSON), as 1.x does. Its `limit`/`start` give `page = round(start/limit)`. The provider request already includes `supports` (this MODX version), so the list is compatible versions.
+- `packages/remove` uninstalls an installed package first (`removePackage`), and `uninstall` / `remove` both `sleep(2)`; a request may take several seconds longer.
+- `modTransportPackage.installed` may be the string `0000-00-00 00:00:00` in old data (the manager's own getlist handles it); treated as not installed.
+- `uninstall` takes an optional `preexisting_mode`; not exposed.
+
+Verified only against the fake MODX (please check on the stand): all processor names, property names and refusals; `getResponse()` of `rest/getlist` being the JSON `{total, results}` with the row keys used (`name`, `signature`, `version`, `release`, `version-compiled`, `location`, `description`, `downloads`); `rest/download`'s object carrying `signature`; that `install`/`uninstall`/`remove` run correctly as the service user (`packages` permission) from an API request, within PHP's time limits, and that package resolvers write to `core/cache/logs/error.log` so `log` is filled; that xPDO accepts the class names `transport.modTransportPackage` / `modTransportProvider` in `getObject` / `getCollection` / `newQuery` with string key `signature`; the ordering of `modx_list kind package` (MySQL collation); `api_key` handling by the provider update processor (sent back in full).
+
+Open questions:
+
+- Should a failed install really leave a changeset (see above), or only the success case?
+- Upgrade/downgrade policy: installing an older version over a newer one only adds a warning to the plan. Refuse instead?
+- `docs/getting_started.md` (built-in help) does not mention the two tools and kinds yet; left for the documentation pass.

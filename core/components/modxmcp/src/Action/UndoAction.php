@@ -21,7 +21,7 @@ final class UndoAction extends WriteAction {
             . 'says: restore (back to its earlier state), recreate (a deleted object returns with its id) or remove '
             . '(an object that was created is removed). An object changed since (e.g. by a person in the manager) is a '
             . 'conflict and stops the undo unless force:true. Selecting by last / this_session / to_checkpoint skips '
-            . 'changesets already undone and undos themselves. The undo is itself a changeset; to re-apply, undo it '
+            . 'changesets already undone, undos themselves and records that restore nothing (installed packages). The undo is itself a changeset; to re-apply, undo it '
             . 'by its changeset_id. To get rid of objects created in this session, undo is the cleanest way.';
     }
 
@@ -53,7 +53,7 @@ final class UndoAction extends WriteAction {
         }
         $journal = $context->journal();
         // Bulk selections never pick up an undo itself; to re-apply, undo that changeset by id.
-        $open = array('status' => 'committed', 'exclude_undos' => true);
+        $open = array('status' => 'committed', 'exclude_undos' => true, 'with_changes' => true);
         if (isset($args['changeset_id'])) {
             $changesets = $journal->changesets(array('ids' => array($args['changeset_id'])), 1);
             if (!$changesets) { throw new ApiException('not_found', "No changeset {$args['changeset_id']}."); }

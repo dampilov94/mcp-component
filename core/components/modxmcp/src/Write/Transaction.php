@@ -25,6 +25,11 @@ final class Transaction {
         $this->lock = new Lock($context->dataDir() . '/locks');
     }
 
+    /** Take a lock that is not tied to an object (e.g. the package workspace), released with the transaction. */
+    public function lock($key) {
+        $this->lock->acquire($key);
+    }
+
     /** Lock an object and remember its current state. Returns that state (null if absent). */
     public function touch(Kind $kind, $key) {
         return $this->touchSubject(new ObjectSubject($this->context->modx, $kind, $key));
@@ -88,9 +93,11 @@ final class Transaction {
     /**
      * Compare states and journal the differences.
      * @param int[] $undoes changesets this call undoes
+     * @param bool  $informational record a changeset without changes when nothing journaled changed (an irreversible
+     *                      action such as installing a package); it is shown in the history and ignored by undo
      * @return array ['changeset_id' => int|null, 'changes' => [...]]; no changeset when nothing changed
      */
-    public function commit($summary, array $undoes = array()) {
+    public function commit($summary, array $undoes = array(), $informational = false) {
         $blobs = $this->context->blobs();
         $rows = array();
         $changes = array();
@@ -134,7 +141,7 @@ final class Transaction {
             );
             if ($note !== '') { $this->context->warnings[] = "{$subject->kindName()} {$key}: {$note}"; }
         }
-        if (!$rows) { return array('changeset_id' => null, 'changes' => array()); }
+        if (!$rows && !$informational) { return array('changeset_id' => null, 'changes' => array()); }
 
         $journal = $this->context->journal();
         $id = $journal->commit(array(

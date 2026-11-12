@@ -30,6 +30,7 @@ final class UpdateAction extends WriteAction {
 
     public function run(array $args, Context $context) {
         $kind = Objects::kind($context, $args['kind'], true);
+        Objects::assertGenericWrites($kind);
         $object = Objects::resolve($context, $kind, $args);
         $id = $kind->keyOf($object);
         $columns = Objects::normalize($kind, isset($args['fields']) ? $args['fields'] : array(), false);
