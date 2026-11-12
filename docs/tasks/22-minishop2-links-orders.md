@@ -136,3 +136,25 @@ Counts: before, `npm run check` OK (150 PHP files, 20 JS files), PHP 3903 checks
 - Should the create dry run of a product link run the site checks (needs a generic change to `CreateAction`)?
 - Should `modx_history` hide the summaries of order status changes from tokens below admin?
 - `ROW_LIMIT` 1000 for cascades and many_to_many closures is a guess.
+
+## Review
+
+Accepted and merged. Verified on the stand with `scripts/stand/check-minishop2-links.cjs`:
+order statuses read (5, Cyrillic names), no orders on the stand; product links of all four
+link types created between test products, and for each type the journal holds exactly the
+rows MODX stored (`many_to_many` and `one_to_one` write both directions, `many_to_one`
+stores the reverse key), delete and undo restore them; deleting a link type takes its
+product links along and the undo brings them back. All earlier stand checks pass.
+
+Not verified on the stand: the order status change with real e-mails (no orders there, and
+it would send e-mails); `getService('miniShop2')` headless is therefore still only checked
+against the fake.
+
+Change by the architect: `modx_list` items of a string-key kind did not include the key
+(only the kind's list fields), so a listed product link could not be addressed — found by
+the stand check. Items of string-key kinds now always start with `key`; two assertions that
+fixed the exact item keys were updated.
+
+Open questions answered: `query` on product links stays; the create dry run stays
+field-only; order-status summaries in history are fine (number and status names only);
+the row limit of 1000 is kept.

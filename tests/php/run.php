@@ -3316,7 +3316,8 @@ $pkSignatures = array_column($pkList['items'], 'signature');
 sort($pkSignatures);
 check('package: a read token lists the workspace, installed or only downloaded', $pkList['total'] === 7
     && $pkSignatures === array('formit-5.0.2-pl', 'migx-2.13.0-pl', 'modxmcp-2.0.0-pl', 'pdotools-2.13.1-pl', 'sneaky-1.0.0-pl', 'zero-1.0.0-pl', 'каталог-1.2.0-beta1')
-    && array_keys($pkList['items'][0]) === array('signature', 'package_name', 'version', 'installed'));
+    // Architect's review: items of a string-key kind always carry their key first.
+    && array_keys($pkList['items'][0]) === array('key', 'signature', 'package_name', 'version', 'installed'));
 $pkItems = array_column($pkList['items'], null, 'signature');
 check('package: computed version, installed datetime, "" for downloaded or never installed', $pkItems['pdotools-2.13.1-pl']['version'] === '2.13.1-pl' && $pkItems['pdotools-2.13.1-pl']['installed'] === '2026-01-05 10:00:00'
     && $pkItems['migx-2.13.0-pl']['installed'] === '' && $pkItems['zero-1.0.0-pl']['installed'] === '' && $pkItems['каталог-1.2.0-beta1']['version'] === '1.2.0-beta1'
@@ -4703,7 +4704,7 @@ $e = throws('ms2_product_link: update with the same values', ApiException::class
 check('ms2_product_link: an update that repeats the values is refused as well: there is nothing to change', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'nothing to change') !== false);
 $e = throws('ms2_product_link: duplicate', ApiException::class, function () use ($call, $sDev, $pM1) { $call($sDev, 'duplicate', array('kind' => 'ms2_product_link', 'key' => $pM1['key'])); });
 check('ms2_product_link: a duplicate is validation_failed', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'cannot be copied') !== false);
-check('ms2_product_link: list with where on link, master and slave', array_column($call($sRead, 'list', array('kind' => 'ms2_product_link', 'where' => array('link' => $lOne)))['items'], 'key') === array()
+check('ms2_product_link: list with where on link, master and slave', count(array_column($call($sRead, 'list', array('kind' => 'ms2_product_link', 'where' => array('link' => $lOne)))['items'], 'key')) === 2
     && array_column($call($sRead, 'list', array('kind' => 'ms2_product_link', 'where' => array('link' => $lOne)))['items'], 'master') === array(7004, 7005)
     && array_column($call($sRead, 'list', array('kind' => 'ms2_product_link', 'where' => array('link' => $lMany, 'master' => 7002)))['items'], 'slave') === array(7001, 7003)
     && $call($sRead, 'list', array('kind' => 'ms2_product_link', 'where' => array('slave' => 7001)))['total'] === 3);
@@ -5024,6 +5025,8 @@ $sSite->options['modxmcp.disabled_groups'] = 'minishop2';
 $e = throws('ms2_order: group switched off', ApiException::class, function () use ($call, $sAdmin) { $call($sAdmin, 'get', array('kind' => 'ms2_order', 'id' => 101)); });
 check('ms2_order: the minishop2 group switched off for the site makes the kinds unavailable', $e && $e->errorCode === 'unavailable');
 $sSite->options['modxmcp.disabled_groups'] = $sSiteOff;
+
+check('list: items of a string-key kind always carry their key', array_key_exists('key', $call($sAdmin, 'list', array('kind' => 'ms2_product_link', 'fields' => array('link')))['items'][0] ?? array('key' => null)));
 
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));

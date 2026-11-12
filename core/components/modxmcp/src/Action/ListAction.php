@@ -86,6 +86,8 @@ final class ListAction extends Action {
         foreach ($modx->getCollection($kind->modelClass(), $query) as $object) {
             $item = array();
             foreach ($names as $name) { $item[$name] = $kind->value($object, $name); }
+            // Every item can be addressed: string-key kinds always carry their key.
+            if ($kind->keyType() === 'string' && !array_key_exists('key', $item)) { $item = array('key' => $kind->publicKey($kind->keyOf($object))) + $item; }
             $redacted = $kind->redact($context, $object, $item, array());
             $items[] = $redacted[0] + $redacted[2];
         }

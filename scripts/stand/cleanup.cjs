@@ -16,7 +16,7 @@ const cfg = require(path.join(repo, ".mcp.json")).mcpServers.modx.env;
     return result.isError ? { error: result.content[0].text } : result.structuredContent;
   };
   let removed = 0;
-  for (const kind of ["context_access", "resourcegroup_access", "tv", "chunk", "snippet", "plugin", "template", "category", "resource_group", "user_group", "role", "user", "access_policy", "policy_template", "context_setting", "system_setting", "context", "namespace", "resource"]) {
+  for (const kind of ["ms2_product_link", "ms2_link", "ms2_option", "context_access", "resourcegroup_access", "tv", "chunk", "snippet", "plugin", "template", "category", "resource_group", "user_group", "role", "user", "access_policy", "policy_template", "context_setting", "system_setting", "context", "namespace", "resource"]) {
     const list = await call("modx_list", { kind, query: "mcp2test", limit: 200 });
     for (const item of list.items || []) {
       if (kind === "resource" && item.deleted) continue;
