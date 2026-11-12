@@ -167,3 +167,26 @@ Open questions:
 - Should a processor that is not under any refused prefix but writes files (`system/import`, `system/phpthumb`) also be refused? I left them.
 - A component's own processor can itself call `$modx->runProcessor('security/user/update')`; that cannot be guarded here, so `processors_path` is as trusted as the installed add-ons.
 - `docs/getting_started.md` (built-in help) does not mention the two tools or the new setting; left for the documentation pass.
+
+## Review
+
+Accepted and merged. Verified on the stand with `scripts/stand/check-escape.cjs` after the
+owner turned both settings on in the manager (`modxmcp.allow_query_db` had to be created by
+hand: the stand is updated over FTP, not by reinstalling the package): `query_db` with
+params and `WITH` on MySQL; writes, a second statement, `INTO OUTFILE`, the password and
+token tables, `mysql.*` and `SLEEP` refused; a write through the API still works afterwards.
+`run_processor`: refusals name the dedicated tool, plan without confirm, a real getlist, a
+processor error as `success: false`, the call in the history as irreversible. With the
+settings off both tools are absent and `modx_capabilities` says why.
+
+The wider refusals in the report are accepted. Changes by the architect:
+
+1. **Password hashes for admin tokens.** The brief let an admin read `modx_users` (with
+   `password`, `cachepwd`, `salt`) through `query_db`. No other tool returns those values,
+   so the escape hatch must not either: `users`, `session` and `modxmcp_tokens` are now
+   refused for every token. The existing test that read hashes was replaced by refusal checks.
+2. `run_processor` refuses `system/import` (it creates resources outside the journal).
+
+Open questions answered: a trailing `;` stays accepted; `system/phpthumb` stays allowed;
+an add-on processor calling core processors itself cannot be guarded — `run_processor`
+stays off by default for that reason.

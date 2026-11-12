@@ -38,6 +38,7 @@ final class RunProcessorAction extends WriteAction {
         'workspace/packages'     => 'Packages are handled by the kind "package" and the tools modx_install_package and modx_uninstall_package.',
         'workspace/providers'    => 'Package providers are handled by the kind "provider".',
         'system/config'          => 'The system configuration is not available through modx_run_processor; settings are handled by the kind "system_setting".',
+        'system/import'          => 'Importing HTML files creates resources outside the journal; create resources with modx_create.',
         'browser'                => 'Files are handled by modx_list_files, modx_read_file, modx_write_file, modx_move_path and modx_delete_path.',
     );
     /** A path segment that starts like this removes or empties something: it needs confirm: true. */

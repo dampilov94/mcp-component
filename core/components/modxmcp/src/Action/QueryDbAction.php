@@ -30,8 +30,11 @@ final class QueryDbAction extends Action {
     const CREDENTIAL_TABLES = array(
         'users', 'user_attributes', 'user_settings', 'system_settings', 'context_settings', 'transport_providers', 'session', 'media_sources',
     );
-    /** Refused for every token. */
-    const SECRET_TABLES = array('modxmcp_tokens');
+    /**
+     * Refused for every token: API token hashes, password hashes and live sessions. No tool
+     * returns these, so neither may the escape hatch (users are read with the kind "user").
+     */
+    const SECRET_TABLES = array('modxmcp_tokens', 'users', 'session');
     /** Schemas that expose other accounts and other sessions' statements. */
     const SYSTEM_SCHEMAS_ALL = array('mysql', 'performance_schema', 'sys');
     const SYSTEM_SCHEMAS_BELOW_ADMIN = array('information_schema');
@@ -200,7 +203,7 @@ final class QueryDbAction extends Action {
         $prefixes = array_unique(array('', mb_strtolower($prefix, 'UTF-8'), 'modx_'));
         foreach (self::SECRET_TABLES as $table) {
             foreach ($prefixes as $p) {
-                if ($name === $p . $table) { throw new ApiException('forbidden_scope', "The table {$table} holds API token hashes; no token may query it."); }
+                if ($name === $p . $table) { throw new ApiException('forbidden_scope', "The table {$p}{$table} holds password or token hashes or sessions; no token may query it (read users with modx_list {kind: \"user\"})."); }
             }
         }
         if (in_array($name, self::SYSTEM_SCHEMAS_ALL, true)) { throw new ApiException('forbidden_scope', "The schema {$name} is not available to modx_query_db."); }

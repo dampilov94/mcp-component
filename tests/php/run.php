@@ -3761,6 +3761,7 @@ $xRefused = array(
     'workspace/providers/update' => 'kind "provider"', 'workspace/providers/remove' => 'kind "provider"',
     'system/config' => 'system_setting', 'system/configuration/x' => 'system_setting',
     'browser/file/remove' => 'modx_write_file', 'browser/directory/getlist' => 'modx_list_files',
+    'system/import/html' => 'modx_create', 'system/import' => 'modx_create',
 );
 foreach ($xRefused as $xName => $xInstead) {
     foreach (array('' => array(), ' with confirm' => array('confirm' => true)) as $xSuffix => $xMore) {
@@ -3985,8 +3986,8 @@ check('query_db: {prefix}modxmcp_tokens is refused for an admin', $e && $e->erro
 foreach (array('modx_modxmcp_tokens', 'modxmcp_tokens', '`MODX_MODXMCP_TOKENS`', '"modx_modxmcp_tokens"', 'db.modx_modxmcp_tokens', 'mysql.user', 'performance_schema.threads') as $xTable) {
     foreach (array("SELECT * FROM {$xTable}", "SELECT * FROM (SELECT hash FROM {$xTable}) t", "SELECT * FROM modx_test_items, {$xTable}") as $xText) { $xQuery("admin, {$xText}", $xText, 'forbidden_scope', $xAdmin); }
 }
-$xAdminUsers = $xSql($xAdmin, 'SELECT username, password FROM {prefix}users');
-check('query_db: an admin may read the users table as it is', $xAdminUsers['rows'] == array(array('admin', 'secret-hash')) && $xAdminUsers['columns'] === array('username', 'password'));
+// Architect's review: password hashes and sessions are refused for every token, like token hashes.
+foreach (array('SELECT username, password FROM {prefix}users', 'SELECT id FROM modx_users', 'SELECT * FROM `MODX_SESSION`') as $xText) { $xQuery("admin, {$xText}", $xText, 'forbidden_scope', $xAdmin); }
 check('query_db: an admin may read the other credential tables', $xSql($xAdmin, 'SELECT COUNT(*) AS n FROM modx_system_settings')['rows'] == array(array(0)));
 $xTokens = $xSite->pdo->query('SELECT COUNT(*) FROM modx_modxmcp_tokens')->fetchColumn();
 check('query_db: nothing in this section touched the token table', (int) $xTokens === 1);

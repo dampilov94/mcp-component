@@ -136,6 +136,11 @@ After stage 3:
   provider catalogue search through `modx_invoke`, `modx_install_package` and
   `modx_uninstall_package` (plan without `confirm`, error-log entries of the install returned,
   recorded in the history but never undone; modxMCP cannot replace or remove itself).
+- `modx_run_processor` (admin; setting `modxmcp.allow_run_processor`) and `modx_query_db`
+  (develop; new setting `modxmcp.allow_query_db`), both off by default. Processors that would
+  bypass the API's safety rules are refused with the tool to use instead; destructive ones
+  need `confirm`. Queries are single read-only SELECTs with a time limit; tables with password
+  or token hashes and sessions are refused for every token.
 
 - Offline tests (`npm test`): pure PHP logic, the real kernel behind PHP's built-in server with
   stubbed MODX classes, and the Node bridge end to end. CI runs them.
