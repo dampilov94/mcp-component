@@ -34,7 +34,7 @@ final class DuplicateAction extends WriteAction {
         $sourceId = $kind->keyOf($source);
         $kind->assertObjectWritable($context->modx, $source, 'duplicate');
         $overrides = isset($args['fields']) ? $args['fields'] : array();
-        Objects::normalize($kind, $overrides, false);
+        $kind->assertKeepsSecret($context, $source, Objects::normalize($kind, $overrides, false), 'duplicate');
         $values = array();
         foreach ($kind->fields() as $field => $definition) {
             if (empty($definition['read_only']) && empty($definition['derived'])) {

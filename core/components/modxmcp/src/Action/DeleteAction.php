@@ -43,6 +43,10 @@ final class DeleteAction extends WriteAction {
             if ($before === null) { throw new ApiException('not_found', "No {$kind->name()} with " . Objects::keyText($kind, $id) . '.'); }
             Objects::assertRevision($context, $kind, $id, $before, $args);
             $tx->keepDeleteExtra($kind, $id);
+            foreach ($kind->deleteCascade($context->modx, $id) as $cascade) {
+                $other = $context->kinds->get($cascade[0]);
+                if ($other) { $tx->touch($other, $cascade[1]); }
+            }
             if ($dry) {
                 $related = array();
                 foreach ($before['relations'] + Snapshot::captureDeleteExtra($context->modx, $kind, $id) as $name => $rows) {

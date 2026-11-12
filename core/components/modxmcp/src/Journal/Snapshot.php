@@ -38,7 +38,8 @@ final class Snapshot {
     private static function relations(\modX $modx, Kind $kind, $object, $deleteOnly) {
         $out = array();
         foreach ($kind->relationSpecs() as $name => $spec) {
-            if (!empty($spec['delete_only']) !== $deleteOnly) { continue; }
+            // Rows that are objects of their own kind (in_state false) are journaled as those objects.
+            if (!empty($spec['delete_only']) !== $deleteOnly || (isset($spec['in_state']) && $spec['in_state'] === false)) { continue; }
             $rows = array();
             foreach ($modx->getCollection($spec['class'], self::criteria($spec, $kind->keyOf($object))) as $row) {
                 $rows[] = self::row($row);

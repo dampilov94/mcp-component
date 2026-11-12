@@ -60,6 +60,19 @@ abstract class AbstractSettingKind extends Kind {
         return array($fields, $relations, array('secret' => true));
     }
 
+    /**
+     * A token that may not read a credential must not be able to make it readable: neither by
+     * copying it (the copy may get a harmless key or xtype) nor by changing its xtype.
+     */
+    public function assertKeepsSecret(Context $context, $object, array $columns, $op) {
+        if (Scope::allows($context->token['scope'], Scope::ADMIN)) { return; }
+        if (!Secrets::isSecret($object->get('key'), $object->get('xtype'))) { return; }
+        $xtype = array_key_exists('xtype', $columns) ? $columns['xtype'] : $object->get('xtype');
+        if ($op === 'duplicate' || !Secrets::isSecret($object->get('key'), $xtype)) {
+            throw new ApiException('forbidden_scope', 'This setting holds a credential; copying it or making its value visible needs the admin scope.');
+        }
+    }
+
     // ---- modxMCP's own settings are read-only through the API ----
 
     public function assertColumns(array $columns, $creating) {

@@ -191,6 +191,14 @@ abstract class Kind {
     public function assertObjectWritable(\modX $modx, $object, $op) {
     }
 
+    /**
+     * Refuse a write by which this token could read a value it may not see, e.g. a copy of a
+     * credential under a harmless name. $columns are the normalised columns sent (update) or
+     * the overrides (duplicate). $op is update or duplicate.
+     */
+    public function assertKeepsSecret(Context $context, $object, array $columns, $op) {
+    }
+
     /** Refuse to restore (or remove) an object whose recorded state must not be put back through the API. */
     public function assertRestorable(array $state) {
     }
@@ -211,6 +219,15 @@ abstract class Kind {
      * @param string   $op      create | update | delete | undelete
      */
     public function alsoAffected(\modX $modx, $id, array $columns, $op) {
+        return array();
+    }
+
+    /**
+     * Objects of other kinds that MODX deletes together with this one, as [kind name, key]
+     * pairs. They are touched before the delete, so each is journaled as deleted and an undo
+     * brings it back as itself.
+     */
+    public function deleteCascade(\modX $modx, $key) {
         return array();
     }
 
@@ -240,6 +257,8 @@ abstract class Kind {
      *   present      column, or list of columns, shown by the API
      *   description  meaning, for describe
      *   delete_only  captured only before a delete (data another object owns, e.g. TV values)
+     *   in_state     false: shown by modx_get but not part of the snapshot, because the rows are
+     *                objects of another kind, journaled as such (see deleteCascade())
      *   writable     can be replaced through the API
      */
     public function relationSpecs() {

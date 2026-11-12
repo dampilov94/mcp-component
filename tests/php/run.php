@@ -2269,8 +2269,11 @@ $shopSettingsBefore = array(
 $shopDeleted = $call($sAdmin, 'delete', array('kind' => 'context', 'key' => 'shop'));
 check('settings: deleting a context removes its settings', $setSite->row('modContext', 'shop') === null && $contextSettingRow('shop', 'site_url') === null && $contextSettingRow('shop', 'gate_pw') === null
     && $contextSettingRow('web', 'a:b:c') !== null);
-$shopDiff = $call($sRead, 'history_diff', array('changeset_id' => $shopDeleted['changeset_id']))['objects'][0]['changed']['settings']['old'];
-$byKey = array_column($shopDiff, 'value', 'key');
+// The settings are journaled as context_setting objects of the same changeset (architect's review).
+$byKey = array();
+foreach ($call($sRead, 'history_diff', array('changeset_id' => $shopDeleted['changeset_id']))['objects'] as $object) {
+    if ($object['kind'] === 'context_setting') { $byKey[substr($object['key'], strlen('shop:'))] = $object['changed']['value']['old']; }
+}
 check('settings: the diff of a context delete hides secret settings for every scope that may see it', $byKey['payment_secret'] === '[hidden]' && $byKey['gate_pw'] === '[hidden]' && $byKey['passage_count'] === '7'
     && strpos(json_encode($call($sAdmin, 'history_diff', array('changeset_id' => $shopDeleted['changeset_id']))), 's3cret') === false);
 $call($sAdmin, 'undo', array('changeset_id' => $shopDeleted['changeset_id'], 'confirm' => true));
@@ -2353,6 +2356,55 @@ $e = throws('settings: Snapshot::restore refuses the modxmcp namespace', ApiExce
     ModxMCP\Journal\Snapshot::restore($setSite, $sAdmin->kinds->get('namespace'), 'modxmcp', array('fields' => array('name' => 'modxmcp', 'path' => '', 'assets_path' => ''), 'relations' => array()));
 });
 check('settings: namespace restore guard', $e && $e->errorCode === 'not_reversible');
+
+// Review additions: a token that may not read a credential cannot make it readable.
+list($leakSite, $leakDev) = $retentionSite();
+$leakAdmin = new Context($leakSite, array('scope' => 'admin') + $leakDev->token, $leakDev->corePath, function () {});
+$call($leakAdmin, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'smtp_password', 'value' => 'секрет-1', 'xtype' => 'textfield')));
+$call($leakAdmin, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'mail_box', 'value' => 'секрет-2', 'xtype' => 'text-password')));
+$call($leakAdmin, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'site_slogan', 'value' => 'открыто', 'xtype' => 'textfield')));
+foreach (array(
+    'copy under a harmless key' => array('duplicate', array('kind' => 'system_setting', 'key' => 'smtp_password', 'new_name' => 'harmless')),
+    'copy of a password-typed setting' => array('duplicate', array('kind' => 'system_setting', 'key' => 'mail_box', 'new_name' => 'harmless2', 'fields' => array('xtype' => 'textfield'))),
+    'xtype changed to plain text' => array('update', array('kind' => 'system_setting', 'key' => 'mail_box', 'fields' => array('xtype' => 'textfield'))),
+) as $label => $attempt) {
+    $e = throws('secrets: develop cannot ' . $label, ApiException::class, function () use ($call, $leakDev, $attempt) { $call($leakDev, $attempt[0], $attempt[1]); });
+    check('secrets: refusal for ' . $label . ' is forbidden_scope', $e && $e->errorCode === 'forbidden_scope');
+}
+check('secrets: nothing was copied', $leakSite->getCount('modSystemSetting', array('key' => 'harmless')) === 0 && $leakSite->getCount('modSystemSetting', array('key' => 'harmless2')) === 0);
+check('secrets: develop may still change the value of a credential', $call($leakDev, 'update', array('kind' => 'system_setting', 'key' => 'smtp_password', 'fields' => array('value' => 'новый')))['changeset_id'] !== null
+    && $call($leakDev, 'get', array('kind' => 'system_setting', 'key' => 'smtp_password'))['fields']['value'] === '[hidden]');
+check('secrets: develop may copy an ordinary setting', $call($leakDev, 'duplicate', array('kind' => 'system_setting', 'key' => 'site_slogan', 'new_name' => 'site_slogan_2'))['changeset_id'] !== null);
+check('secrets: admin may copy a credential', $call($leakAdmin, 'duplicate', array('kind' => 'system_setting', 'key' => 'smtp_password', 'new_name' => 'smtp_password_old'))['changeset_id'] !== null);
+
+// Review additions: a context's settings are their own objects in the journal.
+list($relSite, $relDev) = $retentionSite();
+$relAdmin = new Context($relSite, array('scope' => 'admin') + $relDev->token, $relDev->corePath, function () {});
+$relAdmin->sessionId = 'related-session-0001';
+$relCheckpoint = $call($relAdmin, 'checkpoint', array('label' => 'related'));
+$call($relAdmin, 'create', array('kind' => 'context', 'fields' => array('key' => 'shop', 'name' => 'Магазин')));
+$relContext = $call($relAdmin, 'get', array('kind' => 'context', 'key' => 'shop'));
+$call($relAdmin, 'create', array('kind' => 'context_setting', 'fields' => array('context_key' => 'shop', 'key' => 'site_url', 'value' => 'https://shop.example/')));
+$relWithSetting = $call($relAdmin, 'get', array('kind' => 'context', 'key' => 'shop'));
+check('related: a context shows its settings, but they do not change its revision', $relWithSetting['revision'] === $relContext['revision']
+    && $relWithSetting['relations']['settings'] == array(array('key' => 'site_url', 'value' => 'https://shop.example/')));
+$call($relAdmin, 'update', array('kind' => 'context_setting', 'key' => 'shop:site_url', 'fields' => array('value' => 'https://shop2.example/')));
+$relDelete = $call($relAdmin, 'delete', array('kind' => 'context', 'key' => 'shop'));
+check('related: a context delete journals its settings as deleted objects', array_column($call($relAdmin, 'history_diff', array('changeset_id' => $relDelete['changeset_id']))['objects'], 'kind') === array('context', 'context_setting'));
+$call($relAdmin, 'undo', array('changeset_id' => $relDelete['changeset_id'], 'confirm' => true));
+check('related: undo brings the setting back with its last value', $relSite->row('modContextSetting', array('context_key' => 'shop', 'key' => 'site_url')) !== null
+    && $call($relAdmin, 'get', array('kind' => 'context_setting', 'key' => 'shop:site_url'))['fields']['value'] === 'https://shop2.example/');
+$relBack = $call($relAdmin, 'undo', array('to_checkpoint' => $relCheckpoint['checkpoint_id'], 'confirm' => true));
+check('related: undo to the checkpoint has no conflict and removes both', $relBack['performed'] === true && $relBack['conflicts'] === 0
+    && $relSite->getCount('modContext', array('key' => 'shop')) === 0 && $relSite->getCount('modContextSetting', array('context_key' => 'shop')) === 0);
+check('related: nothing was recorded as an outside change', $call($relAdmin, 'history', array('source' => 'external'))['changesets'] === array());
+
+// Review additions: list search is literal.
+list($qSite, $qDev) = $retentionSite();
+$qAdmin = new Context($qSite, array('scope' => 'admin') + $qDev->token, $qDev->corePath, function () {});
+foreach (array('site_name', 'siteXname', 'site%name') as $qKey) { $call($qAdmin, 'create', array('kind' => 'system_setting', 'fields' => array('key' => $qKey, 'value' => 'v'))); }
+check('list: query treats _ and % literally', array_column($call($qAdmin, 'list', array('kind' => 'system_setting', 'query' => 'site_'))['items'], 'key') === array('site_name')
+    && array_column($call($qAdmin, 'list', array('kind' => 'system_setting', 'query' => 'site%'))['items'], 'key') === array('site%name'));
 
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));

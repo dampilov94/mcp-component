@@ -52,7 +52,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 13 | [modx_check_page](13-check-page.md) | `task/13-check-page` | merged |
 | 14 | [modx_dependency_graph](14-dependency-graph.md) | `task/14-dependency-graph` | merged |
 | 15 | [Object keys that are not numeric ids](15-object-keys.md) | `task/15-object-keys` | merged |
-| 16 | [Settings kinds](16-settings-kinds.md) | `task/16-settings-kinds` | ready for the executor |
+| 16 | [Settings kinds](16-settings-kinds.md) | `task/16-settings-kinds` | merged |
 
 ## Doing several briefs in a row
 

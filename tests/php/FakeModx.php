@@ -83,9 +83,14 @@ class FakeObject {
 }
 
 class FakeQuery {
-    public $class; public $criteria; public $limit = 0; public $offset = 0; public $sort = array(); public $stmt; public $groups = array();
+    public $class; public $criteria; public $limit = 0; public $offset = 0; public $sort = array(); public $stmt; public $groups = array(); public $broken = false;
     public function __construct($class, $criteria) { $this->class = $class; $this->criteria = (array) $criteria; $this->stmt = new FakeStatement(); }
-    public function sortby($column, $direction = 'ASC') { $this->sort[] = array($column, $direction); return $this; }
+    public function sortby($column, $direction = 'ASC') {
+        // Like MySQL: an unquoted reserved word is a syntax error, and the query returns nothing.
+        if (in_array(strtolower($column), array('key', 'order', 'group', 'rank'), true)) { $this->broken = true; }
+        $this->sort[] = array(trim($column, '`'), $direction);
+        return $this;
+    }
     public function limit($limit, $offset = 0) { $this->limit = $limit; $this->offset = $offset; return $this; }
     public function where($criteria) {
         // A list holding one array is an OR group: [['a:LIKE' => x, 'OR:b:LIKE' => x]].
@@ -324,6 +329,7 @@ class modX extends xPDO {
         return $rows ? new FakeObject($this, $class, $rows[0], false) : null;
     }
     public function getCollection($class, $criteria = null) {
+        if ($criteria instanceof FakeQuery && $criteria->broken) { return array(); }
         $rows = $this->match($class, $criteria);
         if ($criteria instanceof FakeQuery) {
             foreach (array_reverse($criteria->sort) as $sort) {
@@ -339,6 +345,7 @@ class modX extends xPDO {
         return $out;
     }
     public function getCount($class, $criteria = null) { return count($this->match($class, $criteria)); }
+    public function escape($name) { return '`' . str_replace('`', '', $name) . '`'; }
     public function newQuery($class, $criteria = array()) { return new FakeQuery($class, $criteria); }
     public function newObject($class) { return new FakeObject($this, $class, array(), true); }
     public function removeCollection($class, $criteria) {

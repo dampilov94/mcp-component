@@ -118,6 +118,14 @@ After stage 3:
   nothing loads the 1.x model any more.
 - Help topics `tv_input_types` and `graph` rewritten for 2.0.
 
+- Objects are identified by a kind-defined key; kinds without a numeric id are addressed with
+  `key` (`modx_describe` shows `key_type` / `key_field`).
+- Kinds `system_setting` (develop), `context` (admin), `context_setting` (develop, key
+  `<context>:<key>`) and `namespace` (admin). The configuration in memory is current after a
+  write. Credentials are hidden from non-admin tokens and in every diff, and cannot be copied
+  or made visible by them. modxMCP's own settings are read-only through the API, undo included.
+- `modx_list` quotes sort columns and searches literally.
+
 - Offline tests (`npm test`): pure PHP logic, the real kernel behind PHP's built-in server with
   stubbed MODX classes, and the Node bridge end to end. CI runs them.
 

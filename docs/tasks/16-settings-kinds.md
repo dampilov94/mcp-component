@@ -160,3 +160,33 @@ Open questions:
 - Should deleting a context with resources be possible with an explicit flag instead of refused? Left refused.
 - `modx_history` has no `key` filter (task 15 open point); a setting's history can only be filtered by `kind` and `name` today.
 - The "secret" key pattern is the brief's; a key like `forgotten_password_tpl` counts as secret (hidden), which may surprise.
+
+## Review
+
+Accepted and merged. Verified on the stand with `scripts/stand/check-settings.cjs`; the
+earlier stand checks pass too. The conservative deviations in the report are accepted
+(refusing to delete a context that still has resources, journaling a namespace's cascade,
+the wider modxMCP guard, refusing `where` on `value`).
+
+Changes the architect made on the branch:
+
+1. **Credential leak for non-admin tokens.** A `develop` token could copy a credential
+   under a harmless key (`modx_duplicate … new_name`) or change its `xtype` from
+   `text-password` to `textfield`, and then read the value. New hook
+   `Kind::assertKeepsSecret()`; for settings, a non-admin token may change a credential's
+   value but not copy it or make it visible (`forbidden_scope`). The brief missed this.
+2. **A context's settings were part of the context's revision**, so creating a context
+   setting changed the context behind the journal's back; on the stand the undo to the
+   checkpoint then stopped with a conflict. The `settings` relation is now shown by
+   `modx_get` but not part of the snapshot (`in_state => false`); a context delete journals
+   each of its settings as a deleted `context_setting` (new hook `Kind::deleteCascade()`),
+   so an undo brings them back as themselves. One existing test was rewritten accordingly.
+3. **`modx_list` sorted by an unquoted `key` column**, a reserved word in MySQL: every
+   list of settings and contexts failed with an SQL error and silently returned nothing
+   (the stand check's leftover detection was blind). Sort columns are now quoted, and the
+   fake fails like MySQL on unquoted reserved words.
+4. **`modx_list` `query` treated `_` and `%` as wildcards**; they are now literal.
+
+Open questions answered: deleting a context that still has resources stays refused (no
+flag); a `key` filter for `modx_history` is recorded for later; hiding keys like
+`forgotten_password_tpl` is accepted as the price of a simple rule.

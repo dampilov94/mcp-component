@@ -27,7 +27,7 @@ final class ContextKind extends Kind {
 
     public function relationSpecs() {
         return array(
-            'settings' => array('class' => 'modContextSetting', 'fk' => 'context_key', 'present' => array('key', 'value'),
+            'settings' => array('class' => 'modContextSetting', 'fk' => 'context_key', 'present' => array('key', 'value'), 'in_state' => false,
                 'description' => 'Settings of the context (key and value); change them with the kind context_setting.'),
             // Rows MODX removes together with the context; kept so that an undo is complete.
             'acl' => array('class' => 'modAccessContext', 'fk' => 'target', 'delete_only' => true),
@@ -76,6 +76,15 @@ final class ContextKind extends Kind {
             if (Secrets::isSecret(isset($row['key']) ? $row['key'] : '', isset($row['xtype']) ? $row['xtype'] : '')) { $rows[$index]['value'] = Secrets::HIDDEN; }
         }
         return $rows;
+    }
+
+    /** The context's settings go with it; each is journaled as a deleted context_setting. */
+    public function deleteCascade(\modX $modx, $key) {
+        $out = array();
+        foreach ($modx->getCollection('modContextSetting', array('context_key' => (string) $key)) as $row) {
+            $out[] = array('context_setting', $row->get('context_key') . ':' . $row->get('key'));
+        }
+        return $out;
     }
 
     // ---- deleting a context ----
