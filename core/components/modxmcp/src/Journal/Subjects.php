@@ -9,6 +9,18 @@ use ModxMCP\Kind\Objects;
 
 /** Rebuilds the subject a journal entry refers to. */
 final class Subjects {
+    /** The key of a journal row in its API type: the kind's key type decides; files and unknown kinds keep the stored string. */
+    public static function publicKey(Context $context, $kindName, $key) {
+        $kind = $kindName === 'file' ? null : $context->kinds->get($kindName);
+        return $kind ? $kind->publicKey($key) : (string) $key;
+    }
+
+    /** Name of the result field that carries a journal row's key: "key" for string-key kinds, otherwise "id". */
+    public static function keyField(Context $context, $kindName) {
+        $kind = $kindName === 'file' ? null : $context->kinds->get($kindName);
+        return $kind ? $kind->keyField() : 'id';
+    }
+
     /**
      * @param bool $write check that this token may change the subject (undo), not only see it
      * @return Subject|null null when the kind is no longer known

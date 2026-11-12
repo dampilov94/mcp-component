@@ -20,6 +20,7 @@ final class InvokeAction extends WriteAction {
         return Schema::obj(array('kind' => Schema::str(),
             'op' => Schema::str(null, array('pattern' => '^[a-z][a-z0-9_]{0,63}$')),
             'id' => Schema::int(null, array('minimum' => 1)), 'name' => Schema::str(null, array('maxLength' => 255)),
+            'key' => self::keyArgument(),
             'args' => Schema::obj(array(), array(), true), 'dry_run' => Schema::bool()), array('kind', 'op'));
     }
     public function outputSchema() {
@@ -33,27 +34,29 @@ final class InvokeAction extends WriteAction {
         $read = !empty($spec['read_only']);
         if (!$read) { Objects::kind($context, $args['kind'], true); }
         $needsObject = !isset($spec['needs_object']) || $spec['needs_object'];
-        if (!$needsObject && (isset($args['id']) || isset($args['name']))) { throw new ApiException('validation_failed', 'This operation takes no id or name.'); }
+        if (!$needsObject && (isset($args['id']) || isset($args['name']) || isset($args['key']))) { throw new ApiException('validation_failed', 'This operation takes no id or name.'); }
         $object = $needsObject ? Objects::resolve($context, $kind, $args) : null;
         $values = isset($args['args']) ? (array) $args['args'] : array();
         $invalid = Schema::validate($spec['input'], json_decode(json_encode($values ? $values : new \stdClass())), 'args');
         if ($invalid !== null) { throw new ApiException('validation_failed', $invalid); }
         $meta = array('kind' => $kind->name(), 'op' => $args['op']);
-        if ($object) { $meta['id'] = (int) $object->get('id'); }
+        $keyField = $kind->keyField();
+        $key = $object ? $kind->keyOf($object) : null;
+        if ($object) { $meta[$keyField] = $key; }
         $handler = $spec['handler'];
         if ($read) { return $meta + $kind->$handler($context, $object, $values); }
         if ($this->isDryRun($args, $context)) { return $this->plan($context, $meta + array('validated' => true)); }
-        list($result, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $kind, $meta, $handler, $values) {
+        list($result, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $kind, $meta, $handler, $values, $key) {
             $object = null;
-            if (isset($meta['id'])) {
-                if ($tx->touch($kind, $meta['id']) === null) { throw new ApiException('not_found', 'The target object no longer exists.'); }
-                $object = Objects::resolve($context, $kind, array('id' => $meta['id']));
+            if ($key !== null) {
+                if ($tx->touch($kind, $key) === null) { throw new ApiException('not_found', 'The target object no longer exists.'); }
+                $object = Objects::resolveKey($context, $kind, $key);
             }
             $result = $kind->$handler($context, $tx, $object, $values);
-            return array('result' => $result, 'summary' => $meta['op'] . ' ' . $meta['kind'] . (isset($meta['id']) ? ' ' . $meta['id'] : ''));
+            return array('result' => $result, 'summary' => $meta['op'] . ' ' . $meta['kind'] . ($key !== null ? ' ' . $key : ''));
         });
-        if (!isset($meta['id'])) { return $meta + array('changeset_id' => $info['changeset_id']) + $result; }
-        return $this->written($kind->name(), $meta['id'], $info, array('revision' => Snapshot::revision(Snapshot::capture($context->modx, $kind, $meta['id']))))
+        if ($key === null) { return $meta + array('changeset_id' => $info['changeset_id']) + $result; }
+        return $this->written($kind, $key, $info, array('revision' => Snapshot::revision(Snapshot::capture($context->modx, $kind, $key))))
             + $meta + $result;
     }
 }

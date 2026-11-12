@@ -81,15 +81,26 @@ const api = new ModxApiClient(MODX_SITE_URL, API_TOKEN, { sessionId: randomUUID(
 // refused by the site instead of silently overwriting someone else's change.
 const seenRevisions = new Map();
 const revisionKey = (kind, id) => `${kind}:${id}`;
+const keyedRevisionKey = (kind, key) => `${kind}:key:${key}`;
+
+// An object is tracked under kind:id (integer ids) or kind:key:<key> (kinds without a numeric id).
+// The argument or result field that is present decides which one.
+function trackedKey(source) {
+  if (typeof source.kind !== "string") return null;
+  if (Number.isInteger(source.id)) return revisionKey(source.kind, source.id);
+  if (typeof source.key === "string") return keyedRevisionKey(source.kind, source.key);
+  return null;
+}
 
 function rememberRevisions(tool, result) {
   if (tool.action === "undo" && result.performed === true) {
     seenRevisions.clear();   // an undo moves any number of objects to older states
     return;
   }
-  if (typeof result.kind !== "string" || !Number.isInteger(result.id)) return;
-  if (result.deleted === true || typeof result.revision !== "string") seenRevisions.delete(revisionKey(result.kind, result.id));
-  else if (result.dry_run !== true) seenRevisions.set(revisionKey(result.kind, result.id), result.revision);
+  const tracked = trackedKey(result);
+  if (tracked === null) return;
+  if (result.deleted === true || typeof result.revision !== "string") seenRevisions.delete(tracked);
+  else if (result.dry_run !== true) seenRevisions.set(tracked, result.revision);
 }
 
 function toMcpTool(tool) {
@@ -173,8 +184,7 @@ async function callTool(request, extra) {
       requestId = args._request_id || randomUUID();
       delete args._request_id;
     }
-    const tracked = write && tool.inputSchema.properties?.expected_revision && typeof args.kind === "string" && Number.isInteger(args.id)
-      ? revisionKey(args.kind, args.id) : null;
+    const tracked = write && tool.inputSchema.properties?.expected_revision ? trackedKey(args) : null;
     if (tracked && args.expected_revision === undefined && seenRevisions.has(tracked)) {
       args.expected_revision = seenRevisions.get(tracked);
     }

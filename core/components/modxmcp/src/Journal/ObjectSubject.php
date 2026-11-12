@@ -16,7 +16,7 @@ final class ObjectSubject implements Subject {
     public function __construct(\modX $modx, Kind $kind, $id) {
         $this->modx = $modx;
         $this->kind = $kind;
-        $this->id = (int) $id;
+        $this->id = $kind->normalizeKey($id);
     }
 
     public function kind() { return $this->kind; }
@@ -24,6 +24,8 @@ final class ObjectSubject implements Subject {
     public function kindName() { return $this->kind->name(); }
 
     public function key() { return (string) $this->id; }
+
+    public function publicKey() { return $this->kind->publicKey($this->id); }
 
     public function capture() { return Snapshot::capture($this->modx, $this->kind, $this->id); }
 

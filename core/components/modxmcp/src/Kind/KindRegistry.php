@@ -34,6 +34,12 @@ final class KindRegistry {
         return $this->kinds;
     }
 
+    /** Add a kind instance to this registry. For tests only; production never calls it. */
+    public function register(Kind $kind) {
+        $this->all();
+        $this->kinds[$kind->name()] = $kind;
+    }
+
     /** @return Kind|null */
     public function get($name) {
         $all = $this->all();

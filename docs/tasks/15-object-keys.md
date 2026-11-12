@@ -125,3 +125,48 @@ Checks, all through the real actions:
 `src/Write/Transaction.php`, the actions listed above plus `HistoryAction`,
 `HistoryDiffAction`, `UndoAction`, `ListAction`, `DescribeAction` (if needed),
 `client/index.js`, tests, `tests/php/FakeModx.php`.
+
+## Report
+
+Based on: main at 31fe026
+
+Counts: before `npm run check` OK (129 PHP files, 15 JS files), PHP 962 checks, Node 24 tests. After: check OK (130 PHP files), PHP 1022 checks, Node 25 tests. No existing assertion was edited or removed.
+
+Implemented, file by file:
+
+- `src/Kind/Kind.php`: `keyType`, `normalizeKey`, `keyCriteria`, `keyOf`, `keyColumn`, `processorKey`, `createdKey`, `findByKey`, plus two small helpers `keyField()` ("id"/"key") and `publicKey($key)` (int for integer kinds, string otherwise). `find()` accepts `id`, `key` or `name` (name is an alias of key for string kinds). `defaultSort()` ends with `keyColumn()`. `opMakeStatic`, `presentRelation` use `keyOf`. `describe()` adds `key_type` and `key_field`.
+- `src/Kind/Objects.php`: `resolve()` per key type with the two refusal messages ("addressed by key, not id: use the key argument" / "addressed by id (or name), not key: use the id argument"); new `resolveKey()` and `keyText()`; `save()` uses `findByKey`, `processorKey`, `createdKey`; `assertRevision` takes any key.
+- `src/Kind/KindRegistry.php`: public `register(Kind)`. `src/Kind/StaticFiles.php`: re-resolve through `resolveKey`.
+- `src/Journal/Snapshot.php`, `ObjectSubject.php`, `Subject.php` (adds `publicKey()`), `Subjects.php` (adds `publicKey()` and `keyField()` for journal rows), `src/Files/FileSubject.php` (`publicKey()`), `src/Write/Transaction.php` (changes use `publicKey()`; `ctype_digit` heuristic removed).
+- Actions: `Action::keyArgument()` shared definition of the `key` argument; added to get, update, delete, duplicate, invoke, view_code, edit_code, find_usages. Results use `$kind->keyField()`; `WriteAction::written()` now takes the Kind (not the kind name). Output schemas declare optional `key`; `id` is no longer in `required` for get, view_code, find_usages (a string-key kind has no id). History, history_diff, undo entries use `Subjects::keyField/publicKey`. duplicate reports `source_key` instead of `source_id` for string kinds.
+- `client/index.js`: objects tracked as `kind:id` or `kind:key:<key>` (`trackedKey()`), same for results.
+- Tests: `tests/php/TestSettingKind.php` (test-only), `tests/php/FakeModx.php` (primary key per class, `modSystemSetting` -> `key`; `system/settings/*` processors), `tests/php/run.php` (new "keys:" section, 60 checks covering everything the brief lists), `tests/client.test.js` (mock accepts `key`; new test for the revision sent for an object addressed by key).
+
+Deviations and conservative readings:
+
+- `ListAction` was not edited: the tie-break is in `Kind::defaultSort()`, which now uses `keyColumn()`; `ResourceKind` keeps its own `defaultSort` with `id`. `ResourceKind` and `DescribeAction` are unchanged (`describe()` lives in `Kind`).
+- `id` was removed from the `required` list of the get, view_code and find_usages output schemas, otherwise string-key kinds could not satisfy them.
+- Unknown kinds in history/undo now show the stored string even when it is all digits (the brief says to drop the heuristic); known integer kinds still show an int.
+- `modx_history` has no `key` filter (the brief lists no change to it); `id` there still filters by `object_key` as a string, so a string-kind object cannot be filtered by key yet.
+- `InvokeAction`: the message "This operation takes no id or name." is kept as is; `key` is rejected under the same rule.
+
+Verified only against the fake MODX (to check on the stand once brief 16 lands real kinds): everything about string keys; `modSystemSetting` rows and the `system/settings/*` processors are fakes. The `modSystemSetting` primary key `key` in real xPDO `getObject` criteria is assumed to work as `array('key' => ...)`.
+
+Open questions:
+
+- A create processor that throws after saving (the fake's `failProcessor` on `.../create`) leaves the new object unregistered in the transaction, so rollback cannot remove it. This is existing behaviour for integer kinds too; I did not test or change it.
+- The test kind makes `key` a writable field, so `update` could try to rename a key; the transaction would then track the old key only. Brief 16's real kinds should make the key field read-only on update (or reject it).
+- The built-in help (`core/components/modxmcp/docs/`) does not mention `key` yet; left for brief 16.
+
+## Review
+
+Accepted and merged. Every existing assertion is unchanged and passes; all six earlier
+stand checks pass against this branch, so behaviour for integer kinds is unchanged on a
+real site. The string-key path is exercised on the stand with brief 16.
+
+The deviations in the report are accepted. Open questions:
+
+- A create processor that throws after saving leaves an unregistered object: true, and it
+  predates this task. Recorded for a later fix.
+- Key immutability on update is required by brief 16 for its real kinds.
+- Help text for `key` comes with brief 16, when a real string-key kind exists.

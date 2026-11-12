@@ -55,8 +55,9 @@ class FakeObject {
     }
     public function save() {
         $code = modX::codeColumn($this->class);
-        $stored = isset($this->fields['id']) ? $this->modx->row($this->class, $this->fields['id']) : null;
-        if (empty($this->fields['id'])) { $this->fields['id'] = $this->modx->nextId($this->class); }
+        $pk = modX::primaryKey($this->class);
+        $stored = isset($this->fields[$pk]) ? $this->modx->row($this->class, $this->fields[$pk]) : null;
+        if ($pk === 'id' && empty($this->fields['id'])) { $this->fields['id'] = $this->modx->nextId($this->class); }
         // Like modElement::save(): the static file is written only when the column changed.
         if ($code && !empty($this->fields['static']) && !empty($this->fields['static_file'])
             && (!$stored || (string) $stored[$code] !== (string) $this->fields[$code])) {
@@ -226,10 +227,17 @@ class modX extends xPDO {
         return isset($map[$class]) ? $map[$class] : null;
     }
     private function persist() { if ($this->file) { file_put_contents($this->file, json_encode($this->tables)); } }
-    private static function key(array $fields) {
-        return isset($fields['id']) ? 'id:' . $fields['id'] : md5(json_encode($fields));
+    /** Primary key column per class; rows of other classes are matched by id (or by their whole content without one). */
+    public static $primaryKeys = array('modSystemSetting' => 'key');
+    public static function primaryKey($class) { return isset(self::$primaryKeys[$class]) ? self::$primaryKeys[$class] : 'id'; }
+    private static function key($class, array $fields) {
+        $pk = self::primaryKey($class);
+        return isset($fields[$pk]) ? $pk . ':' . $fields[$pk] : md5(json_encode($fields));
     }
-    public function row($class, $id) { return isset($this->tables[$class]['id:' . $id]) ? $this->tables[$class]['id:' . $id] : null; }
+    public function row($class, $id) {
+        $key = self::primaryKey($class) . ':' . $id;
+        return isset($this->tables[$class][$key]) ? $this->tables[$class][$key] : null;
+    }
     public function nextId($class) {
         $max = 0;
         foreach (isset($this->tables[$class]) ? $this->tables[$class] : array() as $row) { $max = max($max, isset($row['id']) ? (int) $row['id'] : 0); }
@@ -238,17 +246,18 @@ class modX extends xPDO {
     public function store($class, array $fields) {
         // Values come back from a database as strings.
         foreach ($fields as $key => $value) { $fields[$key] = $value === null ? null : (is_array($value) || is_object($value) ? json_encode($value) : (is_bool($value) ? ($value ? '1' : '0') : (string) $value)); }
-        if (!isset($fields['id'])) {
+        if (!isset($fields[self::primaryKey($class)])) {
             foreach (isset($this->tables[$class]) ? $this->tables[$class] : array() as $key => $row) {
                 if ($row == $fields) { unset($this->tables[$class][$key]); }
             }
         }
-        $this->tables[$class][self::key($fields)] = $fields;
+        $this->tables[$class][self::key($class, $fields)] = $fields;
         $this->persist();
     }
     public function drop($class, array $fields) {
+        $pk = self::primaryKey($class);
         foreach (isset($this->tables[$class]) ? $this->tables[$class] : array() as $key => $row) {
-            if (isset($fields['id']) ? (isset($row['id']) && (string) $row['id'] === (string) $fields['id']) : $row == $fields) {
+            if (isset($fields[$pk]) ? (isset($row[$pk]) && (string) $row[$pk] === (string) $fields[$pk]) : $row == $fields) {
                 unset($this->tables[$class][$key]);
             }
         }
@@ -373,6 +382,28 @@ class modX extends xPDO {
         return new FakeResponse(null, array('id' => $object->get('id')));
     }
 
+    /** system/settings/*: a setting is identified by its key, there is no numeric id. */
+    private function settingProcessor($action, array $data, $path) {
+        if (!isset($data['key']) || $data['key'] === '') { return new FakeResponse('Please specify a key.'); }
+        $object = $this->getObject('modSystemSetting', array('key' => $data['key']));
+        if ($action === 'create') {
+            if ($object) { return new FakeResponse('A setting with that key already exists.'); }
+            $object = $this->newObject('modSystemSetting');
+            $data += array('value' => '', 'area' => '', 'xtype' => 'textfield', 'namespace' => 'core');
+        } elseif (!$object) {
+            return new FakeResponse('Setting not found.');
+        }
+        if ($action === 'remove') {
+            $object->remove();
+            return new FakeResponse(null, array('key' => $data['key']));
+        }
+        unset($data['clearCache']);
+        $object->fromArray($data, '', true, true);
+        $object->save();
+        if ($this->failProcessor === $path) { throw new RuntimeException('Simulated failure after save.'); }
+        return new FakeResponse(null, $object->toArray());
+    }
+
     /** Minimal create / update / remove processors with the validation the real ones have. */
     public function runProcessor($path, array $data = array()) {
         if ($path === 'security/group/user/create' || $path === 'security/group/user/remove') {
@@ -413,6 +444,7 @@ class modX extends xPDO {
         }
         $action = basename($path);
         $base = substr($path, 0, -strlen($action));
+        if ($base === 'system/settings/') { return $this->settingProcessor($action, $data, $path); }
         if (in_array($base, array('security/group/', 'security/role/', 'security/resourcegroup/'), true)) { return $this->accessProcessor($base, $action, $data); }
         if ($base === 'resource/') { return $this->resourceProcessor($action, $data, $path); }
         if (!isset(self::$processors[$base])) { return null; }

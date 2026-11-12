@@ -128,7 +128,7 @@ final class Transaction {
                 'extra_blob' => $extraBlob, 'reversible' => $reversible, 'note' => $note,
             );
             $changes[] = array(
-                'kind' => $subject->kindName(), 'id' => ctype_digit($key) ? (int) $key : $key, 'op' => $op,
+                'kind' => $subject->kindName(), 'id' => $subject->publicKey(), 'op' => $op,
                 'revision' => $afterRevision, 'before_revision' => $beforeRevision,
                 'changed' => $subject->changed($before, $after), 'reversible' => $reversible,
             );

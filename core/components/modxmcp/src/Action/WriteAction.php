@@ -3,11 +3,12 @@ namespace ModxMCP\Action;
 
 use ModxMCP\Auth\Scope;
 use ModxMCP\Context;
+use ModxMCP\Kind\Kind;
 use ModxMCP\Schema;
 
 /**
  * Base of every action that changes the site. All of them share one contract: optional
- * expected_revision and dry_run in, and kind/id/revision/changeset_id/reversible/changed out.
+ * expected_revision and dry_run in, and kind/id (or key)/revision/changeset_id/reversible/changed out.
  */
 abstract class WriteAction extends Action {
     public function readOnly() {
@@ -36,6 +37,7 @@ abstract class WriteAction extends Action {
         return Schema::obj(array(
             'kind'         => Schema::str(),
             'id'           => Schema::int(),
+            'key'          => Schema::str(),
             'revision'     => array('type' => array('string', 'null')),
             'changeset_id' => array('type' => array('integer', 'null')),
             'reversible'   => Schema::bool(),
@@ -57,14 +59,14 @@ abstract class WriteAction extends Action {
     }
 
     /** Result of a single-object write, from the transaction's commit info. */
-    protected function written($kindName, $id, array $info, array $extra = array()) {
+    protected function written(Kind $kind, $id, array $info, array $extra = array()) {
         $change = null;
         foreach ($info['changes'] as $item) {
-            if ($item['kind'] === $kindName && (int) $item['id'] === (int) $id) { $change = $item; }
+            if ($item['kind'] === $kind->name() && (string) $item['id'] === (string) $id) { $change = $item; }
         }
         return array(
-            'kind'         => $kindName,
-            'id'           => (int) $id,
+            'kind'         => $kind->name(),
+            $kind->keyField() => $kind->publicKey($id),
             'revision'     => $change ? $change['revision'] : (isset($extra['revision']) ? $extra['revision'] : null),
             'changeset_id' => $info['changeset_id'],
             'reversible'   => $change ? $change['reversible'] : true,

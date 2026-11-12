@@ -41,7 +41,8 @@ final class HistoryDiffAction extends Action {
 
         $objects = array();
         foreach ($changeset['changes'] as $change) {
-            $item = array('kind' => $change['kind'], 'id' => ctype_digit($change['object_key']) ? (int) $change['object_key'] : $change['object_key'], 'name' => $change['label'], 'op' => $change['op']);
+            $item = array('kind' => $change['kind'], Subjects::keyField($context, $change['kind']) => Subjects::publicKey($context, $change['kind'], $change['object_key']),
+                'name' => $change['label'], 'op' => $change['op']);
             $before = $load($change['before_revision']);
             $after = $load($change['after_revision']);
             try {

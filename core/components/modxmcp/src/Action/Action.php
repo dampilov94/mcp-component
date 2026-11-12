@@ -21,6 +21,11 @@ abstract class Action {
         return Schema::obj();
     }
 
+    /** The `key` argument of every tool that picks one object: for kinds without a numeric id. */
+    protected static function keyArgument() {
+        return Schema::str('Key of the object, for kinds without a numeric id (see modx_describe).', array('maxLength' => 255));
+    }
+
     /** Output schema. Every action returns a JSON object. */
     public function outputSchema() {
         return Schema::obj(array(), array(), true);

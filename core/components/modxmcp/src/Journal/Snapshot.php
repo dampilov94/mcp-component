@@ -12,10 +12,11 @@ use ModxMCP\Kind\StaticFiles;
 final class Snapshot {
     /** Current state of an object, or null when it does not exist. */
     public static function capture(\modX $modx, Kind $kind, $key) {
-        $object = $kind->find($modx, array('id' => (int) $key));
+        $key = $kind->normalizeKey($key);
+        $object = $kind->findByKey($modx, $key);
         if (!$object) { return null; }
         $fields = $kind->stateColumns(self::row($object));
-        $state = array('kind' => $kind->name(), 'key' => (string) (int) $key);
+        $state = array('kind' => $kind->name(), 'key' => (string) $key);
         if ($kind->codeField() !== null) {
             // The file is the truth for a static element; a stale database copy must not
             // change the revision.
@@ -30,7 +31,7 @@ final class Snapshot {
 
     /** Rows that exist only to make a delete reversible (data owned by other objects). */
     public static function captureDeleteExtra(\modX $modx, Kind $kind, $key) {
-        $object = $kind->find($modx, array('id' => (int) $key));
+        $object = $kind->findByKey($modx, $kind->normalizeKey($key));
         return $object ? self::relations($modx, $kind, $object, true) : array();
     }
 
@@ -39,7 +40,7 @@ final class Snapshot {
         foreach ($kind->relationSpecs() as $name => $spec) {
             if (!empty($spec['delete_only']) !== $deleteOnly) { continue; }
             $rows = array();
-            foreach ($modx->getCollection($spec['class'], self::criteria($spec, $object->get('id'))) as $row) {
+            foreach ($modx->getCollection($spec['class'], self::criteria($spec, $kind->keyOf($object))) as $row) {
                 $rows[] = self::row($row);
             }
             usort($rows, function ($a, $b) { return strcmp(json_encode($a), json_encode($b)); });
@@ -123,7 +124,8 @@ final class Snapshot {
      * @param array $extra delete-only relation rows recorded before a delete
      */
     public static function restore(\modX $modx, Kind $kind, $key, $state, array $extra = array()) {
-        $object = $kind->find($modx, array('id' => (int) $key));
+        $key = $kind->normalizeKey($key);
+        $object = $kind->findByKey($modx, $key);
         $events = $kind->eventNames();
 
         if ($state === null) {
@@ -132,7 +134,7 @@ final class Snapshot {
             if (!$object->remove()) { throw new \RuntimeException("Cannot remove {$kind->name()} {$key}."); }
             StaticFiles::removeManaged($modx, $staticPath);
             if (isset($events['delete'])) {
-                $modx->invokeEvent($events['delete'], array('id' => (int) $key, $events['param'] => &$object, 'object' => &$object));
+                $modx->invokeEvent($events['delete'], array('id' => $key, $events['param'] => &$object, 'object' => &$object));
             }
             return;
         }
@@ -155,7 +157,7 @@ final class Snapshot {
         $rows = $state['relations'] + $extra;
         foreach ($kind->relationSpecs() as $name => $spec) {
             if (!isset($rows[$name])) { continue; }
-            $modx->removeCollection($spec['class'], self::criteria($spec, (int) $key));
+            $modx->removeCollection($spec['class'], self::criteria($spec, $key));
             foreach ($rows[$name] as $row) {
                 $related = $modx->newObject($spec['class']);
                 $related->fromArray($row, '', true, true);
@@ -164,7 +166,7 @@ final class Snapshot {
         }
         if (isset($events['save'])) {
             $modx->invokeEvent($events['save'], array(
-                'mode' => $isNew ? 'new' : 'upd', 'id' => (int) $key, $events['param'] => &$object, 'object' => &$object,
+                'mode' => $isNew ? 'new' : 'upd', 'id' => $key, $events['param'] => &$object, 'object' => &$object,
             ));
         }
     }

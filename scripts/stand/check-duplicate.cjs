@@ -34,7 +34,7 @@ const cfg = require(path.join(repo, ".mcp.json")).mcpServers.modx.env;
   assert.equal(copy2.name, "mcp2test_dup copy 2");
   step("chunk copied with automatic names");
 
-  const staticChunk = await run("modx_create", { kind: "chunk", fields: { name: "mcp2test_dup_static", content: "static body", static: true, static_file: "modxmcp/_mcp2test_dup.tpl" } });
+  const staticChunk = await run("modx_create", { kind: "chunk", fields: { name: "mcp2test_dup_static", content: "static body", static: true, static_file: "[[++core_path]]elements/chunks/mcp2test_dup_static.tpl" } });
   const staticCopy = await run("modx_duplicate", { kind: "chunk", id: staticChunk.id, new_name: "mcp2test_dup_static_copy" });
   const staticGot = await run("modx_get", { kind: "chunk", id: staticCopy.id });
   assert.equal(staticGot.fields.static, false);
@@ -84,5 +84,5 @@ const cfg = require(path.join(repo, ".mcp.json")).mcpServers.modx.env;
   assert.deepEqual((await run("modx_site_info")).counts, before);
   step(`undo to checkpoint (${back.changesets.length} changesets): counts as before`);
   await client.close();
-  console.log("ALL OK (remove core/components/modxmcp/_mcp2test_dup.tpl from the stand by hand)");
+  console.log("ALL OK");
 })().catch((error) => { console.error("FAILED:", error.message); process.exit(1); });

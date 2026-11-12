@@ -33,6 +33,7 @@ final class EditCodeAction extends WriteAction {
             'kind'      => Schema::str(null, array('pattern' => '^[a-z][a-z0-9_]{0,63}$')),
             'id'        => Schema::int(null, array('minimum' => 1)),
             'name'      => Schema::str('Name, when the id is not known.', array('maxLength' => 255)),
+            'key'       => self::keyArgument(),
             'edits'     => Schema::arr($edit, 'Edits, all relative to the code before this call.', array('maxItems' => 100)),
             'skip_lint' => Schema::bool('Save PHP code even if it does not parse.'),
         ) + $this->commonInput(), array('kind', 'edits'));
@@ -43,13 +44,13 @@ final class EditCodeAction extends WriteAction {
         $field = $kind->codeField();
         if ($field === null) { throw new ApiException('validation_failed', "Kind '{$kind->name()}' has no code."); }
         if (!$args['edits']) { throw new ApiException('validation_failed', 'edits must not be empty.'); }
-        $id = (int) Objects::resolve($context, $kind, $args)->get('id');
+        $id = $kind->keyOf(Objects::resolve($context, $kind, $args));
         $dry = $this->isDryRun($args, $context);
         $lines = array();
 
         list($result, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $kind, $field, $id, $args, $dry, &$lines) {
             $before = $tx->touch($kind, $id);
-            if ($before === null) { throw new ApiException('not_found', "No {$kind->name()} with id {$id}."); }
+            if ($before === null) { throw new ApiException('not_found', "No {$kind->name()} with " . Objects::keyText($kind, $id) . '.'); }
             Objects::assertRevision($context, $kind, $id, $before, $args);
             if (!empty($before['static_file_missing'])) {
                 throw new ApiException('validation_failed', 'The static file of this element is missing. Restore it before editing.');
@@ -60,7 +61,7 @@ final class EditCodeAction extends WriteAction {
             Objects::lint($context, $kind, array($column => $content), !empty($args['skip_lint']));
             if ($dry) {
                 return array('result' => array(
-                    'kind' => $kind->name(), 'id' => $id, 'revision' => Snapshot::revision($before),
+                    'kind' => $kind->name(), $kind->keyField() => $id, 'revision' => Snapshot::revision($before),
                     'would_change' => $content === $before['fields'][$column] ? array() : array($field), 'reversible' => true,
                 ) + $lines);
             }
@@ -70,6 +71,6 @@ final class EditCodeAction extends WriteAction {
             return array('result' => array(), 'summary' => "edit code of {$kind->name()} {$id}");
         });
         if ($dry) { return $this->plan($context, $result); }
-        return $this->written($kind->name(), $id, $info, $lines + array('revision' => Snapshot::revision(Snapshot::capture($context->modx, $kind, $id))));
+        return $this->written($kind, $id, $info, $lines + array('revision' => Snapshot::revision(Snapshot::capture($context->modx, $kind, $id))));
     }
 }
