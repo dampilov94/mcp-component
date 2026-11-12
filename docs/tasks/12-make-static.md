@@ -140,3 +140,22 @@ file-first conversion approach; its cache writeFile returns a boolean even for e
 Only fake MODX and real temporary files were exercised. Verify native static-source changes,
 processor events, file permissions, empty content, deletion and undo on the stand (especially
 sites enabling MODX's own static-file automation). No blocking questions, deployment or push.
+
+## Review
+
+Accepted and merged with the rest of the stack (09–14). Verified on the stand with
+`scripts/stand/check-operations.cjs`; every earlier stand check was rerun.
+
+One real defect, found only on the stand, fixed by the architect:
+
+MODX stores snippet and plugin files with an opening PHP tag (`modScript::setFileContent()`
+prepends `<?php\n`, `getFileContent()` strips it). The conversion wrote the bare code, and
+`Kind::effectiveContent()` returned the raw file, so the same snippet had two different
+contents depending on who wrote the file last: after a delete and undo MODX rewrote the
+file with the tag and the restored revision no longer matched. The brief and the 2.0 core
+were both wrong here, not the executor: the core had the same flaw since stage 2 and it only
+surfaced once new elements became static by default.
+
+Now `Kind::fileContent()` / `Kind::codeFromFile()` translate between code and file bytes for
+kinds linted as PHP; every place that reads or writes a static file uses them. The API shows
+snippet and plugin code without the tag whether or not the element is static.

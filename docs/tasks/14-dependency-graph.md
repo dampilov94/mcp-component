@@ -114,3 +114,11 @@ not fixed, per the faithful-port requirement. Global stats remain global in filt
 Only fake MODX/local files were exercised. Verify real xPDO JSON properties, media-source
 static paths, miniShop2 model loading and the unchanged visual manager consumer on the stand.
 No blocking questions, deployment or push.
+
+## Review
+
+Accepted and merged with the rest of the stack (09–14). Verified on the stand with
+`scripts/stand/check-operations.cjs`; every earlier stand check was rerun.
+
+No changes. The builder differs from the 1.x trait only in how it reads static code; on the
+stand it reports 112 nodes and 105 edges for the same site the manager page shows.

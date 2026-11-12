@@ -104,6 +104,20 @@ After stage 3:
   `admin`. Members, resources and access rules are part of the snapshot, so a deleted group
   comes back complete.
 
+- `modx_delete` dry run lists where the object is still used and warns.
+- `modx_invoke`: operations declared by kinds. First operations: group membership
+  (`add_member`, `remove_member`, `member_count`; `add_resource`, `remove_resource`), TV input
+  types (`list_input_types`, `suggest_type`) and `make_static`.
+- Static elements: with `modxmcp.auto_static` (on by default) new chunks, snippets, templates
+  and plugins are created as files under `core/elements/`; those files are removed when the
+  element is deleted or its creation undone. Snippet and plugin files carry the opening PHP
+  tag as MODX writes them; the API always shows the code without it.
+- `modx_check_page`: fetches one page of the site itself and reports status, time, title and
+  the error-log entries written during the request.
+- `modx_dependency_graph` in the 2.0 core; the manager graph page uses the same builder, and
+  nothing loads the 1.x model any more.
+- Help topics `tv_input_types` and `graph` rewritten for 2.0.
+
 - Offline tests (`npm test`): pure PHP logic, the real kernel behind PHP's built-in server with
   stubbed MODX classes, and the Node bridge end to end. CI runs them.
 

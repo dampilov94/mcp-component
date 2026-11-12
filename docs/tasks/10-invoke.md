@@ -144,3 +144,10 @@ site writes were introduced. The architect should decide how to cover that side 
 
 Only fake MODX was exercised. Verify processor permissions/defaults, primary-group behavior,
 resource-group events and both-object undo on the stand. No deployment or push.
+
+## Review
+
+Accepted and merged with the rest of the stack (09–14). Verified on the stand with
+`scripts/stand/check-operations.cjs`; every earlier stand check was rerun.
+
+No changes.

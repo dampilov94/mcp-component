@@ -11,7 +11,9 @@ final class CheckPageAction extends Action {
     public function name() { return 'check_page'; }
     public function group() { return 'verify'; }
     public function description() {
-        return 'Fetch one page as an anonymous visitor and report status, time, unparsed MODX tags and error-log entries written during the request; only this site\'s own addresses.';
+        return 'Fetch one page of this site as an anonymous visitor and report status, time, title and the error-log entries written '
+            . 'during the request — a missing snippet or a broken tag shows up there, because MODX removes unknown tags from the output. '
+            . 'Tags that did survive are listed as unparsed. Only this site\'s own addresses.';
     }
     public function inputSchema() {
         return Schema::obj(array('id' => Schema::int(null, array('minimum' => 1)),

@@ -118,3 +118,12 @@ All page requests used a fake fetcher: CurlPageFetcher, its missing-extension pa
 TLS, body abort and remote HTTP behavior remain untested as requested. Verify those and real
 context URL generation on the stand. Log output is the newest 20 entries within max_read_bytes,
 not a claim to count all errors during a busy request. No blocking questions or push.
+
+## Review
+
+Accepted and merged with the rest of the stack (09–14). Verified on the stand with
+`scripts/stand/check-operations.cjs`; every earlier stand check was rerun.
+
+No code changes. On the stand MODX removed an unknown chunk tag from the output and logged
+errors for a JavaScript array it took for a snippet call: the log entries are the useful
+signal, `unparsed_tags` is rarely non-empty. The description now says so.

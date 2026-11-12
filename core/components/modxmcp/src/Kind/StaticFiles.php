@@ -33,8 +33,9 @@ final class StaticFiles {
             }
             if (!$handle) { throw new ApiException('validation_failed', 'No unused static filename through suffix 20.'); }
             $written = 0;
-            while ($written < strlen($code)) {
-                $bytes = fwrite($handle, substr($code, $written));
+            $data = $kind->fileContent($code);
+            while ($written < strlen($data)) {
+                $bytes = fwrite($handle, substr($data, $written));
                 if ($bytes === false || $bytes === 0) { throw new \RuntimeException('Cannot write static file.'); }
                 $written += $bytes;
             }

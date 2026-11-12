@@ -61,3 +61,10 @@ Based on: main at e01492a
 
 No deviations. Only fake MODX/local files tested; verify real usage queries and dry-run
 warnings on the stand. No open questions, deployment or push.
+
+## Review
+
+Accepted and merged with the rest of the stack (09–14). Verified on the stand with
+`scripts/stand/check-operations.cjs`; every earlier stand check was rerun.
+
+No changes.

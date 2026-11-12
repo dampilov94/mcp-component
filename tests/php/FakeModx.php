@@ -61,8 +61,11 @@ class FakeObject {
         if ($code && !empty($this->fields['static']) && !empty($this->fields['static_file'])
             && (!$stored || (string) $stored[$code] !== (string) $this->fields[$code])) {
             $path = $this->getSourceFile();
-            if (!is_file($path) || file_get_contents($path) !== (string) $this->fields[$code]) {
-                file_put_contents($path, (string) $this->fields[$code]);
+            // Like modScript::setFileContent(): snippet and plugin files get an opening PHP tag.
+            $script = in_array($this->class, array('modSnippet', 'modPlugin'), true);
+            $bytes = ($script ? "<?php\n" : '') . (string) $this->fields[$code];
+            if (!is_file($path) || file_get_contents($path) !== $bytes) {
+                file_put_contents($path, $bytes);
             }
         }
         $this->modx->store($this->class, $this->fields);

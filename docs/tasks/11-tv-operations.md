@@ -71,3 +71,10 @@ how to translate that hint into a current API call. Empty custom remains the leg
 neither legacy result was a bare list, so no wrapper was added.
 Only fake MODX was exercised; check real OnTVInputRenderList plugins and installed add-on
 fallbacks on the stand. No blocking questions, deployment or push.
+
+## Review
+
+Accepted and merged with the rest of the stack (09–14). Verified on the stand with
+`scripts/stand/check-operations.cjs`; every earlier stand check was rerun.
+
+No changes.

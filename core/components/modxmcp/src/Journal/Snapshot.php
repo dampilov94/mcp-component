@@ -147,7 +147,7 @@ final class Snapshot {
         if ($kind->codeField() !== null && isset($fields['static']) && $fields['static'] === '1' && empty($state['static_file_missing'])) {
             $path = $object->getSourceFile();
             if ($path && strpos($path, '://') === false) {
-                self::writeFile($path, (string) $fields[$kind->column($kind->codeField())]);
+                self::writeFile($path, $kind->fileContent((string) $fields[$kind->column($kind->codeField())]));
             }
         }
         if (!$object->save()) { throw new \RuntimeException("Cannot restore {$kind->name()} {$key}."); }

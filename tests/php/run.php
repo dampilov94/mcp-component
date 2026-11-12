@@ -1187,7 +1187,8 @@ foreach (array('chunk' => array('chunks', 'tpl'), 'snippet' => array('snippets',
     $stored = '[[++core_path]]elements/' . $pathInfo[0] . '/Test-' . $kindName . '-' . $dbElement['id'] . '.' . $pathInfo[1];
     $absolute = str_replace('[[++core_path]]', $staticSite->getOption('core_path'), $stored);
     $gotStatic = $call($staticDev, 'get', array('kind' => $kindName, 'id' => $dbElement['id']));
-    check('make_static: conversion ' . $kindName, $converted['status'] === 'converted' && $converted['static_file'] === $stored && file_get_contents($absolute) === $code
+    check('make_static: conversion ' . $kindName, $converted['status'] === 'converted' && $converted['static_file'] === $stored
+        && file_get_contents($absolute) === (in_array($kindName, array('snippet', 'plugin'), true) ? "<?php\n" : '') . $code
         && $gotStatic['fields']['static'] && $gotStatic['fields']['source'] === 0 && $gotStatic['fields']['content'] === $code
         && $converted['revision'] !== $dbElement['revision'] && count($staticDev->journal()->changes(array($converted['changeset_id']))) === 1);
     $already = $call($staticDev, 'invoke', array('kind' => $kindName, 'id' => $dbElement['id'], 'op' => 'make_static'));
@@ -1742,6 +1743,28 @@ check('log: the "LEVEL in Class::method @ file : line" header is parsed', $inEnt
     'in' => 'modRestCurlClient::__construct', 'location' => '/var/www/site/core/model/modx/rest/modrestcurlclient.class.php : 26', 'message' => 'cURL is missing')
     && $inEntries[1] === array('time' => '2026-11-11 20:06:19', 'level' => 'ERROR', 'location' => '/var/www/site/index.php : 5', 'message' => 'plain'));
 unlink($inLog);
+
+// Review additions: a static snippet's file carries the PHP tag, its code does not.
+list($tagSite, $tagDev, $tagDir) = $staticFixture('phptag');
+$tagged = $call($tagDev, 'create', array('kind' => 'snippet', 'fields' => array('name' => 'tagged', 'content' => "return 1;")));
+$tagRow = $tagSite->row('modSnippet', $tagged['id']);
+$tagFile = str_replace('[[++core_path]]', $tagSite->getOption('core_path'), $tagRow['static_file']);
+$tagGot = $call($tagDev, 'get', array('kind' => 'snippet', 'id' => $tagged['id']));
+check('static script: file has the PHP tag, the API shows code without it', file_get_contents($tagFile) === "<?php\nreturn 1;" && $tagGot['fields']['content'] === 'return 1;' && $tagGot['revision'] === $tagged['revision']);
+$tagEdit = $call($tagDev, 'update', array('kind' => 'snippet', 'id' => $tagged['id'], 'fields' => array('content' => "return 2;")));
+check('static script: an update keeps the tag in the file', file_get_contents($tagFile) === "<?php\nreturn 2;" && $call($tagDev, 'view_code', array('kind' => 'snippet', 'id' => $tagged['id']))['numbered'] === "1\treturn 2;");
+$tagRevision = $call($tagDev, 'get', array('kind' => 'snippet', 'id' => $tagged['id']))['revision'];
+$tagDelete = $call($tagDev, 'delete', array('kind' => 'snippet', 'id' => $tagged['id']));
+$call($tagDev, 'undo', array('changeset_id' => $tagDelete['changeset_id'], 'confirm' => true));
+check('static script: delete and undo give the identical state and file', $call($tagDev, 'get', array('kind' => 'snippet', 'id' => $tagged['id']))['revision'] === $tagRevision
+    && file_get_contents($tagFile) === "<?php\nreturn 2;");
+file_put_contents($tagFile, "<?php\r\nreturn 3;");
+check('static script: a file edited by hand with CRLF after the tag', $call($tagDev, 'get', array('kind' => 'snippet', 'id' => $tagged['id']))['fields']['content'] === 'return 3;');
+file_put_contents($tagFile, "return 4;");
+check('static script: a file without a tag is read as it is', $call($tagDev, 'get', array('kind' => 'snippet', 'id' => $tagged['id']))['fields']['content'] === 'return 4;');
+$tagChunk = $call($tagDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'tagchunk', 'content' => '<?php not code')));
+$tagChunkFile = str_replace('[[++core_path]]', $tagSite->getOption('core_path'), $tagSite->row('modChunk', $tagChunk['id'])['static_file']);
+check('static chunk: files are stored exactly as the content', file_get_contents($tagChunkFile) === '<?php not code');
 
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));
