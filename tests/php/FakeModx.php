@@ -227,7 +227,14 @@ class modX extends xPDO {
         $this->persist();
     }
     private static function likes($row, $key, $value) {
-        return stripos((string) $row[substr($key, 0, -5)], trim($value, '%')) !== false;
+        $pattern = '';
+        for ($i = 0; $i < strlen($value); $i++) {
+            if ($value[$i] === '\\' && $i + 1 < strlen($value)) { $pattern .= preg_quote($value[++$i], '/'); }
+            elseif ($value[$i] === '%') { $pattern .= '.*'; }
+            elseif ($value[$i] === '_') { $pattern .= '.'; }
+            else { $pattern .= preg_quote($value[$i], '/'); }
+        }
+        return preg_match('/^' . $pattern . '$/is', (string) $row[substr($key, 0, -5)]) === 1;
     }
     private function match($class, $criteria) {
         $groups = $criteria instanceof FakeQuery ? $criteria->groups : array();
@@ -243,7 +250,7 @@ class modX extends xPDO {
             }
             foreach ($criteria as $key => $value) {
                 if (substr($key, -5) === ':LIKE') {
-                    if (stripos((string) $row[substr($key, 0, -5)], trim($value, '%')) === false) { continue 2; }
+                    if (!self::likes($row, $key, $value)) { continue 2; }
                 } elseif (!array_key_exists($key, $row) || (string) $row[$key] !== (string) $value) { continue 2; }
             }
             $out[] = $row;

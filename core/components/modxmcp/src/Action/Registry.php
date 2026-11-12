@@ -22,6 +22,7 @@ final class Registry {
         BulkResourcesAction::class,
         ViewCodeAction::class,
         EditCodeAction::class,
+        SearchAction::class,
         ListFilesAction::class,
         ReadFileAction::class,
         WriteFileAction::class,

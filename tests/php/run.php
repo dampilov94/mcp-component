@@ -113,14 +113,14 @@ $context = function ($scope, array $denied = array(), array $options = array()) 
 $read = $context('read');
 $tools = Manifest::tools($read);
 $names = array_column($tools, 'name');
-check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_resource_tree', 'modx_view_code', 'modx_list_files', 'modx_read_file', 'modx_history', 'modx_history_diff', 'modx_request_status'));
+check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_resource_tree', 'modx_view_code', 'modx_search', 'modx_list_files', 'modx_read_file', 'modx_history', 'modx_history_diff', 'modx_request_status'));
 check('manifest: protocol action is not a tool', !in_array('modx_manifest', $names, true));
 check('manifest: hash is stable', Manifest::hash($tools) === Manifest::hash(Manifest::tools($context('read'))));
 foreach ($tools as $tool) {
     check("manifest: {$tool['name']} is read-only", $tool['effect']['read_only'] === true && $tool['effect']['destructive'] === false);
 }
 $all = array_column(Manifest::tools($context('admin')), null, 'name');
-check('manifest: full tool count', count($all) === 24);
+check('manifest: full tool count', count($all) === 25);
 check('manifest: duplicate is a reversible write after delete', $all['modx_duplicate']['effect']['read_only'] === false
     && $all['modx_duplicate']['effect']['reversible'] === true && $all['modx_duplicate']['effect']['destructive'] === false
     && array_search('modx_duplicate', array_keys($all), true) === array_search('modx_delete', array_keys($all), true) + 1);
@@ -318,6 +318,46 @@ check('list: paging', count($page['items']) === 2 && $page['next_start'] === 2);
 check('list: name query', array_column($call($dev, 'list', array('kind' => 'chunk', 'query' => 'head'))['items'], 'name') === array('head_meta', 'header'));
 check('list: exact filter', array_column($call($dev, 'list', array('kind' => 'chunk', 'where' => array('category' => 3)))['items'], 'name') === array('footer'));
 throws('list: code cannot be listed', ApiException::class, function () use ($call, $dev) { $call($dev, 'list', array('kind' => 'chunk', 'fields' => array('content'))); });
+
+// Search: temporary fixtures do not disturb the journal/history checks below.
+$searchFile = $siteDir . '/search.tpl';
+file_put_contents($searchFile, "  Needle one  \nno\nNeedle two Needle\nneedle lower");
+$searchRows = array(
+    array('modChunk', array('id' => 1001, 'name' => 'Z search', 'snippet' => 'stale', 'static' => 1, 'static_file' => $searchFile)),
+    array('modChunk', array('id' => 1002, 'name' => 'A search', 'snippet' => 'Needle chunk')),
+    array('modSnippet', array('id' => 1001, 'name' => 'S search', 'snippet' => 'return "needle";')),
+    array('modResource', array('id' => 1001, 'pagetitle' => 'Page search', 'content' => 'needle %_\\ literal')),
+);
+foreach ($searchRows as $row) { $site->store($row[0], $row[1]); }
+$searchBefore = $site->row('modChunk', 1001);
+$found = $call($actor('read'), 'search', array('query' => 'needle', 'kinds' => array('snippet', 'chunk'), 'max_matches' => 1));
+check('search: exact counts, requested kind/name order', $found['objects'] === 3 && !$found['truncated']
+    && array_column($found['results'], 'name') === array('S search', 'A search', 'Z search')
+    && $found['results'][2]['match_count'] === 3 && $found['results'][2]['matches'] === array(array('line' => 1, 'text' => 'Needle one')));
+$exact = $call($dev, 'search', array('query' => 'Needle', 'case_sensitive' => true));
+check('search: case sensitivity and line numbers', $exact['objects'] === 2 && $exact['results'][1]['matches'] === array(
+    array('line' => 1, 'text' => 'Needle one'), array('line' => 3, 'text' => 'Needle two Needle')));
+check('search: static file and database are untouched', $site->row('modChunk', 1001) === $searchBefore
+    && file_get_contents($searchFile) === "  Needle one  \nno\nNeedle two Needle\nneedle lower");
+$limited = $call($dev, 'search', array('query' => 'needle', 'limit' => 1));
+check('search: limit reports truncation', $limited['objects'] === 1 && $limited['truncated']);
+$nameOnly = $call($dev, 'search', array('query' => 'A search'))['results'][0];
+check('search: name-only hit', $nameOnly['name_match'] && $nameOnly['match_count'] === 0 && $nameOnly['matches'] === array());
+check('search: resources are opt-in', $call($dev, 'search', array('query' => 'needle'))['objects'] === 3
+    && $call($dev, 'search', array('query' => 'needle', 'kinds' => array('resource')))['objects'] === 1);
+check('search: SQL wildcard escaping stays literal', $call($dev, 'search', array('query' => '%_\\', 'kinds' => array('resource')))['objects'] === 1
+    && $call($dev, 'search', array('query' => '%x', 'kinds' => array('resource')))['objects'] === 0);
+foreach (array('tv' => 'validation_failed', 'unknown' => 'not_found') as $badKind => $code) {
+    $e = throws('search: invalid kind', ApiException::class, function () use ($call, $dev, $badKind) { $call($dev, 'search', array('query' => 'needle', 'kinds' => array($badKind))); });
+    check('search: kind error code', $e && $e->errorCode === $code);
+}
+file_put_contents($searchFile, str_repeat('Ж', 400) . 'needle' . str_repeat('я', 400));
+$window = $call($dev, 'search', array('query' => 'needle'))['results'][1]['matches'][0]['text'];
+check('search: long UTF-8 window keeps match visible', preg_match('//u', $window) === 1 && mb_strlen($window, 'UTF-8') <= 301 && strpos($window, 'needle') !== false);
+unlink($searchFile);
+$missing = $call($dev, 'search', array('query' => 'Z search'))['results'][0];
+check('search: missing static file permits name-only hit', $missing['name_match'] && $missing['match_count'] === 0);
+foreach ($searchRows as $row) { $site->removeCollection($row[0], array('id' => $row[1]['id'])); }
 
 // History and diff
 $history = $call($dev, 'history', array('kind' => 'chunk', 'id' => 1));
