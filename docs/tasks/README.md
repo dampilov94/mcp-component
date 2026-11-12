@@ -54,7 +54,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 15 | [Object keys that are not numeric ids](15-object-keys.md) | `task/15-object-keys` | merged |
 | 16 | [Settings kinds](16-settings-kinds.md) | `task/16-settings-kinds` | merged |
 | 17 | [Kind user](17-users.md) | `task/17-users` | merged |
-| 18 | [Access rules](18-access-rules.md) | `task/18-access-rules` | ready for the executor |
+| 18 | [Access rules](18-access-rules.md) | `task/18-access-rules` | merged |
 
 ## Doing several briefs in a row
 

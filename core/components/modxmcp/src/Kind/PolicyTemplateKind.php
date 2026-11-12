@@ -44,6 +44,10 @@ final class PolicyTemplateKind extends Kind {
         if ($op === 'delete') {
             // MODX removes the template's policies (and theirs) with it.
             AccessRules::assertPoliciesFree($modx, AccessRules::templatePolicies($modx, $id), "delete policy template {$id}");
+            $rules = AccessRules::rulesUsingPolicies($modx, AccessRules::templatePolicies($modx, $id));
+            if ($rules) {
+                throw new ApiException('validation_failed', "Policies of template {$id} are still used by {$rules} access rule(s). Change or delete those rules first.");
+            }
         }
     }
 

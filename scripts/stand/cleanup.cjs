@@ -16,13 +16,14 @@ const cfg = require(path.join(repo, ".mcp.json")).mcpServers.modx.env;
     return result.isError ? { error: result.content[0].text } : result.structuredContent;
   };
   let removed = 0;
-  for (const kind of ["tv", "chunk", "snippet", "plugin", "template", "category", "resource_group", "user_group", "role", "resource"]) {
-    const list = await call("modx_list", { kind, query: "mcp2test_", limit: 200 });
+  for (const kind of ["context_access", "resourcegroup_access", "tv", "chunk", "snippet", "plugin", "template", "category", "resource_group", "user_group", "role", "user", "access_policy", "policy_template", "context_setting", "system_setting", "context", "namespace", "resource"]) {
+    const list = await call("modx_list", { kind, query: "mcp2test", limit: 200 });
     for (const item of list.items || []) {
       if (kind === "resource" && item.deleted) continue;
       if (kind === "tv") await call("modx_update", { kind, id: item.id, relations: { templates: [] } });
-      const result = await call("modx_delete", { kind, id: item.id });
-      console.log(result.error ? `FAILED ${kind} ${item.id}: ${result.error.slice(0, 160)}` : `removed ${kind} ${item.id} (${item.name || item.pagetitle})`);
+      const ref = item.key !== undefined ? { key: item.key } : { id: item.id };
+      const result = await call("modx_delete", { kind, ...ref });
+      console.log(result.error ? `FAILED ${kind} ${item.id}: ${result.error.slice(0, 160)}` : `removed ${kind} ${item.key ?? item.id} (${item.name || item.pagetitle || item.username || item.label || ''})`);
       if (!result.error) removed++;
     }
   }

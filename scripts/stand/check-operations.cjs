@@ -73,14 +73,16 @@ const cfg = require(path.join(repo, ".mcp.json")).mcpServers.modx.env;
 
   // Membership through modx_invoke.
   const group = await run("modx_create", { kind: "user_group", fields: { name: "mcp2test_group" } });
-  const added = await run("modx_invoke", { kind: "user_group", id: group.id, op: "add_member", args: { user: 1 } });
+  // A throwaway user: the service user may not be taken out of groups, and real users are not touched.
+  const member = (await run("modx_create", { kind: "user", fields: { username: "mcp2test_member", password: "Mcp2-" + Date.now() + "-x", email: "mcp2test-member@example.invalid" } })).id;
+  const added = await run("modx_invoke", { kind: "user_group", id: group.id, op: "add_member", args: { user: member } });
   assert.deepEqual(added.changed, ["members"]);
   assert.equal((await run("modx_invoke", { kind: "user_group", id: group.id, op: "member_count" })).members, 1);
-  await fails("modx_invoke", { kind: "user_group", id: group.id, op: "add_member", args: { user: 1 } }, /validation_failed/);
+  await fails("modx_invoke", { kind: "user_group", id: group.id, op: "add_member", args: { user: member } }, /validation_failed/);
   await run("modx_undo", { changeset_id: added.changeset_id, confirm: true });
   assert.equal((await run("modx_invoke", { kind: "user_group", id: group.id, op: "member_count" })).members, 0);
-  const again = await run("modx_invoke", { kind: "user_group", id: group.id, op: "add_member", args: { user: 1 } });
-  await run("modx_invoke", { kind: "user_group", id: group.id, op: "remove_member", args: { user: 1 } });
+  const again = await run("modx_invoke", { kind: "user_group", id: group.id, op: "add_member", args: { user: member } });
+  await run("modx_invoke", { kind: "user_group", id: group.id, op: "remove_member", args: { user: member } });
   assert.deepEqual((await run("modx_get", { kind: "user_group", id: group.id })).relations.members, []);
   step("user_group: add_member, duplicate refused, undo, remove_member");
 

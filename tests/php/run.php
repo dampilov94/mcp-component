@@ -2987,10 +2987,11 @@ check('access: undo of the delete brings parent, child and grandchild back as th
     && $aRow('modAccessPolicy', $child['id'])['data'] === '{"load":true}');
 $dryCascade = $call($aAdmin, 'delete', array('kind' => 'access_policy', 'id' => $parent['id'], 'dry_run' => true));
 check('access: delete dry run changes nothing', $dryCascade['dry_run'] === true && $aSite->getCount('modAccessPolicy', array('id' => $parent['id'])) === 1);
-// A rule that uses the policy stays: MODX removes only the policy (the rule is an aggregate).
+// MODX would leave a rule that uses the policy dangling (architect's review): the delete is refused.
 $aPlantAcl('modAccessContext', 50, 2, 'shop', $child['id'], array('authority' => 5));
-$call($aAdmin, 'delete', array('kind' => 'access_policy', 'id' => $child['id']));
-check('access: MODX leaves a rule that used the deleted policy in place', $aRow('modAccessContext', 50) !== null && $aSite->getCount('modAccessPolicy', array('id' => $child['id'])) === 0);
+$aRefuse('delete of a policy still used by a rule', function () use ($call, $aAdmin, $child) { $call($aAdmin, 'delete', array('kind' => 'access_policy', 'id' => $child['id'])); });
+$aRefuse('delete of a parent whose child policy is used by a rule', function () use ($call, $aAdmin, $parent) { $call($aAdmin, 'delete', array('kind' => 'access_policy', 'id' => $parent['id'])); });
+check('access: the used policy and its rule are untouched', $aRow('modAccessContext', 50) !== null && $aSite->getCount('modAccessPolicy', array('id' => $child['id'])) === 1);
 $aSite->drop('modAccessContext', $aRow('modAccessContext', 50));
 
 // ---- access_policy: safety rules ----

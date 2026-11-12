@@ -128,6 +128,10 @@ After stage 3:
 - Kind `user` (admin only, reading included): profile fields, write-only password through
   MODX's own mechanism, memberships; the service user and sudo users are protected; login
   statistics are not part of a user's revision.
+- Kinds `access_policy` (permissions as an object), `policy_template`, `context_access`,
+  `resourcegroup_access` (admin only). The API never changes the Administrator group's
+  rules, the policies they use, or the policies and templates MODX installs, and refuses to
+  delete a policy that rules still use. Permissions are flushed after every write.
 
 - Offline tests (`npm test`): pure PHP logic, the real kernel behind PHP's built-in server with
   stubbed MODX classes, and the Node bridge end to end. CI runs them.

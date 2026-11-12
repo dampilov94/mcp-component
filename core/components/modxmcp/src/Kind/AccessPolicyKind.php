@@ -82,6 +82,12 @@ final class AccessPolicyKind extends Kind {
         if ($op === 'delete') {
             // MODX removes the children with it.
             AccessRules::assertPoliciesFree($modx, AccessRules::policyDescendants($modx, $id), "delete access policy {$id}");
+            // MODX leaves rules that use the policy in place, pointing at nothing: their groups would
+            // silently lose those permissions. Remove or change the rules first.
+            $rules = AccessRules::rulesUsingPolicies($modx, array_merge(array($id), AccessRules::policyDescendants($modx, $id)));
+            if ($rules) {
+                throw new ApiException('validation_failed', "Access policy {$id} (or a policy below it) is still used by {$rules} access rule(s). Change or delete those rules first (modx_list with where: {policy: {$id}} on context_access / resourcegroup_access).");
+            }
         }
     }
 

@@ -135,3 +135,25 @@ Open questions:
 - `user_group` delete (kind from task 8/10) cascades the group's rules (`acl_*`, delete-only) and could delete group 1's rules if MODX allowed deleting group 1; the fake and the processor refuse deleting Administrator, so nothing was changed there. A context delete likewise removes its `acl` rows (including group 1's) by design.
 - The context rule kind lists the Administrator group's rules too (read-only). Hide them from lists?
 - `docs/getting_started.md` (built-in help) does not mention the four kinds yet; left alone as out of scope.
+
+## Review
+
+Accepted and merged. Verified on the stand with `scripts/stand/check-access.cjs`: the real
+configuration read (14 policies, 8 templates, 8 context rules; the Administrator policy with
+181 permissions), every safety rule refused on the real Administrator policy, a built-in
+template and the Administrator group's rules with nothing changed, then a test policy with
+permissions, a test group, context and rule created, journaled and undone exactly. All
+earlier stand checks pass.
+
+Open questions answered:
+
+- **Deleting a policy that rules still use** is now refused (also for a parent whose child
+  is used, and for a template whose policies are used): MODX would leave the rules pointing
+  at nothing and their groups would silently lose permissions. The existing test that
+  relied on the dangling rule was rewritten to test the refusal.
+- The Administrator group's rules stay visible in lists (read-only); hiding them would make
+  the access picture wrong.
+- The guide gets the access kinds with the release documentation pass.
+
+Also: the operations stand check used the service user for membership; since task 17 that
+is refused, so the check now uses a throwaway user. The cleanup script knows every kind.

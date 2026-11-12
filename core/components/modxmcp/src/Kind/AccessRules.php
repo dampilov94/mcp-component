@@ -61,6 +61,15 @@ final class AccessRules {
         return false;
     }
 
+    /** Number of access rules of any kind that use one of these policies. */
+    public static function rulesUsingPolicies(\modX $modx, array $policyIds) {
+        $count = 0;
+        foreach (self::ACL_CLASSES as $class) {
+            foreach ($policyIds as $id) { $count += (int) $modx->getCount($class, array('policy' => (int) $id)); }
+        }
+        return $count;
+    }
+
     /** Ids of every policy the Administrator group's rules use. */
     public static function adminPolicyIds(\modX $modx) {
         $ids = array();
