@@ -160,3 +160,36 @@ Counts: before, `npm run check` OK (148 PHP files, 19 JS files), PHP 3698 checks
 - Option types added by site plugins are refused; allow any type that exists in miniShop2's `types/` directory of the site?
 - `modx_help` / `getting_started.md` do not mention the new relations or the kind yet (not in the brief's file list).
 - Values of orphan option rows (keys that are not an `msOption`) are shown but cannot be written back (unknown key).
+
+## Review
+
+Accepted and merged. Verified on the stand with `scripts/stand/check-minishop2.cjs` (the
+stand has miniShop2 3.0.7 but no products, so everything ran on test objects): a test
+category, an option assigned to it, a product created with its data row, price and Cyrillic
+tags, option values and an extra category; a plain title change keeps price, options and
+categories; price and title changes undone exactly; the product to the trash and back with
+identical data; everything undone to the checkpoint. All earlier stand checks pass. The
+report's description of how product data is written (core resource processors for page
+fields, direct rows for the three relations, no miniShop2 events) is accepted.
+
+Changes by the architect:
+
+1. **Every page's revision would have changed once.** Non-products had the three relations
+   stored empty in their snapshot (as the brief said — the brief was wrong), so installing
+   or enabling miniShop2 would show every page as "changed outside the journal" at its next
+   write. A relation the object cannot have is now left out of the snapshot entirely
+   (`Kind::hasRelation()` is consulted by `Snapshot`). One assertion changed accordingly.
+2. **A dry run did not refuse product relations on a plain page** (the real write did).
+   `UpdateAction` now refuses a relation the object cannot have before anything else, with
+   the kind's own message (`Kind::relationNotApplicable()`).
+
+Noted: removing an option's category link logs a PHP warning from miniShop2's own
+`msCategoryOption::remove()` (`count()` on a string) — miniShop2's bug, harmless.
+
+Open questions answered: option keys stay immutable; only the shipped option types are
+accepted for now; the guide is updated in the release documentation pass.
+
+Architect's own mistake during the review: after an interrupted stand run I used
+`modx_undo {last: 10}`, which also reached four older changesets of earlier cleanups and
+brought four old `mcp2test_*` objects back; `scripts/stand/cleanup.cjs` removed them. On the
+stand only `to_checkpoint` is used for cleanup from now on.

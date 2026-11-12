@@ -141,6 +141,9 @@ After stage 3:
   bypass the API's safety rules are refused with the tool to use instead; destructive ones
   need `confirm`. Queries are single read-only SELECTs with a time limit; tables with password
   or token hashes and sessions are refused for every token.
+- miniShop2: a product's data (`ms2_data`), option values (`ms2_options`) and extra categories
+  (`ms2_categories`) are relations of the resource, journaled and undone with it; kind
+  `ms2_option` with category assignment. Only present when miniShop2 is installed and enabled.
 
 - Offline tests (`npm test`): pure PHP logic, the real kernel behind PHP's built-in server with
   stubbed MODX classes, and the Node bridge end to end. CI runs them.

@@ -40,6 +40,9 @@ final class Snapshot {
         foreach ($kind->relationSpecs() as $name => $spec) {
             // Rows that are objects of their own kind (in_state false) are journaled as those objects.
             if (!empty($spec['delete_only']) !== $deleteOnly || (isset($spec['in_state']) && $spec['in_state'] === false)) { continue; }
+            // A relation this object cannot have (product data of a page that is not a product) is
+            // left out entirely, so adding such a relation to a kind does not change every revision.
+            if (!$kind->hasRelation($modx, $object, $name)) { continue; }
             $rows = array();
             foreach ($modx->getCollection($spec['class'], self::criteria($spec, $kind->keyOf($object))) as $row) {
                 $values = self::row($row);

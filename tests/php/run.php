@@ -4187,10 +4187,10 @@ check('ms2_option: undo of a duplicate removes the copy', $sSite->row('msOption'
 $catPhones = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Телефоны', 'class_key' => 'msCategory')))['id'];
 $catAccessories = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Аксессуары', 'class_key' => 'msCategory')))['id'];
 $docId = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Статья про телефоны')))['id'];
-check('ms2: a plain resource has no product relations and its snapshot holds them empty', $sRelNames($docId) === array('tvs', 'resource_groups')
-    && \ModxMCP\Journal\Snapshot::capture($sSite, $sAdmin->kinds->get('resource'), $docId)['relations']['ms2_data'] === array()
-    && \ModxMCP\Journal\Snapshot::capture($sSite, $sAdmin->kinds->get('resource'), $docId)['relations']['ms2_options'] == array()
-    && \ModxMCP\Journal\Snapshot::capture($sSite, $sAdmin->kinds->get('resource'), $docId)['relations']['ms2_categories'] === array());
+// Architect's review: the relations are left out of a non-product's snapshot (not stored empty),
+// so installing miniShop2 does not change the revision of every page.
+check('ms2: a plain resource has no product relations, not even in its snapshot', $sRelNames($docId) === array('tvs', 'resource_groups')
+    && array_intersect(array_keys(\ModxMCP\Journal\Snapshot::capture($sSite, $sAdmin->kinds->get('resource'), $docId)['relations']), array('ms2_data', 'ms2_options', 'ms2_categories')) === array());
 $sBefore = $sTables();
 $e = throws('ms2: product relations cannot be written on a plain resource', ApiException::class, function () use ($call, $sEditor, $docId) {
     $call($sEditor, 'update', array('kind' => 'resource', 'id' => $docId, 'relations' => array('ms2_data' => array('price' => 100))));
@@ -4512,6 +4512,22 @@ $catBig = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => arra
 for ($n = 0; $n < 1001; $n++) { $sSite->store('modResource', array('id' => 5000 + $n, 'class_key' => 'msProduct', 'parent' => $catBig, 'pagetitle' => 'P' . $n)); }
 $e = throws('ms2_option: too many products', ApiException::class, function () use ($call, $sDev, $catBig) { $call($sDev, 'invoke', array('kind' => 'ms2_option', 'op' => 'assign_to_category', 'id' => 900, 'args' => array('category' => $catBig))); });
 check('ms2_option: an assign that would change over 1000 products is refused', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), '1000') !== false && $sSite->getCount('msCategoryOption', array('option_id' => 900)) === 0);
+
+// Review addition: product relations do not enter the revision of a page that is not a product.
+check('ms2: a non-product page has no product relations in its snapshot', (function () use ($sSite, $sAdmin) {
+    $kind = $sAdmin->kinds->get('resource');
+    foreach ($sSite->getCollection('modResource') as $page) {
+        if ((string) $page->get('class_key') === 'msProduct') { continue; }
+        $state = ModxMCP\Journal\Snapshot::capture($sSite, $kind, (int) $page->get('id'));
+        return !array_key_exists('ms2_data', $state['relations']) && !array_key_exists('ms2_options', $state['relations']) && !array_key_exists('ms2_categories', $state['relations']);
+    }
+    return false;
+})());
+
+$e = throws('ms2: product relations on a plain page are refused in a dry run too', ApiException::class, function () use ($call, $sEditor, $docId) {
+    $call($sEditor, 'update', array('kind' => 'resource', 'id' => $docId, 'relations' => array('ms2_data' => array('price' => 1)), 'dry_run' => true));
+});
+check('ms2: the dry-run refusal is validation_failed', $e && $e->errorCode === 'validation_failed');
 
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));

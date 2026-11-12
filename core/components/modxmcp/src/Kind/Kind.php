@@ -190,6 +190,11 @@ abstract class Kind {
     }
 
     /** Whether a declared relation exists for this particular object (modx_get shows it, modx_duplicate copies it). */
+    /** Message for a write to a relation this object cannot have. */
+    public function relationNotApplicable($object, $name) {
+        return "Relation '{$name}' does not apply to {$this->name()} " . $this->keyOf($object) . ' (see modx_describe).';
+    }
+
     public function hasRelation(\modX $modx, $object, $name) {
         return true;
     }

@@ -149,6 +149,11 @@ final class ResourceKind extends Kind {
         return !self::isMs2Relation($name) || (string) $object->get('class_key') === 'msProduct';
     }
 
+    public function relationNotApplicable($object, $name) {
+        if (!self::isMs2Relation($name)) { return parent::relationNotApplicable($object, $name); }
+        return "Resource {$object->get('id')} is not a miniShop2 product (class_key msProduct); {$name} applies to products only.";
+    }
+
     public function relationBlockReason(Context $context, $name) {
         return self::isMs2Relation($name) ? $context->capabilities->groupBlockReason(MiniShop2::GROUP, $context->token) : null;
     }
