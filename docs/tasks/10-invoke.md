@@ -8,7 +8,7 @@ and `joinGroup()` / `leaveGroup()` in `modx-example-2-8-8/core/model/modx/modres
 ## Goal
 
 One generic tool for operations of a kind that are not create/read/update/delete, plus the
-first four operations: group membership.
+first operations: group membership.
 
 `modx_invoke {kind, op, id?, name?, args?, dry_run?}`
 
@@ -79,6 +79,8 @@ object it changes; the target object is already touched by the action.
   the exact property names; `role` defaults as MODX defaults it). Already a member →
   MODX's own error passes through.
 - `remove_member {user}` — through `security/group/user/remove`.
+- `member_count` (no arguments) — read-only, returns `{"members": <number of members>}`.
+  It exists so that the read-only path of `modx_invoke` has a real operation.
 
 `ResourceGroupKind`:
 
@@ -90,7 +92,7 @@ object it changes; the target object is already touched by the action.
   invoke them as the processor does). Touch the **resource** too (kind `resource`): its
   `resource_groups` relation changes. Adding twice / removing a non-member → `validation_failed`.
 
-All four return `{}` plus what the action adds; the group's `members` / `resources`
+The four write operations return `{}` plus what the action adds; the group's `members` / `resources`
 relation shows the change in `changed`, and `modx_undo` reverts it.
 
 ## Out of scope
@@ -107,10 +109,7 @@ argument validation (`args.user` missing, wrong type, unknown argument); unknown
 op on a kind without operations; `needs_object` rules; dry run changes nothing; plan-only
 token; scopes: `develop` token cannot run these write ops (`forbidden_scope`), a read token
 sees the tool in its manifest; `access` group disabled → `unavailable`.
-For the read-only path add a temporary test-only kind? No — instead add one real read-only
-operation so the path is exercised: `ResourceGroupKind` op `list_resources` is **not**
-wanted; use `UserGroupKind` op `member_count` (`needs_object` true, read-only, returns
-`{"members": n}`), usable by a read token.
+The read-only path is exercised with `member_count`: a read token can call it.
 
 Update tool lists/counts in both test files.
 
