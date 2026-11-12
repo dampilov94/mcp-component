@@ -42,6 +42,11 @@ abstract class Kind {
      *   write_only  accepted on write, never read, listed or sent back (a password)
      *   json        with type "object": any JSON object (not only name => boolean), stored as JSON text; shown as the
      *               object it is, written as an object (nested empty objects cannot be told from empty lists)
+     *
+     * Type "json": any JSON value (a list, an object, a scalar) stored as JSON text; null or "" stored is shown as null,
+     * text that is not valid JSON is shown as it is. Written as the value (encoded without escaping Unicode or slashes);
+     * null stores "". An empty object and an empty list look alike when the request is decoded, both are written as "[]".
+     * Never listed by default, never filterable.
      */
     abstract public function fields();
 
@@ -175,6 +180,36 @@ abstract class Kind {
     }
 
     // ---- hooks of kinds that need extra care; the defaults change nothing ----
+
+    /**
+     * False for kinds without core processors (add-ons whose own processors need their manager): writes go through
+     * writeObject() and removeObject(), which change the xPDO object themselves, inside the transaction.
+     */
+    public function usesProcessors() {
+        return true;
+    }
+
+    /**
+     * Create ($id null) or change an object without processors; returns its key. $columns are the normalised
+     * column => value pairs. The object is already touched (update) or registered right after (create).
+     */
+    public function writeObject(Context $context, $id, array $columns) {
+        throw new \LogicException("Kind '{$this->name()}' has processors; writeObject() is for kinds without them.");
+    }
+
+    /** Delete an object without processors (the key is already touched in the transaction). */
+    public function removeObject(Context $context, $key) {
+        throw new \LogicException("Kind '{$this->name()}' has processors; removeObject() is for kinds without them.");
+    }
+
+    /** Criteria modx_list always applies: $criteria are the ones the caller gave (column => value). Kinds hide objects here. */
+    public function listCriteria(array $criteria) {
+        return $criteria;
+    }
+
+    /** Called with the object an undo is about to save, after its recorded columns were set (a kind may switch off side effects of its save()). */
+    public function prepareRestore($object) {
+    }
 
     /** Called once when the registry builds the kind for a request; a kind that depends on the site keeps the context. */
     public function attach(Context $context) {
@@ -360,6 +395,8 @@ abstract class Kind {
      *   hidden       not shown by modx_get and modx_describe (rows that only back `via` fields)
      *   in_state     false: shown by modx_get but not part of the snapshot, because the rows are
      *                objects of another kind, journaled as such (see deleteCascade())
+     *   named_by     name of a field these rows mirror (MIGX form tabs): a change of the rows is reported as a change of
+     *                that field, not under the relation's own name, when the field changed as well
      *   writable     can be replaced through the API
      */
     public function relationSpecs() {
@@ -513,6 +550,7 @@ abstract class Kind {
         }
         if (!empty($fields[$field]['write_only'])) { return ''; }
         $raw = $this->rawValue($object, $field);
+        if ($fields[$field]['type'] === 'json') { return self::jsonDecoded($raw); }
         if ($fields[$field]['type'] === 'object') { return !empty($fields[$field]['json']) ? self::jsonValue($raw) : self::objectValue($raw); }
         if (isset($fields[$field]['format']) && $fields[$field]['format'] === 'datetime') {
             return self::datetime($raw);
@@ -541,9 +579,24 @@ abstract class Kind {
         return (object) $map;
     }
 
+    /**
+     * A stored value of a `json` field as the API shows it: null for nothing stored, objects as stdClass and lists as
+     * lists, and the raw text when it is not valid JSON. An already decoded value (xPDO's json columns) is kept.
+     */
+    public static function jsonDecoded($raw) {
+        if ($raw === null || $raw === '') { return null; }
+        if (!is_string($raw)) { return json_decode(json_encode($raw), false); }
+        $value = json_decode($raw, false);
+        return json_last_error() === JSON_ERROR_NONE ? $value : $raw;
+    }
+
     /** Canonical text of a JSON value for comparing two of them: nested keys sorted, no matter how it was spelled. */
     public static function canonicalJson($raw) {
-        $value = is_string($raw) ? json_decode($raw, true) : json_decode(json_encode($raw), true);
+        return self::canonicalValue(is_string($raw) ? json_decode($raw, true) : json_decode(json_encode($raw), true));
+    }
+
+    /** Canonical text of an already decoded (assoc) JSON value. */
+    public static function canonicalValue($value) {
         $sort = function (&$node) use (&$sort) {
             if (!is_array($node)) { return; }
             foreach ($node as &$child) { $sort($child); }

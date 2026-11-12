@@ -65,13 +65,14 @@ final class ListAction extends Action {
         foreach (isset($args['where']) ? $args['where'] : array() as $name => $value) {
             if (!isset($definitions[$name]) || !empty($definitions[$name]['code']) || isset($definitions[$name]['format'])
                 || !empty($definitions[$name]['computed']) || !empty($definitions[$name]['no_filter'])
-                || !empty($definitions[$name]['via']) || !empty($definitions[$name]['write_only']) || $definitions[$name]['type'] === 'object') {
+                || !empty($definitions[$name]['via']) || !empty($definitions[$name]['write_only']) || $definitions[$name]['type'] === 'object' || $definitions[$name]['type'] === 'json') {
                 throw new ApiException('validation_failed', "Cannot filter {$kind->name()} by '{$name}'.");
             }
             if (!is_scalar($value)) { throw new ApiException('validation_failed', "Filter '{$name}' must be a scalar value."); }
             $criteria[$kind->column($name)] = is_bool($value) ? ($value ? 1 : 0) : $value;
         }
 
+        $criteria = $kind->listCriteria($criteria);
         $limit = isset($args['limit']) ? $args['limit'] : 50;
         $start = isset($args['start']) ? $args['start'] : 0;
         $query = $modx->newQuery($kind->modelClass());

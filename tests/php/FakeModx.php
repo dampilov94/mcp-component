@@ -24,6 +24,11 @@ class FakeObject {
             if (is_array($decoded)) { return $decoded; }
         }
         // Like an xPDO json field: get() decodes the stored text.
+        // MIGX maps three columns of its configuration as phptype json: get() decodes the stored text (longer than one character).
+        if ($this->class === 'migxConfig' && in_array($key, array('extended', 'permissions', 'fieldpermissions'), true) && is_string($value) && strlen($value) > 1) {
+            $decoded = json_decode($value, true);
+            return is_array($decoded) ? $decoded : $value;
+        }
         if ($key === 'data' && $this->class === 'modAccessPolicy') {
             $decoded = is_string($value) ? json_decode($value, true) : $value;
             return is_array($decoded) ? $decoded : array();
@@ -84,8 +89,12 @@ class FakeObject {
                 file_put_contents($path, $bytes);
             }
         }
+        // migxConfig::save() mirrors the form tabs unless told not to; the flag is an ad-hoc field, never a column.
+        $migxSync = false;
+        if ($this->class === 'migxConfig') { $migxSync = empty($this->fields['preventformtabhandling']); unset($this->fields['preventformtabhandling']); }
         $this->modx->store($this->class, $this->fields);
         $this->isNew = false;
+        if ($migxSync) { $this->modx->migxSyncFormtabs($this); }
         if ($this->class === 'msProductData') { $this->modx->ms2DataSaved($this); }
         if ($this->class === 'msCategoryOption') { $this->modx->ms2LinkSaved($this->fields); }
         if ($this->class === 'modResource') { $this->modx->ms2ProductSaved($this->fields, $wasProduct); }
@@ -701,6 +710,9 @@ class modX extends xPDO {
         array('modTemplateVar', 'modTemplateVarResource', 'tmplvarid', array()),
         array('modResource', 'modTemplateVarResource', 'contentid', array()),
         array('modUserGroup', 'modUserGroupMember', 'user_group', array()),
+        // MIGX: a configuration takes its form tabs, and a form tab its fields (xPDO composites).
+        array('migxConfig', 'migxFormtab', 'config_id', array()),
+        array('migxFormtab', 'migxFormtabField', 'formtab_id', array()),
         // A user takes its profile, memberships and settings with it.
         array('modUser', 'modUserProfile', 'internalKey', array()),
         array('modUser', 'modUserGroupMember', 'member', array()),
@@ -761,6 +773,83 @@ class modX extends xPDO {
         return $identity !== null ? 'pk:' . $identity : md5(json_encode($fields));
     }
     /** A row by its primary key: a scalar, or a list of values for a composite key. */
+    /**
+     * What migxConfig::save() (MIGX 3.0.2) does after storing the row: mirror the decoded `formtabs` into migxFormtab rows and
+     * their `fields` into migxFormtabField rows (matched by MIGX_id = row id, the rest removed or created), then write
+     * `formtabs` again with the row ids as MIGX_id and the positions as pos (json_encode with default flags, like toJson).
+     */
+    public function migxSyncFormtabs(FakeObject $config) {
+        $tabs = json_decode((string) (isset($config->fields['formtabs']) ? $config->fields['formtabs'] : ''), true);
+        if (!is_array($tabs)) { return; }
+        $configId = $config->fields['id'];
+        $posted = array();
+        $pos = 1;
+        foreach ($tabs as $tab) {
+            $migxId = isset($tab['MIGX_id']) ? $tab['MIGX_id'] : 0;
+            $tab['pos'] = $pos;
+            if (array_key_exists($migxId, $posted)) { $migxId = $migxId . '_' . $pos; }
+            $posted[$migxId] = $tab;
+            $pos++;
+        }
+        $saved = array();
+        $keep = function (array $tab, $rowId, array $fields) use (&$saved) { $tab['MIGX_id'] = (string) $rowId; $tab['fields'] = $fields; $saved[$tab['pos']] = $tab; };
+        foreach ($this->getCollection('migxFormtab', array('config_id' => $configId)) as $row) {
+            $rowId = $row->fields['id'];
+            if (!array_key_exists($rowId, $posted)) { $row->remove(); continue; }
+            $tab = $posted[$rowId];
+            unset($posted[$rowId]);
+            $row->fields['caption'] = isset($tab['caption']) ? (string) $tab['caption'] : '';
+            $row->fields['pos'] = (string) $tab['pos'];
+            $row->save();
+            $keep($tab, $rowId, $this->migxSyncFields($configId, $rowId, isset($tab['fields']) ? $tab['fields'] : array()));
+        }
+        foreach ($posted as $tab) {
+            $rowId = $this->nextId('migxFormtab');
+            $row = new FakeObject($this, 'migxFormtab', array('id' => $rowId, 'config_id' => $configId, 'caption' => isset($tab['caption']) ? (string) $tab['caption'] : '', 'pos' => $tab['pos'],
+                'print_before_tabs' => 0, 'extended' => ''), true);
+            $row->save();
+            $keep($tab, $rowId, $this->migxSyncFields($configId, $rowId, isset($tab['fields']) ? $tab['fields'] : array()));
+        }
+        ksort($saved);
+        $config->fields['formtabs'] = json_encode(array_values($saved));
+        $this->store('migxConfig', $config->fields);
+    }
+    private function migxSyncFields($configId, $tabId, $fields) {
+        if (!is_array($fields)) { return $fields; }
+        $posted = array();
+        $pos = 1;
+        foreach ($fields as $field) {
+            $migxId = isset($field['MIGX_id']) ? $field['MIGX_id'] : 0;
+            $field['pos'] = $pos;
+            if (array_key_exists($migxId, $posted)) { $migxId = $migxId . '_' . $pos; }
+            $posted[$migxId] = $field;
+            $pos++;
+        }
+        $columns = array('field', 'caption', 'description', 'inputTV', 'inputTVtype', 'inputOptionValues', 'default', 'validation', 'configs', 'display', 'sourceFrom', 'sources');
+        $make = function (array $field, $rowId) use ($configId, $tabId, $columns) {
+            $row = array('id' => $rowId, 'config_id' => $configId, 'formtab_id' => $tabId, 'pos' => $field['pos']);
+            foreach ($columns as $column) { $row[$column] = isset($field[$column]) && is_scalar($field[$column]) ? (string) $field[$column] : ''; }
+            return new FakeObject($this, 'migxFormtabField', $row, true);
+        };
+        $saved = array();
+        foreach ($this->getCollection('migxFormtabField', array('formtab_id' => $tabId)) as $row) {
+            $rowId = $row->fields['id'];
+            if (!array_key_exists($rowId, $posted)) { $row->remove(); continue; }
+            $field = $posted[$rowId];
+            unset($posted[$rowId]);
+            $make($field, $rowId)->save();
+            $field['MIGX_id'] = (string) $rowId;
+            $saved[$field['pos']] = $field;
+        }
+        foreach ($posted as $field) {
+            $rowId = $this->nextId('migxFormtabField');
+            $make($field, $rowId)->save();
+            $field['MIGX_id'] = (string) $rowId;
+            $saved[$field['pos']] = $field;
+        }
+        ksort($saved);
+        return array_values($saved);
+    }
     public function row($class, $id) {
         $key = 'pk:' . implode("\x1f", array_map('strval', (array) $id));
         return isset($this->tables[$class][$key]) ? $this->tables[$class][$key] : null;
@@ -771,9 +860,15 @@ class modX extends xPDO {
     }
     /** All rows of a class, for checks that nothing changed. */
     public function tableDump($class) { $rows = isset($this->tables[$class]) ? $this->tables[$class] : array(); ksort($rows); return $rows; }
+    /** Highest id handed out per MIGX class: like AUTO_INCREMENT, an id is not reused after its row was removed (within one process). */
+    private $migxIds = array();
     public function nextId($class) {
         $max = 0;
         foreach (isset($this->tables[$class]) ? $this->tables[$class] : array() as $row) { $max = max($max, isset($row['id']) ? (int) $row['id'] : 0); }
+        if (strpos($class, 'migx') === 0) {
+            $max = max($max, isset($this->migxIds[$class]) ? $this->migxIds[$class] : 0);
+            $this->migxIds[$class] = $max + 1;
+        }
         return $max + 1;
     }
     public function store($class, array $fields) {
@@ -1306,6 +1401,15 @@ class modX extends xPDO {
         if (!isset(self::$processors[$base])) { return null; }
         list($class, $nameColumn) = self::$processors[$base];
         unset($data['clearCache']);
+        // Like the TV processors: input options arrive as inopt_<name>; create always sets the map, update only when one is given.
+        if ($class === 'modTemplateVar') {
+            $options = array();
+            foreach ($data as $property => $value) {
+                if (strpos($property, 'inopt_') === 0) { $options[substr($property, 6)] = $value; unset($data[$property]); }
+            }
+            unset($data['input_properties']);
+            if ($options || $action === 'create') { $data['input_properties'] = json_encode($options); }
+        }
         if ($action === 'remove') {
             $object = $this->getObject($class, array('id' => $data['id']));
             if (!$object) { return new FakeResponse('Object not found.'); }

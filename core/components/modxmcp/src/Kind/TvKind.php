@@ -31,7 +31,22 @@ final class TvKind extends Kind {
             'display'      => array('type' => 'string', 'description' => 'Output type.'),
             'rank'         => array('type' => 'integer', 'description' => 'Sort order.'),
             'locked'       => array('type' => 'boolean', 'description' => 'Locked for editing in the manager.'),
+            'input_properties' => array('type' => 'object', 'json' => true,
+                'description' => 'Options of the input type as {name: value}, e.g. {"configs": "gallery"} binds a MIGX TV to its configuration. Writing replaces the map.'),
         );
+    }
+
+    /** The TV processors read input options only from properties named inopt_<name>. */
+    public function processorData($op, array $data) {
+        if (!array_key_exists('input_properties', $data)) { return $data; }
+        $options = $data['input_properties'];
+        unset($data['input_properties']);
+        if (is_string($options)) { $decoded = json_decode($options, true); $options = is_array($decoded) ? $decoded : array(); }
+        if ($options instanceof \stdClass) { $options = (array) $options; }
+        foreach ((array) $options as $name => $value) {
+            $data['inopt_' . $name] = is_bool($value) ? ($value ? 'true' : 'false') : $value;
+        }
+        return $data;
     }
 
     public function relationSpecs() {
