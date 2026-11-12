@@ -24,7 +24,7 @@ abstract class Kind {
 
     /**
      * Exposed fields: api name => definition.
-     *   type        JSON type: string | integer | boolean | object (a JSON object of name => boolean, stored as JSON text)
+     *   type        JSON type: string | integer | number (a decimal column, shown as a float) | boolean | object (a JSON object of name => boolean, stored as JSON text)
      *   column      database column when it differs from the api name
      *   description short meaning (optional)
      *   list        included in list results by default
@@ -519,6 +519,7 @@ abstract class Kind {
         }
         switch ($fields[$field]['type']) {
             case 'integer': return (int) $raw;
+            case 'number':  return $raw === null ? 0.0 : (float) $raw;
             case 'boolean': return (bool) $raw;
             default:        return $raw === null ? '' : (string) $raw;
         }

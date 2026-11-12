@@ -30,6 +30,10 @@ final class KindRegistry {
         PackageKind::class,
         ProviderKind::class,
         Ms2OptionKind::class,
+        Ms2LinkKind::class,
+        Ms2ProductLinkKind::class,
+        Ms2OrderKind::class,
+        Ms2OrderStatusKind::class,
     );
 
     private $kinds = null;

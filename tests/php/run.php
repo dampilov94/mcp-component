@@ -4057,7 +4057,8 @@ $ms2Dir = $siteDir . '/shop21';
 $ms2Core = $ms2Dir . '/core/components/minishop2/';
 mkdir($ms2Core . 'model/minishop2', 0700, true);
 touch($ms2Core . 'model/minishop2/minishop2.class.php');
-foreach (array('mgr/settings/option/create', 'mgr/settings/option/update', 'mgr/settings/option/remove', 'mgr/settings/option/assign', 'mgr/category/option/delete') as $ms2Processor) {
+foreach (array('mgr/settings/option/create', 'mgr/settings/option/update', 'mgr/settings/option/remove', 'mgr/settings/option/assign', 'mgr/category/option/delete',
+    'mgr/settings/link/create', 'mgr/settings/link/update', 'mgr/settings/link/remove', 'mgr/product/productlink/create', 'mgr/product/productlink/remove') as $ms2Processor) {
     if (!is_dir(dirname($ms2Core . 'processors/' . $ms2Processor))) { mkdir(dirname($ms2Core . 'processors/' . $ms2Processor), 0700, true); }
     touch($ms2Core . 'processors/' . $ms2Processor . '.class.php');
 }
@@ -4102,7 +4103,7 @@ $sRelNames = function ($id, $ctx = null) use ($call, $sAdmin) { return array_key
 // ---- availability ----
 $sKinds = array_column($call($sAdmin, 'describe')['kinds'], 'kind');
 check('ms2: kind list with miniShop2 installed', $sKinds === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source', 'user_group', 'role', 'resource_group', 'system_setting', 'context', 'context_setting', 'namespace', 'user',
-    'access_policy', 'policy_template', 'context_access', 'resourcegroup_access', 'package', 'provider', 'ms2_option'));
+    'access_policy', 'policy_template', 'context_access', 'resourcegroup_access', 'package', 'provider', 'ms2_option', 'ms2_link', 'ms2_product_link', 'ms2_order', 'ms2_order_status'));
 check('ms2: kind list without miniShop2 is unchanged', !in_array('ms2_option', array_column($call($sPlain, 'describe')['kinds'], 'kind'), true));
 $e = throws('ms2: ms2_option is unavailable where miniShop2 is not installed', ApiException::class, function () use ($call, $sPlain) { $call($sPlain, 'describe', array('kind' => 'ms2_option')); });
 check('ms2: not installed is reported as unavailable', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'not_installed');
@@ -4528,6 +4529,501 @@ $e = throws('ms2: product relations on a plain page are refused in a dry run too
     $call($sEditor, 'update', array('kind' => 'resource', 'id' => $docId, 'relations' => array('ms2_data' => array('price' => 1)), 'dry_run' => true));
 });
 check('ms2: the dry-run refusal is validation_failed', $e && $e->errorCode === 'validation_failed');
+
+// --- miniShop2: link types, product links, orders (task 22) ---
+$sSite->store('modResource', array('id' => 7100, 'class_key' => 'modDocument', 'pagetitle' => 'Обычная страница', 'parent' => 0));
+foreach (array(7001 => 'Телефон «Звезда»', 7002 => 'Чехол «Север»', 7003 => 'Зарядка «Юг»', 7004 => 'Наушники', 7005 => 'Кабель', 7006 => 'Плёнка') as $lkId => $lkTitle) {
+    $sSite->store('modResource', array('id' => $lkId, 'class_key' => 'msProduct', 'pagetitle' => $lkTitle, 'parent' => 0));
+}
+$lkTables = function () use ($sSite) {
+    $out = array();
+    foreach (array('msLink', 'msProductLink') as $class) {
+        $rows = array();
+        foreach ($sSite->tableDump($class) as $row) { ksort($row); $rows[] = json_encode($row, JSON_UNESCAPED_UNICODE); }
+        sort($rows);
+        $out[$class] = $rows;
+    }
+    return $out;
+};
+// "master:slave" of every row of a link type, sorted
+$lkRows = function ($link) use ($sSite) {
+    $out = array();
+    foreach ($sSite->getCollection('msProductLink', array('link' => $link)) as $row) { $out[] = $row->get('master') . ':' . $row->get('slave'); }
+    sort($out);
+    return $out;
+};
+$lkKeys = function ($changesetId, $kind = 'ms2_product_link') use ($sChanges) {
+    $out = array();
+    foreach ($sChanges($changesetId) as $name => $change) { if (strpos($name, $kind . ':') === 0) { $out[substr($name, strlen($kind) + 1)] = $change[0]; } }
+    ksort($out);
+    return $out;
+};
+$lkChangesets = function () use ($sAdmin) { return $sAdmin->journal()->lastChangesetId(); };
+
+// ---- the kind ms2_link ----
+$lDesc = $call($sAdmin, 'describe', array('kind' => 'ms2_link'));
+check('ms2_link: describe', $lDesc['group'] === 'minishop2' && $lDesc['read_scope'] === 'read' && $lDesc['write_scope'] === 'develop' && $lDesc['name_field'] === 'name' && $lDesc['key_type'] === 'integer'
+    && array_column($lDesc['fields'], 'name') === array('id', 'name', 'type', 'description') && !isset($lDesc['generic_writes']));
+$lFields = array_column($lDesc['fields'], null, 'name');
+check('ms2_link: the type is required and fixed after creation, the name is required', !empty($lFields['type']['required']) && !empty($lFields['type']['immutable']) && !empty($lFields['name']['required']) && !empty($lFields['name']['list']));
+$lBefore = $lkChangesets();
+foreach (array('without a type' => array(array('name' => 'Без типа'), 'required'), 'with an unknown type' => array(array('name' => 'Левый', 'type' => 'many_to_none'), 'Unknown link type'),
+    'with a blank name' => array(array('name' => '', 'type' => 'one_to_one'), 'required')) as $label => $case) {
+    $e = throws("ms2_link: create {$label}", ApiException::class, function () use ($call, $sDev, $case) { $call($sDev, 'create', array('kind' => 'ms2_link', 'fields' => $case[0])); });
+    check("ms2_link: {$label} is validation_failed and leaves no trace", $e && $e->errorCode === 'validation_failed' && stripos($e->getMessage(), $case[1]) !== false && $lkChangesets() === $lBefore && $sSite->tableDump('msLink') === array());
+}
+$lCreated = $call($sDev, 'create', array('kind' => 'ms2_link', 'fields' => array('name' => 'Сопутствующие товары', 'type' => 'many_to_many', 'description' => 'Группа «с этим покупают»')));
+$lMany = $lCreated['id'];
+check('ms2_link: create runs the miniShop2 processor from its own processors path', $lCreated['changeset_id'] > 0 && $sSite->row('msLink', $lMany)['name'] === 'Сопутствующие товары' && $sSite->row('msLink', $lMany)['type'] === 'many_to_many'
+    && end($sSite->ms2Calls)[0] === 'mgr/settings/link/create' && strpos(end($sSite->ms2Calls)[2]['processors_path'], 'components/minishop2/processors/') !== false);
+$e = throws('ms2_link: a name that exists', ApiException::class, function () use ($call, $sDev) { $call($sDev, 'create', array('kind' => 'ms2_link', 'fields' => array('name' => 'Сопутствующие товары', 'type' => 'one_to_one'))); });
+check('ms2_link: the processor refuses a duplicate name', $e && $e->errorCode === 'validation_failed' && stripos($e->getMessage(), 'already exists') !== false && count($sSite->tableDump('msLink')) === 1);
+$lOne = $call($sDev, 'create', array('kind' => 'ms2_link', 'fields' => array('name' => 'Пара', 'type' => 'one_to_one')))['id'];
+$lOneMany = $call($sDev, 'create', array('kind' => 'ms2_link', 'fields' => array('name' => 'Аксессуары', 'type' => 'one_to_many')))['id'];
+$lManyOne = $call($sDev, 'create', array('kind' => 'ms2_link', 'fields' => array('name' => 'Комплект', 'type' => 'many_to_one')))['id'];
+$lGot = $call($sRead, 'get', array('kind' => 'ms2_link', 'id' => $lMany));
+check('ms2_link: a read token gets it with Cyrillic text', $lGot['fields']['name'] === 'Сопутствующие товары' && $lGot['fields']['description'] === 'Группа «с этим покупают»' && $lGot['fields']['type'] === 'many_to_many');
+check('ms2_link: list with query and where', array_column($call($sRead, 'list', array('kind' => 'ms2_link', 'query' => 'товары'))['items'], 'id') === array($lMany)
+    && array_column($call($sRead, 'list', array('kind' => 'ms2_link', 'where' => array('type' => 'one_to_one')))['items'], 'name') === array('Пара')
+    && $call($sRead, 'list', array('kind' => 'ms2_link'))['total'] === 4);
+$e = throws('ms2_link: a content token cannot write', ApiException::class, function () use ($call, $sEditor, $lMany) { $call($sEditor, 'update', array('kind' => 'ms2_link', 'id' => $lMany, 'fields' => array('name' => 'x'))); });
+check('ms2_link: writing needs develop', $e && $e->errorCode === 'forbidden_scope');
+$lUpdated = $call($sDev, 'update', array('kind' => 'ms2_link', 'id' => $lMany, 'expected_revision' => $lGot['revision'], 'fields' => array('name' => 'С этим покупают', 'description' => 'Группа')));
+check('ms2_link: update changes the name and the description', $lUpdated['changed'] === array('name', 'description') && $sSite->row('msLink', $lMany)['name'] === 'С этим покупают' && $sSite->row('msLink', $lMany)['type'] === 'many_to_many');
+$e = throws('ms2_link: the type cannot be changed', ApiException::class, function () use ($call, $sDev, $lMany) { $call($sDev, 'update', array('kind' => 'ms2_link', 'id' => $lMany, 'fields' => array('type' => 'one_to_one'))); });
+check('ms2_link: a changed type is refused (the update processor ignores it)', $e && $e->errorCode === 'validation_failed' && $sSite->row('msLink', $lMany)['type'] === 'many_to_many');
+check('ms2_link: the same type is no change', $call($sDev, 'update', array('kind' => 'ms2_link', 'id' => $lMany, 'fields' => array('type' => 'many_to_many')))['changeset_id'] === null);
+$e = throws('ms2_link: renaming to a name that exists', ApiException::class, function () use ($call, $sDev, $lMany) { $call($sDev, 'update', array('kind' => 'ms2_link', 'id' => $lMany, 'fields' => array('name' => 'Пара'))); });
+check('ms2_link: the update processor refuses a duplicate name', $e && $e->errorCode === 'validation_failed' && $sSite->row('msLink', $lMany)['name'] === 'С этим покупают');
+$call($sDev, 'undo', array('changeset_id' => $lUpdated['changeset_id'], 'confirm' => true));
+check('ms2_link: undo restores the name and the description', $sSite->row('msLink', $lMany)['name'] === 'Сопутствующие товары' && $sSite->row('msLink', $lMany)['description'] === 'Группа «с этим покупают»');
+$lDup = $call($sDev, 'duplicate', array('kind' => 'ms2_link', 'id' => $lOne, 'new_name' => 'Пара копия'));
+check('ms2_link: duplicate copies the type under a new name', $sSite->row('msLink', $lDup['id'])['type'] === 'one_to_one' && $sSite->row('msLink', $lDup['id'])['name'] === 'Пара копия');
+$call($sDev, 'undo', array('changeset_id' => $lDup['changeset_id'], 'confirm' => true));
+check('ms2_link: undo of a duplicate removes the copy', $sSite->row('msLink', $lDup['id']) === null);
+$e = throws('ms2_link: a token denied the group', ApiException::class, function () use ($call, $sActor, $lMany) { $call($sActor('admin', array('denied_groups' => array('minishop2'))), 'get', array('kind' => 'ms2_link', 'id' => $lMany)); });
+check('ms2_link: a token denied the minishop2 group cannot use the kind', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'denied_for_token');
+
+// ---- the kind ms2_product_link: description and keys ----
+$pDesc = $call($sAdmin, 'describe', array('kind' => 'ms2_product_link'));
+check('ms2_product_link: describe', $pDesc['group'] === 'minishop2' && $pDesc['read_scope'] === 'read' && $pDesc['write_scope'] === 'develop' && $pDesc['key_type'] === 'string' && $pDesc['key_field'] === 'key'
+    && array_column($pDesc['fields'], 'name') === array('link', 'master', 'slave', 'label'));
+$pFields = array_column($pDesc['fields'], null, 'name');
+check('ms2_product_link: link, master and slave are required and fixed; the label is computed', !empty($pFields['link']['required']) && !empty($pFields['master']['immutable']) && !empty($pFields['slave']['required']) && !empty($pFields['label']['read_only']));
+foreach (array('abc', '1:2', '1:2:3:4', '0:1:2', '1:0:2', '1:2:x', ':1:2', '1:2:', '-1:2:3', '1: 2:3', '99999999999:1:2') as $badKey) {
+    $e = throws("ms2_product_link: key '{$badKey}'", ApiException::class, function () use ($call, $sRead, $badKey) { $call($sRead, 'get', array('kind' => 'ms2_product_link', 'key' => $badKey)); });
+    check("ms2_product_link: the key '{$badKey}' is validation_failed", $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), '<link>:<master>:<slave>') !== false);
+}
+$e = throws('ms2_product_link: an id is not a key', ApiException::class, function () use ($call, $sRead) { $call($sRead, 'get', array('kind' => 'ms2_product_link', 'id' => 5)); });
+check('ms2_product_link: addressed by key, not by id', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'key') !== false);
+$e = throws('ms2_product_link: a key that does not exist', ApiException::class, function () use ($call, $sRead, $lOne) { $call($sRead, 'get', array('kind' => 'ms2_product_link', 'key' => "{$lOne}:7001:7002")); });
+check('ms2_product_link: an absent link is not_found', $e && $e->errorCode === 'not_found');
+
+// ---- creating links, by type ----
+$lkBase = $lkTables();
+// refusals leave nothing behind
+$lBefore = $lkChangesets();
+foreach (array('a page that is not a product as slave' => array('link' => $lOne, 'master' => 7001, 'slave' => 7100, 'needle' => 'not a miniShop2 product'),
+    'a page that is not a product as master' => array('link' => $lOne, 'master' => 7100, 'slave' => 7001, 'needle' => 'not a miniShop2 product'),
+    'a resource that does not exist' => array('link' => $lOne, 'master' => 7001, 'slave' => 99999, 'needle' => 'not a miniShop2 product'),
+    'a product linked to itself' => array('link' => $lOne, 'master' => 7001, 'slave' => 7001, 'needle' => 'itself'),
+    'a link type that does not exist' => array('link' => 999, 'master' => 7001, 'slave' => 7002, 'needle' => 'no link type'),
+    'a zero id' => array('link' => $lOne, 'master' => 0, 'slave' => 7002, 'needle' => '1 or more')) as $label => $case) {
+    $needle = $case['needle'];
+    unset($case['needle']);
+    $e = throws("ms2_product_link: create with {$label}", ApiException::class, function () use ($call, $sDev, $case) { $call($sDev, 'create', array('kind' => 'ms2_product_link', 'fields' => $case)); });
+    check("ms2_product_link: {$label} is refused and leaves no trace", $e && $e->errorCode === 'validation_failed' && stripos($e->getMessage(), $needle) !== false && $lkTables() == $lkBase && $lkChangesets() === $lBefore);
+}
+$e = throws('ms2_product_link: create without master', ApiException::class, function () use ($call, $sDev, $lOne) { $call($sDev, 'create', array('kind' => 'ms2_product_link', 'fields' => array('link' => $lOne, 'slave' => 7002))); });
+check('ms2_product_link: master is required', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'master') !== false);
+$e = throws('ms2_product_link: a content token cannot write', ApiException::class, function () use ($call, $sEditor, $lOne) { $call($sEditor, 'create', array('kind' => 'ms2_product_link', 'fields' => array('link' => $lOne, 'master' => 7004, 'slave' => 7005))); });
+check('ms2_product_link: writing needs develop', $e && $e->errorCode === 'forbidden_scope' && $lkTables() == $lkBase);
+
+// one_to_one: both directions
+$sDev->warnings = array();
+$pOne = $call($sDev, 'create', array('kind' => 'ms2_product_link', 'fields' => array('link' => $lOne, 'master' => 7004, 'slave' => 7005)));
+check('ms2_product_link: one_to_one stores both directions and journals both rows', $lkRows($lOne) === array('7004:7005', '7005:7004') && $pOne['key'] === "{$lOne}:7004:7005"
+    && $lkKeys($pOne['changeset_id']) === array("{$lOne}:7004:7005" => 'create', "{$lOne}:7005:7004" => 'create') && end($sSite->ms2Calls)[0] === 'mgr/product/productlink/create'
+    && strpos(implode(' ', $sDev->warnings), '1 more row') !== false);
+$pOneGot = $call($sRead, 'get', array('kind' => 'ms2_product_link', 'key' => $pOne['key']));
+check('ms2_product_link: get shows the fields and the Cyrillic label', $pOneGot['fields'] === array('link' => $lOne, 'master' => 7004, 'slave' => 7005, 'label' => 'Пара: Наушники → Кабель') && $pOneGot['key'] === $pOne['key']);
+check('ms2_product_link: a key with a leading zero names the same link', $call($sRead, 'get', array('kind' => 'ms2_product_link', 'key' => '0' . $lOne . ':7004:7005'))['key'] === $pOne['key']);
+$pOneAgain = $call($sDev, 'create', array('kind' => 'ms2_product_link', 'fields' => array('link' => $lOne, 'master' => 7004, 'slave' => 7005)));
+check('ms2_product_link: creating a link that exists changes nothing and records nothing', $pOneAgain['changeset_id'] === null && $lkRows($lOne) === array('7004:7005', '7005:7004'));
+$pOneReverse = $call($sDev, 'create', array('kind' => 'ms2_product_link', 'fields' => array('link' => $lOne, 'master' => 7005, 'slave' => 7004)));
+check('ms2_product_link: the reverse of an existing one_to_one link is the same pair', $pOneReverse['changeset_id'] === null && $lkRows($lOne) === array('7004:7005', '7005:7004'));
+$call($sDev, 'undo', array('changeset_id' => $pOne['changeset_id'], 'confirm' => true));
+check('ms2_product_link: undo of a one_to_one create removes both rows', $lkTables() == $lkBase);
+$pOne = $call($sDev, 'create', array('kind' => 'ms2_product_link', 'fields' => array('link' => $lOne, 'master' => 7004, 'slave' => 7005)));
+
+// one_to_many: only the requested row
+$pOneMany = $call($sDev, 'create', array('kind' => 'ms2_product_link', 'fields' => array('link' => $lOneMany, 'master' => 7001, 'slave' => 7002)));
+check('ms2_product_link: one_to_many stores only the requested row', $lkRows($lOneMany) === array('7001:7002') && $lkKeys($pOneMany['changeset_id']) === array("{$lOneMany}:7001:7002" => 'create'));
+// many_to_one: stored the other way round
+$sDev->warnings = array();
+$pManyOne = $call($sDev, 'create', array('kind' => 'ms2_product_link', 'fields' => array('link' => $lManyOne, 'master' => 7001, 'slave' => 7002)));
+check('ms2_product_link: many_to_one stores the row from the slave to the master, and the result names that row', $lkRows($lManyOne) === array('7002:7001') && $pManyOne['key'] === "{$lManyOne}:7002:7001"
+    && $lkKeys($pManyOne['changeset_id']) === array("{$lManyOne}:7002:7001" => 'create') && strpos(implode(' ', $sDev->warnings), 'from the slave to the master') !== false);
+$e = throws('ms2_product_link: the key as requested for many_to_one', ApiException::class, function () use ($call, $sRead, $lManyOne) { $call($sRead, 'get', array('kind' => 'ms2_product_link', 'key' => "{$lManyOne}:7001:7002")); });
+check('ms2_product_link: a many_to_one link is addressed by the stored row', $e && $e->errorCode === 'not_found' && $call($sRead, 'get', array('kind' => 'ms2_product_link', 'key' => $pManyOne['key']))['fields']['label'] === 'Комплект: Чехол «Север» → Телефон «Звезда»');
+
+// many_to_many: groups
+$sDev->warnings = array();
+$pM1 = $call($sDev, 'create', array('kind' => 'ms2_product_link', 'fields' => array('link' => $lMany, 'master' => 7001, 'slave' => 7002)));
+check('ms2_product_link: many_to_many first link stores both directions', $lkRows($lMany) === array('7001:7002', '7002:7001') && count($lkKeys($pM1['changeset_id'])) === 2);
+$pM2 = $call($sDev, 'create', array('kind' => 'ms2_product_link', 'fields' => array('link' => $lMany, 'master' => 7002, 'slave' => 7003)));
+check('ms2_product_link: adding a third product links the whole group and journals every new row', $lkRows($lMany) === array('7001:7002', '7001:7003', '7002:7001', '7002:7003', '7003:7001', '7003:7002')
+    && $lkKeys($pM2['changeset_id']) === array("{$lMany}:7001:7003" => 'create', "{$lMany}:7002:7003" => 'create', "{$lMany}:7003:7001" => 'create', "{$lMany}:7003:7002" => 'create')
+    && $pM2['key'] === "{$lMany}:7002:7003" && strpos(implode(' ', $sDev->warnings), '3 more row') !== false);
+$groupBefore = $lkTables();
+$pDryDelete = $call($sDev, 'delete', array('kind' => 'ms2_product_link', 'key' => "{$lMany}:7001:7002", 'dry_run' => true));
+check('ms2_product_link: the delete dry run warns about the other rows and changes nothing', $pDryDelete['dry_run'] === true && $lkTables() == $groupBefore && $sSite->ms2Removed === array());
+$pDel = $call($sDev, 'delete', array('kind' => 'ms2_product_link', 'key' => "{$lMany}:7001:7002"));
+check('ms2_product_link: removing a many_to_many link takes the slave out of the group, every row journaled', $lkRows($lMany) === array('7001:7003', '7003:7001') && end($sSite->ms2Removed) == array($lMany, 7001, 7002)
+    && $lkKeys($pDel['changeset_id']) === array("{$lMany}:7001:7002" => 'delete', "{$lMany}:7002:7001" => 'delete', "{$lMany}:7002:7003" => 'delete', "{$lMany}:7003:7002" => 'delete') && $pDel['deleted'] === true);
+$call($sDev, 'undo', array('changeset_id' => $pDel['changeset_id'], 'confirm' => true));
+check('ms2_product_link: undo of the delete restores every row', $lkTables() == $groupBefore);
+$call($sDev, 'undo', array('changeset_id' => $pM2['changeset_id'], 'confirm' => true));
+check('ms2_product_link: undo of the group create leaves the first pair', $lkRows($lMany) === array('7001:7002', '7002:7001'));
+$call($sDev, 'undo', array('changeset_id' => $pM1['changeset_id'], 'confirm' => true));
+$pM1 = $call($sDev, 'create', array('kind' => 'ms2_product_link', 'fields' => array('link' => $lMany, 'master' => 7001, 'slave' => 7002)));
+$pM2 = $call($sDev, 'create', array('kind' => 'ms2_product_link', 'fields' => array('link' => $lMany, 'master' => 7002, 'slave' => 7003)));
+// two groups are merged by a link between their members
+$pM3 = $call($sDev, 'create', array('kind' => 'ms2_product_link', 'fields' => array('link' => $lMany, 'master' => 7005, 'slave' => 7006)));
+check('ms2_product_link: a second group is separate', count($lkRows($lMany)) === 8 && !in_array('7001:7005', $lkRows($lMany), true));
+$pMerge = $call($sDev, 'create', array('kind' => 'ms2_product_link', 'fields' => array('link' => $lMany, 'master' => 7003, 'slave' => 7005)));
+$mergedRows = $lkRows($lMany);
+check('ms2_product_link: a link between two groups links every member of both, all new rows journaled', count($mergedRows) === 20 && in_array('7001:7006', $mergedRows, true) && in_array('7006:7001', $mergedRows, true)
+    && count($lkKeys($pMerge['changeset_id'])) === 12 && array_unique(array_values($lkKeys($pMerge['changeset_id']))) === array('create'));
+$call($sDev, 'undo', array('changeset_id' => $pMerge['changeset_id'], 'confirm' => true));
+check('ms2_product_link: undo of the merge separates the groups again', count($lkRows($lMany)) === 8);
+$e = throws('ms2_product_link: update', ApiException::class, function () use ($call, $sDev, $pM1) { $call($sDev, 'update', array('kind' => 'ms2_product_link', 'key' => $pM1['key'], 'fields' => array('master' => 7003))); });
+check('ms2_product_link: an update that changes a field is validation_failed', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'cannot be changed') !== false);
+$e = throws('ms2_product_link: update with the same values', ApiException::class, function () use ($call, $sDev, $pM1) { $call($sDev, 'update', array('kind' => 'ms2_product_link', 'key' => $pM1['key'], 'fields' => array('master' => 7001))); });
+check('ms2_product_link: an update that repeats the values is refused as well: there is nothing to change', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'nothing to change') !== false);
+$e = throws('ms2_product_link: duplicate', ApiException::class, function () use ($call, $sDev, $pM1) { $call($sDev, 'duplicate', array('kind' => 'ms2_product_link', 'key' => $pM1['key'])); });
+check('ms2_product_link: a duplicate is validation_failed', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'cannot be copied') !== false);
+check('ms2_product_link: list with where on link, master and slave', array_column($call($sRead, 'list', array('kind' => 'ms2_product_link', 'where' => array('link' => $lOne)))['items'], 'key') === array()
+    && array_column($call($sRead, 'list', array('kind' => 'ms2_product_link', 'where' => array('link' => $lOne)))['items'], 'master') === array(7004, 7005)
+    && array_column($call($sRead, 'list', array('kind' => 'ms2_product_link', 'where' => array('link' => $lMany, 'master' => 7002)))['items'], 'slave') === array(7001, 7003)
+    && $call($sRead, 'list', array('kind' => 'ms2_product_link', 'where' => array('slave' => 7001)))['total'] === 3);
+$e = throws('ms2_product_link: the label cannot be filtered on', ApiException::class, function () use ($call, $sRead) { $call($sRead, 'list', array('kind' => 'ms2_product_link', 'where' => array('label' => 'x'))); });
+check('ms2_product_link: a where on the computed label is refused', $e && $e->errorCode === 'validation_failed');
+$pList = $call($sRead, 'list', array('kind' => 'ms2_product_link', 'where' => array('link' => $lOne)));
+check('ms2_product_link: list shows the Cyrillic label', $pList['items'][0]['label'] === 'Пара: Наушники → Кабель' && $pList['items'][1]['label'] === 'Пара: Кабель → Наушники');
+// delete of the other types
+$pOneDel = $call($sDev, 'delete', array('kind' => 'ms2_product_link', 'key' => "{$lOne}:7005:7004"));
+check('ms2_product_link: removing a one_to_one link removes both directions', $lkRows($lOne) === array() && $lkKeys($pOneDel['changeset_id']) === array("{$lOne}:7004:7005" => 'delete', "{$lOne}:7005:7004" => 'delete'));
+$call($sDev, 'undo', array('changeset_id' => $pOneDel['changeset_id'], 'confirm' => true));
+check('ms2_product_link: undo restores both directions', $lkRows($lOne) === array('7004:7005', '7005:7004'));
+$pManyDel = $call($sDev, 'delete', array('kind' => 'ms2_product_link', 'key' => $pManyOne['key']));
+check('ms2_product_link: removing a many_to_one link removes only that row', $lkRows($lManyOne) === array() && $lkKeys($pManyDel['changeset_id']) === array($pManyOne['key'] => 'delete'));
+$call($sDev, 'undo', array('changeset_id' => $pManyDel['changeset_id'], 'confirm' => true));
+check('ms2_product_link: undo restores the many_to_one row', $lkRows($lManyOne) === array('7002:7001'));
+$e = throws('ms2_product_link: delete of a link that is not there', ApiException::class, function () use ($call, $sDev, $lOneMany) { $call($sDev, 'delete', array('kind' => 'ms2_product_link', 'key' => "{$lOneMany}:7002:7001")); });
+check('ms2_product_link: delete of an absent link is not_found', $e && $e->errorCode === 'not_found');
+$e = throws('ms2_product_link: a read token cannot delete', ApiException::class, function () use ($call, $sRead, $lOneMany) { $call($sRead, 'delete', array('kind' => 'ms2_product_link', 'key' => "{$lOneMany}:7001:7002")); });
+check('ms2_product_link: deleting needs develop', $e && $e->errorCode === 'forbidden_scope' && $lkRows($lOneMany) === array('7001:7002'));
+// undo of a delete is refused when a product is no longer a product
+$pRowDel = $call($sDev, 'delete', array('kind' => 'ms2_product_link', 'key' => "{$lOneMany}:7001:7002"));
+$sSite->store('modResource', array('id' => 7002, 'class_key' => 'modDocument', 'pagetitle' => 'Чехол «Север»', 'parent' => 0));
+$e = throws('ms2_product_link: undo with a slave that is no product', ApiException::class, function () use ($call, $sDev, $pRowDel) { $call($sDev, 'undo', array('changeset_id' => $pRowDel['changeset_id'], 'confirm' => true)); });
+check('ms2_product_link: undo is not_reversible when a product has stopped being a product, and nothing is restored', $e && $e->errorCode === 'not_reversible' && $lkRows($lOneMany) === array());
+$sSite->store('modResource', array('id' => 7002, 'class_key' => 'msProduct', 'pagetitle' => 'Чехол «Север»', 'parent' => 0));
+$call($sDev, 'undo', array('changeset_id' => $pRowDel['changeset_id'], 'confirm' => true));
+check('ms2_product_link: undo works again once it is a product', $lkRows($lOneMany) === array('7001:7002'));
+$e = throws('ms2_product_link: a token denied the group', ApiException::class, function () use ($call, $sActor) { $call($sActor('admin', array('denied_groups' => array('minishop2'))), 'list', array('kind' => 'ms2_product_link')); });
+check('ms2_product_link: a token denied the minishop2 group cannot list them', $e && $e->errorCode === 'unavailable');
+
+// ---- deleting a link type removes its product links, journaled ----
+$cascadeBefore = $lkTables();
+$cascadeDry = $call($sDev, 'delete', array('kind' => 'ms2_link', 'id' => $lMany, 'dry_run' => true));
+check('ms2_link: the delete dry run changes nothing', $cascadeDry['dry_run'] === true && $lkTables() == $cascadeBefore);
+$lDel = $call($sDev, 'delete', array('kind' => 'ms2_link', 'id' => $lMany));
+$lDelKeys = $lkKeys($lDel['changeset_id']);
+check('ms2_link: deleting a link type removes its product links, and every one is journaled as deleted', $sSite->row('msLink', $lMany) === null && $lkRows($lMany) === array() && count($lDelKeys) === 8
+    && array_unique(array_values($lDelKeys)) === array('delete') && $lkKeys($lDel['changeset_id'], 'ms2_link') === array((string) $lMany => 'delete') && count($lkRows($lOne)) === 2 && end($sSite->ms2Calls)[0] === 'mgr/settings/link/remove');
+$call($sDev, 'undo', array('changeset_id' => $lDel['changeset_id'], 'confirm' => true));
+check('ms2_link: undo restores the link type and every product link exactly', $lkTables() == $cascadeBefore);
+// limits: two groups of 25 in one link type
+$lBig = $call($sDev, 'create', array('kind' => 'ms2_link', 'fields' => array('name' => 'Большая группа', 'type' => 'many_to_many')))['id'];
+foreach (array(8000, 8100) as $lkStart) {
+    for ($n = 1; $n <= 25; $n++) { $sSite->store('modResource', array('id' => $lkStart + $n, 'class_key' => 'msProduct', 'pagetitle' => 'Т' . ($lkStart + $n), 'parent' => 0)); }
+    for ($n = 1; $n <= 25; $n++) { for ($k = 1; $k <= 25; $k++) { if ($n !== $k) { $sSite->store('msProductLink', array('link' => $lBig, 'master' => $lkStart + $n, 'slave' => $lkStart + $k)); } } }
+}
+$bigBefore = $lkTables();
+$lBefore = $lkChangesets();
+$e = throws('ms2_product_link: a link that would add over 1000 rows', ApiException::class, function () use ($call, $sDev, $lBig) { $call($sDev, 'create', array('kind' => 'ms2_product_link', 'fields' => array('link' => $lBig, 'master' => 8001, 'slave' => 8101))); });
+check('ms2_product_link: a many_to_many link that would add over 1000 rows is refused and nothing changes', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), '1000') !== false && $lkTables() == $bigBefore && $lkChangesets() === $lBefore);
+$e = throws('ms2_link: deleting a type with over 1000 links', ApiException::class, function () use ($call, $sDev, $lBig) { $call($sDev, 'delete', array('kind' => 'ms2_link', 'id' => $lBig)); });
+check('ms2_link: deleting a link type that holds over 1000 product links is refused', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), '1000') !== false && $sSite->row('msLink', $lBig) !== null && $lkTables() == $bigBefore);
+$call($sDev, 'delete', array('kind' => 'ms2_product_link', 'key' => "{$lBig}:8001:8002"));
+check('ms2_product_link: removing one member of a big group touches 48 rows and works', count($lkRows($lBig)) === 600 + 600 - 48 && $lkChangesets() > $lBefore);
+$call($sDev, 'undo', array('last' => 1, 'confirm' => true));
+check('ms2_product_link: and its undo restores them all', $lkTables() == $bigBefore);
+
+// ---- the kind ms2_order_status ----
+$sSite->options['emailsender'] = 'shop@example.com';
+$sSite->options['ms2_email_manager'] = 'менеджер@пример.рф, bad-address, second@example.com';
+foreach (array(
+    array(1, 'Новый', 1, 1, 'Заказ принят', 'Новый заказ', 1, 0, 0, 1),
+    array(2, 'Оплачен', 1, 0, 'Заказ оплачен', '', 1, 0, 0, 2),
+    array(3, 'Отправлен', 0, 1, '', 'Заказ отправлен', 1, 0, 1, 3),
+    array(4, 'Доставлен', 1, 0, 'Заказ доставлен', '', 1, 1, 0, 4),
+    array(5, 'Отменён', 1, 1, 'Заказ отменён', 'Отмена', 0, 0, 0, 5),
+    array(6, 'Без темы', 1, 1, '', '', 1, 0, 0, 6),
+) as $st) {
+    $sSite->store('msOrderStatus', array('id' => $st[0], 'name' => $st[1], 'description' => 'Описание ' . $st[1], 'color' => '00ff00', 'email_user' => $st[2], 'email_manager' => $st[3], 'subject_user' => $st[4], 'subject_manager' => $st[5],
+        'body_user' => 0, 'body_manager' => 0, 'active' => $st[6], 'final' => $st[7], 'fixed' => $st[8], 'rank' => $st[9], 'editable' => 1));
+}
+$stList = $call($sRead, 'list', array('kind' => 'ms2_order_status'));
+check('ms2_order_status: a read token lists the statuses by rank, with the e-mail flags as booleans', array_column($stList['items'], 'name') === array('Новый', 'Оплачен', 'Отправлен', 'Доставлен', 'Отменён', 'Без темы')
+    && $stList['items'][0]['email_user'] === true && $stList['items'][0]['email_manager'] === true && $stList['items'][1]['email_manager'] === false && $stList['items'][4]['active'] === false && $stList['total'] === 6);
+$stGot = $call($sRead, 'get', array('kind' => 'ms2_order_status', 'name' => 'Доставлен'));
+check('ms2_order_status: get by name shows final, fixed, rank and colour, and no e-mail text', $stGot['fields'] === array('id' => 4, 'name' => 'Доставлен', 'color' => '00ff00', 'email_user' => true, 'email_manager' => false, 'active' => true, 'final' => true, 'fixed' => false, 'rank' => 4)
+    && strpos(json_encode($stGot, JSON_UNESCAPED_UNICODE), 'Заказ доставлен') === false);
+check('ms2_order_status: describe says it is read only', ($call($sRead, 'describe', array('kind' => 'ms2_order_status'))['generic_writes'] ?? true) === false && $call($sRead, 'describe', array('kind' => 'ms2_order_status'))['read_scope'] === 'read'
+    && array_filter(array_column($call($sRead, 'describe', array('kind' => 'ms2_order_status'))['fields'], 'read_only')) !== array());
+check('ms2_order_status: list where on active', array_column($call($sRead, 'list', array('kind' => 'ms2_order_status', 'where' => array('active' => false)))['items'], 'name') === array('Отменён'));
+$stTables = $sSite->tableDump('msOrderStatus');
+$stBefore = $lkChangesets();
+foreach (array('create' => array('fields' => array('name' => 'Новый статус')), 'update' => array('id' => 1, 'fields' => array('name' => 'Другой')), 'delete' => array('id' => 1), 'duplicate' => array('id' => 1)) as $action => $extra) {
+    $e = throws("ms2_order_status: {$action} by an admin", ApiException::class, function () use ($call, $sAdmin, $action, $extra) { $call($sAdmin, $action, array('kind' => 'ms2_order_status') + $extra); });
+    check("ms2_order_status: {$action} is refused, even for an admin", $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'read only') !== false && $sSite->tableDump('msOrderStatus') == $stTables && $lkChangesets() === $stBefore);
+    $e = throws("ms2_order_status: {$action} by a read token", ApiException::class, function () use ($call, $sRead, $action, $extra) { $call($sRead, $action, array('kind' => 'ms2_order_status') + $extra); });
+    check("ms2_order_status: {$action} by a read token is forbidden_scope", $e && $e->errorCode === 'forbidden_scope');
+}
+
+// ---- orders: data ----
+$sSite->store('modUserProfile', array('id' => 31, 'internalKey' => 31, 'fullname' => 'Иван Иванов', 'email' => 'ivan@example.com'));
+$sSite->store('modUserProfile', array('id' => 32, 'internalKey' => 32, 'fullname' => 'Без почты', 'email' => ''));
+$sSite->store('msOrderAddress', array('id' => 201, 'user_id' => 31, 'createdon' => '2026-11-01 10:20:30', 'updatedon' => null, 'receiver' => 'Петров Пётр Петрович', 'phone' => '+7 (999) 123-45-67', 'email' => 'petrov@example.ru',
+    'country' => 'Россия', 'index' => '670000', 'region' => 'Бурятия', 'city' => 'Улан-Удэ', 'metro' => null, 'street' => 'ул. Ленина', 'building' => '5', 'entrance' => '2', 'floor' => '4', 'room' => '17',
+    'comment' => 'Домофон не работает', 'text_address' => '670000, Улан-Удэ, ул. Ленина, 5-17', 'properties' => null));
+$sSite->store('msOrderAddress', array('id' => 202, 'user_id' => 32, 'receiver' => 'Сидорова Анна', 'phone' => '89001112233', 'email' => 'anna@example.ru', 'city' => 'Иркутск'));
+foreach (array(
+    array(101, 31, 1, 201, '2026/11-1', 'Позвонить за час до доставки'),
+    array(102, 32, 2, 202, '2026/11-2', ''),
+    array(103, 33, 4, 0, '2026/11-3', ''),
+    array(104, 31, 3, 201, '2026/11-4', ''),
+) as $or) {
+    $sSite->store('msOrder', array('id' => $or[0], 'user_id' => $or[1], 'session_id' => 'sess' . $or[0] . 'secret', 'createdon' => '2026-11-0' . ($or[0] - 100) . ' 10:20:30', 'updatedon' => '2026-11-0' . ($or[0] - 100) . ' 11:00:00',
+        'num' => $or[4], 'cost' => '2500.50', 'cart_cost' => '2300.50', 'delivery_cost' => '200.00', 'weight' => '1.250', 'status' => $or[2], 'delivery' => 1, 'payment' => 2, 'address' => $or[3], 'context' => 'web',
+        'order_comment' => $or[5], 'properties' => '{"payment_secret":"tok-123"}', 'type' => 0));
+}
+$sSite->store('msOrderProduct', array('id' => 301, 'product_id' => 7001, 'order_id' => 101, 'name' => 'Телефон «Звезда»', 'count' => 1, 'price' => '2000.00', 'weight' => '0.5', 'cost' => '2000.00', 'options' => '{"color":"синий","size":"M"}', 'properties' => null));
+$sSite->store('msOrderProduct', array('id' => 302, 'product_id' => 7002, 'order_id' => 101, 'name' => 'Чехол «Север»', 'count' => 2, 'price' => '150.25', 'weight' => '0.1', 'cost' => '300.50', 'options' => null, 'properties' => null));
+$sSite->store('msOrderProduct', array('id' => 303, 'product_id' => 7003, 'order_id' => 102, 'name' => 'Зарядка «Юг»', 'count' => 1, 'price' => '500', 'weight' => '0.2', 'cost' => '500', 'options' => null, 'properties' => null));
+$sSite->store('msOrderLog', array('id' => 401, 'user_id' => 31, 'order_id' => 101, 'timestamp' => '2026-11-01 10:20:31', 'action' => 'status', 'entry' => '1', 'ip' => '"203.0.113.7"'));
+$sSite->store('msOrderLog', array('id' => 402, 'user_id' => 1, 'order_id' => 101, 'timestamp' => '2026-11-01 12:00:00', 'action' => 'comment', 'entry' => 'Клиент просил перезвонить', 'ip' => '"203.0.113.8"'));
+$orderTables = function () use ($sSite) { return array($sSite->tableDump('msOrder'), $sSite->tableDump('msOrderLog'), $sSite->tableDump('msOrderStatus'), $sSite->tableDump('msOrderProduct'), $sSite->tableDump('msOrderAddress')); };
+
+// ---- orders: describe, read ----
+$oDesc = $call($sAdmin, 'describe', array('kind' => 'ms2_order'));
+check('ms2_order: describe', $oDesc['group'] === 'minishop2' && $oDesc['read_scope'] === 'admin' && $oDesc['write_scope'] === 'admin' && $oDesc['name_field'] === 'num' && $oDesc['generic_writes'] === false && $oDesc['key_type'] === 'integer'
+    && array_column($oDesc['fields'], 'name') === array('id', 'num', 'user_id', 'createdon', 'updatedon', 'cost', 'cart_cost', 'delivery_cost', 'weight', 'status', 'status_name', 'delivery', 'payment', 'context', 'comment')
+    && count(array_filter(array_column($oDesc['fields'], 'read_only'))) === 15 && array_column($oDesc['relations'], 'writable', 'name') === array('products' => false, 'address' => false, 'log' => false)
+    && array_column($oDesc['operations'], 'op') === array('change_status') && $oDesc['operations'][0]['read_only'] === false && $oDesc['operations'][0]['needs_object'] === true);
+$oGot = $call($sAdmin, 'get', array('kind' => 'ms2_order', 'id' => 101));
+check('ms2_order: get shows the order, the status name and the computed numbers', $oGot['fields']['num'] === '2026/11-1' && $oGot['fields']['status'] === 1 && $oGot['fields']['status_name'] === 'Новый' && $oGot['fields']['cost'] === 2500.5
+    && $oGot['fields']['cart_cost'] === 2300.5 && $oGot['fields']['delivery_cost'] === 200.0 && $oGot['fields']['weight'] === 1.25 && $oGot['fields']['createdon'] === '2026-11-01 10:20:30' && $oGot['fields']['user_id'] === 31
+    && $oGot['fields']['comment'] === 'Позвонить за час до доставки' && $oGot['fields']['delivery'] === 1 && $oGot['fields']['payment'] === 2 && $oGot['fields']['context'] === 'web' && preg_match('/^[a-f0-9]{64}$/', $oGot['revision']));
+check('ms2_order: the address relation has the contacts, with Cyrillic', $oGot['relations']['address'] === array(array('receiver' => 'Петров Пётр Петрович', 'phone' => '+7 (999) 123-45-67', 'email' => 'petrov@example.ru', 'country' => 'Россия', 'index' => '670000',
+    'region' => 'Бурятия', 'city' => 'Улан-Удэ', 'metro' => '', 'street' => 'ул. Ленина', 'building' => '5', 'entrance' => '2', 'floor' => '4', 'room' => '17', 'comment' => 'Домофон не работает', 'text_address' => '670000, Улан-Удэ, ул. Ленина, 5-17')));
+check('ms2_order: the products relation lists the rows with their options', json_encode($oGot['relations']['products'], JSON_UNESCAPED_UNICODE) === json_encode(array(
+    array('product_id' => 7001, 'name' => 'Телефон «Звезда»', 'count' => 1, 'price' => 2000.0, 'cost' => 2000.0, 'options' => array('color' => 'синий', 'size' => 'M')),
+    array('product_id' => 7002, 'name' => 'Чехол «Север»', 'count' => 2, 'price' => 150.25, 'cost' => 300.5, 'options' => new stdClass())), JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION)
+    || json_encode($oGot['relations']['products'], JSON_UNESCAPED_UNICODE) === '[{"product_id":7001,"name":"Телефон «Звезда»","count":1,"price":2000,"cost":2000,"options":{"color":"синий","size":"M"}},{"product_id":7002,"name":"Чехол «Север»","count":2,"price":150.25,"cost":300.5,"options":{}}]');
+check('ms2_order: the log relation has time, action, entry and user, oldest first', $oGot['relations']['log'] === array(array('timestamp' => '2026-11-01 10:20:31', 'action' => 'status', 'entry' => '1', 'user_id' => 31),
+    array('timestamp' => '2026-11-01 12:00:00', 'action' => 'comment', 'entry' => 'Клиент просил перезвонить', 'user_id' => 1)));
+$oJson = json_encode($oGot, JSON_UNESCAPED_UNICODE);
+check('ms2_order: the session id, the properties and the IP addresses are never shown', strpos($oJson, 'secret') === false && strpos($oJson, 'tok-123') === false && strpos($oJson, '203.0.113') === false && strpos($oJson, 'sess101') === false);
+check('ms2_order: get by number, and an order without an address', $call($sAdmin, 'get', array('kind' => 'ms2_order', 'name' => '2026/11-2'))['id'] === 102 && $call($sAdmin, 'get', array('kind' => 'ms2_order', 'id' => 103))['relations']['address'] === array()
+    && $call($sAdmin, 'get', array('kind' => 'ms2_order', 'id' => 103))['relations']['products'] === array());
+$oList = $call($sAdmin, 'list', array('kind' => 'ms2_order'));
+check('ms2_order: list, newest first, with the listed fields', array_column($oList['items'], 'id') === array(104, 103, 102, 101) && $oList['total'] === 4 && array_keys($oList['items'][0]) === array('id', 'num', 'user_id', 'createdon', 'cost', 'status', 'status_name')
+    && $oList['items'][3]['status_name'] === 'Новый' && !isset($oList['items'][0]['comment']));
+check('ms2_order: list with where and query', array_column($call($sAdmin, 'list', array('kind' => 'ms2_order', 'where' => array('status' => 2)))['items'], 'id') === array(102) && array_column($call($sAdmin, 'list', array('kind' => 'ms2_order', 'where' => array('user_id' => 31)))['items'], 'id') === array(104, 101)
+    && array_column($call($sAdmin, 'list', array('kind' => 'ms2_order', 'query' => '11-3'))['items'], 'id') === array(103));
+check('ms2_order: list can ask for the comment', $call($sAdmin, 'list', array('kind' => 'ms2_order', 'fields' => array('num', 'comment'), 'where' => array('id' => 101)))['items'] === array(array('num' => '2026/11-1', 'comment' => 'Позвонить за час до доставки')));
+
+// ---- orders: the read-scope rule, on every door ----
+$orderBefore = $orderTables();
+$orderJournal = $lkChangesets();
+$denyRead = array(
+    'describe' => array('describe', array('kind' => 'ms2_order')), 'list' => array('list', array('kind' => 'ms2_order')), 'get by id' => array('get', array('kind' => 'ms2_order', 'id' => 101)),
+    'get by number' => array('get', array('kind' => 'ms2_order', 'name' => '2026/11-1')), 'create' => array('create', array('kind' => 'ms2_order', 'fields' => array('num' => 'x'))),
+    'update' => array('update', array('kind' => 'ms2_order', 'id' => 101, 'fields' => array('status' => 2))), 'delete' => array('delete', array('kind' => 'ms2_order', 'id' => 101)),
+    'duplicate' => array('duplicate', array('kind' => 'ms2_order', 'id' => 101)), 'invoke plan' => array('invoke', array('kind' => 'ms2_order', 'op' => 'change_status', 'id' => 101, 'args' => array('status' => 2))),
+    'invoke confirm' => array('invoke', array('kind' => 'ms2_order', 'op' => 'change_status', 'id' => 101, 'args' => array('status' => 2, 'confirm' => true))),
+    'invoke dry run' => array('invoke', array('kind' => 'ms2_order', 'op' => 'change_status', 'id' => 101, 'dry_run' => true, 'args' => array('status' => 2))),
+);
+foreach (array('read' => $sRead, 'content' => $sEditor, 'develop' => $sDev) as $scope => $ctx) {
+    foreach ($denyRead as $label => $door) {
+        $e = throws("ms2_order: {$label} with a {$scope} token", ApiException::class, function () use ($call, $ctx, $door) { $call($ctx, $door[0], $door[1]); });
+        // modx_describe reports a kind the token may not read as unavailable, with the reason forbidden_scope.
+        check("ms2_order: {$label} needs the admin scope ({$scope} token)", $e && ($door[0] === 'describe' ? $e->errorCode === 'unavailable' && $e->details['reason'] === 'forbidden_scope' : $e->errorCode === 'forbidden_scope'));
+    }
+    check("ms2_order: the kind is not listed for a {$scope} token", !in_array('ms2_order', array_column($call($ctx, 'describe')['kinds'], 'kind'), true));
+}
+check('ms2_order: nothing changed, nothing journaled, no mail, no service call', $orderTables() == $orderBefore && $lkChangesets() === $orderJournal && $sSite->sentMails === array() && !isset($sSite->services['miniShop2']));
+check('ms2_order: the kind is listed for an admin token', in_array('ms2_order', array_column($call($sAdmin, 'describe')['kinds'], 'kind'), true));
+$e = throws('ms2_order: a token denied the group', ApiException::class, function () use ($call, $sActor) { $call($sActor('admin', array('denied_groups' => array('minishop2'))), 'get', array('kind' => 'ms2_order', 'id' => 101)); });
+check('ms2_order: an admin token denied the minishop2 group cannot read orders', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'denied_for_token');
+$caps = $call($sRead, 'capabilities');
+check('ms2_order: capabilities of a read token does not offer the orders, but the other miniShop2 kinds', !in_array('ms2_order', $caps['kinds'], true) && in_array('ms2_order_status', $caps['kinds'], true) && in_array('ms2_link', $caps['kinds'], true)
+    && in_array(array('name' => 'ms2_order', 'reason' => 'forbidden_scope'), $caps['unavailable_kinds'], true));
+check('ms2_order: the history of orders is empty and a read token sees no order data in it', $call($sRead, 'history', array('kind' => 'ms2_order'))['changesets'] === array());
+
+// ---- orders: generic writes are refused, for an admin too ----
+foreach (array('create' => array('fields' => array('num' => 'x', 'status' => 1)), 'update' => array('id' => 101, 'fields' => array('status' => 2)), 'delete' => array('id' => 101), 'duplicate' => array('id' => 101)) as $action => $extra) {
+    $e = throws("ms2_order: {$action} by an admin", ApiException::class, function () use ($call, $sAdmin, $action, $extra) { $call($sAdmin, $action, array('kind' => 'ms2_order') + $extra); });
+    check("ms2_order: {$action} is refused with the pointer to change_status", $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'change_status') !== false && $orderTables() == $orderBefore && $lkChangesets() === $orderJournal);
+}
+$e = throws('ms2_order: relations cannot be written either', ApiException::class, function () use ($call, $sAdmin) { $call($sAdmin, 'update', array('kind' => 'ms2_order', 'id' => 101, 'relations' => array('products' => array()))); });
+check('ms2_order: an update with relations is refused', $e && $e->errorCode === 'validation_failed' && $orderTables() == $orderBefore);
+$e = throws('ms2_order: an unknown operation', ApiException::class, function () use ($call, $sAdmin) { $call($sAdmin, 'invoke', array('kind' => 'ms2_order', 'op' => 'cancel', 'id' => 101)); });
+check('ms2_order: an operation that does not exist is not_found', $e && $e->errorCode === 'not_found' && strpos($e->getMessage(), 'change_status') !== false);
+
+// ---- orders: change_status ----
+$csArgs = function ($id, $status, array $more = array(), array $outer = array()) { return array('kind' => 'ms2_order', 'op' => 'change_status', 'id' => $id, 'args' => array('status' => $status) + $more) + $outer; };
+$nothingHappened = function () use ($orderTables, $orderBefore, $sSite, $lkChangesets, $orderJournal) {
+    return $orderTables() == $orderBefore && $sSite->sentMails === array() && $lkChangesets() === $orderJournal && !isset($sSite->services['miniShop2']);
+};
+$plan = $call($sAdmin, 'invoke', $csArgs(101, 2));
+check('change_status: without confirm it is a plan: both statuses by name and the e-mails that would go out', $plan['dry_run'] === true && $plan['performed'] === false && $plan['kind'] === 'ms2_order' && $plan['op'] === 'change_status' && $plan['id'] === 101 && $plan['order'] === '2026/11-1'
+    && $plan['from'] === array('id' => 1, 'name' => 'Новый') && $plan['to'] === array('id' => 2, 'name' => 'Оплачен') && $plan['email_user'] === true && $plan['email_manager'] === false
+    && $plan['emails_expected'] === array('user' => true, 'manager' => false) && $plan['reversible'] === false && strpos($plan['warning'], 'confirm: true') !== false && !isset($plan['planned']));
+check('change_status: the plan changed nothing, sent nothing and did not even load the service', $nothingHappened());
+$planManager = $call($sAdmin, 'invoke', $csArgs(101, 3));
+check('change_status: a status that mails the managers only', $planManager['emails_expected'] === array('user' => false, 'manager' => true) && $planManager['email_user'] === false && $planManager['email_manager'] === true && $planManager['to']['name'] === 'Отправлен');
+$planBoth = $call($sAdmin, 'invoke', $csArgs(102, 1));
+check('change_status: a status that mails both, for a customer without an address: only the manager is expected', $planBoth['email_user'] === true && $planBoth['email_manager'] === true && $planBoth['emails_expected'] === array('user' => false, 'manager' => true));
+$planNoSubject = $call($sAdmin, 'invoke', $csArgs(101, 6));
+check('change_status: flags without a subject send nothing', $planNoSubject['email_user'] === true && $planNoSubject['email_manager'] === true && $planNoSubject['emails_expected'] === array('user' => false, 'manager' => false));
+$sSite->options['ms2_email_manager'] = 'нет-адреса';
+$sSite->options['emailsender'] = '';
+check('change_status: no valid manager address means no manager mail', $call($sAdmin, 'invoke', $csArgs(101, 3))['emails_expected']['manager'] === false);
+$sSite->options['ms2_email_manager'] = 'менеджер@пример.рф, bad-address, second@example.com';
+$sSite->options['emailsender'] = 'shop@example.com';
+$planDry = $call($sAdmin, 'invoke', $csArgs(101, 2, array('confirm' => true), array('dry_run' => true)));
+check('change_status: dry_run wins over confirm', $planDry['dry_run'] === true && $planDry['performed'] === false && $nothingHappened());
+$planOnlyToken = $sActor('admin', array('plan_only' => true));
+$planOnly = $call($planOnlyToken, 'invoke', $csArgs(101, 2, array('confirm' => true)));
+check('change_status: a plan-only token only gets the plan, even with confirm', $planOnly['dry_run'] === true && $planOnly['planned'] === true && $planOnly['performed'] === false && $planOnly['to']['name'] === 'Оплачен' && $nothingHappened());
+$planOnlyRead = $call($planOnlyToken, 'get', array('kind' => 'ms2_order', 'id' => 101));
+check('change_status: a plan-only admin token still reads', $planOnlyRead['fields']['num'] === '2026/11-1');
+
+// refusals: the same in the plan and when confirmed, with nothing changed
+$csRefusals = array(
+    'an unknown status' => array(101, 99, 'no order status 99'), 'an inactive status' => array(101, 5, 'not active'), 'the status the order has' => array(101, 1, 'already has this status'),
+    'an order in a final status' => array(103, 1, 'final status'), 'a fixed status and a lower rank' => array(104, 2, 'fixed status'), 'a fixed status and the same rank' => array(104, 3, 'already has'),
+);
+foreach ($csRefusals as $label => $case) {
+    foreach (array('plan' => array(), 'confirm' => array('confirm' => true)) as $mode => $more) {
+        $e = throws("change_status: {$label} ({$mode})", ApiException::class, function () use ($call, $sAdmin, $csArgs, $case, $more) { $call($sAdmin, 'invoke', $csArgs($case[0], $case[1], $more)); });
+        check("change_status: {$label} is validation_failed ({$mode})", $e && $e->errorCode === 'validation_failed' && stripos($e->getMessage(), $case[2]) !== false);
+    }
+}
+check('change_status: every refusal left the orders, the mails and the journal alone', $nothingHappened());
+$e = throws('change_status: no status', ApiException::class, function () use ($call, $sAdmin) { $call($sAdmin, 'invoke', array('kind' => 'ms2_order', 'op' => 'change_status', 'id' => 101)); });
+check('change_status: the status is required', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'status') !== false);
+$e = throws('change_status: status 0', ApiException::class, function () use ($call, $sAdmin, $csArgs) { $call($sAdmin, 'invoke', $csArgs(101, 0)); });
+check('change_status: a status below 1 is refused', $e && $e->errorCode === 'validation_failed');
+$e = throws('change_status: a status that is not a number', ApiException::class, function () use ($call, $sAdmin) { $call($sAdmin, 'invoke', array('kind' => 'ms2_order', 'op' => 'change_status', 'id' => 101, 'args' => array('status' => 'Оплачен'))); });
+check('change_status: a status given by name is refused', $e && $e->errorCode === 'validation_failed');
+$e = throws('change_status: an unknown argument', ApiException::class, function () use ($call, $sAdmin) { $call($sAdmin, 'invoke', array('kind' => 'ms2_order', 'op' => 'change_status', 'id' => 101, 'args' => array('status' => 2, 'silent' => true))); });
+check('change_status: an argument that does not exist (a way to silence the mails, say) is refused', $e && $e->errorCode === 'validation_failed');
+$e = throws('change_status: an order that does not exist', ApiException::class, function () use ($call, $sAdmin, $csArgs) { $call($sAdmin, 'invoke', $csArgs(999, 2, array('confirm' => true))); });
+check('change_status: an unknown order is not_found', $e && $e->errorCode === 'not_found');
+$e = throws('change_status: without an order', ApiException::class, function () use ($call, $sAdmin) { $call($sAdmin, 'invoke', array('kind' => 'ms2_order', 'op' => 'change_status', 'args' => array('status' => 2, 'confirm' => true))); });
+check('change_status: an order must be named', $e && $e->errorCode === 'validation_failed' && $nothingHappened());
+
+// confirm: a status that mails the customer
+$eventsBefore = count($sSite->events);
+$done = $call($sAdmin, 'invoke', $csArgs(101, 2, array('confirm' => true)));
+check('change_status: confirm changes the status through the miniShop2 service and says which e-mails went out', $done['performed'] === true && $done['kind'] === 'ms2_order' && $done['id'] === 101 && $done['order'] === '2026/11-1'
+    && $done['from'] === array('id' => 1, 'name' => 'Новый') && $done['to'] === array('id' => 2, 'name' => 'Оплачен') && $done['emails_sent'] === array('user' => true, 'manager' => false) && $done['reversible'] === false
+    && is_int($done['changeset_id']) && !isset($done['dry_run']) && !isset($done['summary']));
+check('change_status: the order has the new status, the log has the entry, the events were fired, the service was used once', $sSite->row('msOrder', 101)['status'] === '2' && $sSite->getCount('msOrderLog', array('order_id' => 101, 'action' => 'status', 'entry' => '2')) === 1
+    && array_slice($sSite->events, $eventsBefore) === array('msOnBeforeChangeOrderStatus', 'msOnChangeOrderStatus') && $sSite->services['miniShop2']->calls === array(array(101, 2)));
+check('change_status: exactly the e-mail the flags promise was sent (to the customer, in Cyrillic)', $sSite->sentMails === array(array('to' => 'ivan@example.com', 'subject' => 'Заказ оплачен', 'order' => 101)));
+$csHistory = $call($sAdmin, 'history', array('limit' => 1))['changesets'][0];
+check('change_status: the changeset says what happened, has no objects and is not reversible', $csHistory['changeset_id'] === $done['changeset_id'] && $csHistory['summary'] === 'order 2026/11-1: Новый → Оплачен' && $csHistory['tool'] === 'invoke'
+    && $csHistory['reversible'] === false && $csHistory['objects'] === array() && $csHistory['status'] === 'committed');
+check('change_status: the order has no history of its own and the diff of the changeset is empty', $call($sAdmin, 'history', array('kind' => 'ms2_order'))['changesets'] === array() && $call($sAdmin, 'history', array('kind' => 'ms2_order', 'id' => 101))['changesets'] === array()
+    && $call($sAdmin, 'history_diff', array('changeset_id' => $done['changeset_id']))['objects'] === array());
+$e = throws('change_status: undo by id', ApiException::class, function () use ($call, $sAdmin, $done) { $call($sAdmin, 'undo', array('changeset_id' => $done['changeset_id'], 'confirm' => true)); });
+check('change_status: the changeset is never undone', $e && $e->errorCode === 'not_reversible' && $sSite->row('msOrder', 101)['status'] === '2' && count($sSite->sentMails) === 1);
+$undoPlan = $call($sAdmin, 'undo', array('last' => 1));
+check('change_status: undo of the last changeset does not pick it up', !in_array($done['changeset_id'], $undoPlan['changesets'], true) && !in_array('ms2_order', array_column($undoPlan['objects'], 'kind'), true));
+$undoSession = $call($sAdmin, 'undo', array('this_session' => true));
+check('change_status: nor does undo of the session', !in_array($done['changeset_id'], $undoSession['changesets'], true) && $sSite->row('msOrder', 101)['status'] === '2');
+$e = throws('change_status: again the same status', ApiException::class, function () use ($call, $sAdmin, $csArgs) { $call($sAdmin, 'invoke', $csArgs(101, 2, array('confirm' => true))); });
+check('change_status: repeating it is refused and sends no second mail', $e && $e->errorCode === 'validation_failed' && count($sSite->sentMails) === 1 && $sSite->getCount('msOrderLog', array('order_id' => 101, 'action' => 'status')) === 2);
+
+// the managers' mail: every address that has an "@"
+$sSite->sentMails = array();
+$done2 = $call($sAdmin, 'invoke', $csArgs(102, 3, array('confirm' => true)));
+check('change_status: a status for the managers mails each valid manager address and nobody else', $done2['emails_sent'] === array('user' => false, 'manager' => true) && $sSite->row('msOrder', 102)['status'] === '3'
+    && $sSite->sentMails === array(array('to' => 'менеджер@пример.рф', 'subject' => 'Заказ отправлен', 'order' => 102), array('to' => 'second@example.com', 'subject' => 'Заказ отправлен', 'order' => 102)));
+$sSite->sentMails = array();
+$done3 = $call($sAdmin, 'invoke', $csArgs(104, 4, array('confirm' => true)));
+check('change_status: a fixed status can move up in rank; the customer gets the mail', $done3['emails_sent'] === array('user' => true, 'manager' => false) && $sSite->row('msOrder', 104)['status'] === '4'
+    && $sSite->sentMails === array(array('to' => 'ivan@example.com', 'subject' => 'Заказ доставлен', 'order' => 104)));
+$sSite->sentMails = array();
+$done4 = $call($sAdmin, 'invoke', $csArgs(101, 6, array('confirm' => true)));
+check('change_status: flags without subjects: the change is made, no mail goes out and the result says so', $done4['emails_sent'] === array('user' => false, 'manager' => false) && $sSite->row('msOrder', 101)['status'] === '6' && $sSite->sentMails === array());
+$e = throws('change_status: a final status cannot be left', ApiException::class, function () use ($call, $sAdmin, $csArgs) { $call($sAdmin, 'invoke', $csArgs(104, 1, array('confirm' => true))); });
+check('change_status: an order that reached a final status stays there', $e && $e->errorCode === 'validation_failed' && $sSite->row('msOrder', 104)['status'] === '4');
+// the sum of it all: four changes, four changesets, none with objects
+$csSets = array_filter($call($sAdmin, 'history', array('limit' => 50))['changesets'], function ($set) { return strpos($set['summary'], 'order ') === 0; });
+check('change_status: one changeset per change, each named like "order <num>: <old> → <new>", none with objects', array_column($csSets, 'summary') === array('order 2026/11-1: Оплачен → Без темы', 'order 2026/11-4: Отправлен → Доставлен', 'order 2026/11-2: Оплачен → Отправлен', 'order 2026/11-1: Новый → Оплачен')
+    && array_unique(array_column($csSets, 'objects'), SORT_REGULAR) === array(array()) && array_unique(array_column($csSets, 'reversible')) === array(false));
+
+// a plugin that refuses the change before it is made, and one that fails after it was made
+$sSite->options['fake_ms2_before_refuse'] = 'Плагин запретил смену статуса';
+$orderJournal = $lkChangesets();
+$e = throws('change_status: refused by a plugin', ApiException::class, function () use ($call, $sAdmin, $csArgs) { $call($sAdmin, 'invoke', $csArgs(101, 1, array('confirm' => true))); });
+check('change_status: a plugin that refuses the change is validation_failed with its message; nothing changed, no changeset, no mail', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'Плагин запретил смену статуса') !== false
+    && $sSite->row('msOrder', 101)['status'] === '6' && $lkChangesets() === $orderJournal && $sSite->sentMails === array());
+unset($sSite->options['fake_ms2_before_refuse']);
+$sSite->options['fake_ms2_after_failure'] = 'Плагин сообщил об ошибке';
+$sDev->warnings = array();
+$sAdmin->warnings = array();
+$part = $call($sAdmin, 'invoke', $csArgs(101, 1, array('confirm' => true)));
+check('change_status: a failure after the status was saved is reported, still recorded, and no e-mail is claimed', $part['performed'] === true && $part['emails_sent'] === array('user' => false, 'manager' => false) && $sSite->row('msOrder', 101)['status'] === '1'
+    && $sSite->sentMails === array() && $part['changeset_id'] === $lkChangesets() && strpos(implode(' ', $sAdmin->warnings), 'Плагин сообщил об ошибке') !== false);
+unset($sSite->options['fake_ms2_after_failure']);
+// something throws (a mailer, a plugin) once the status is saved: the change stands and is recorded
+$sSite->options['fake_ms2_throw_after_save'] = 'SMTP не отвечает';
+$sAdmin->warnings = array();
+$thrown = $call($sAdmin, 'invoke', $csArgs(101, 2, array('confirm' => true)));
+check('change_status: an exception after the status was saved is reported as a done change, recorded, with no e-mail claimed', $thrown['performed'] === true && $thrown['emails_sent'] === array('user' => false, 'manager' => false) && $sSite->row('msOrder', 101)['status'] === '2'
+    && $thrown['changeset_id'] === $lkChangesets() && strpos(implode(' ', $sAdmin->warnings), 'SMTP не отвечает') !== false);
+unset($sSite->options['fake_ms2_throw_after_save']);
+// ... and one that breaks before anything was saved is an error, with nothing changed and nothing recorded
+$orderJournal = $lkChangesets();
+$sSite->options['fake_ms2_throw_before_save'] = 'Нет соединения с базой';
+$e = throws('change_status: the service throws before the status is saved', RuntimeException::class, function () use ($call, $sAdmin, $csArgs) { $call($sAdmin, 'invoke', $csArgs(101, 1, array('confirm' => true))); });
+check('change_status: an exception before the status was saved changes nothing and records nothing', $e && $sSite->row('msOrder', 101)['status'] === '2' && $lkChangesets() === $orderJournal && $sSite->sentMails === array());
+unset($sSite->options['fake_ms2_throw_before_save']);
+
+// the product-link side doors do not reach orders; unavailable when miniShop2 is not installed
+foreach (array('ms2_link', 'ms2_product_link', 'ms2_order', 'ms2_order_status') as $ms2Kind) {
+    $e = throws("{$ms2Kind}: unavailable without miniShop2", ApiException::class, function () use ($call, $sPlain, $ms2Kind) { $call($sPlain, 'describe', array('kind' => $ms2Kind)); });
+    check("{$ms2Kind}: not installed is reported as unavailable", $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'not_installed');
+    $e = throws("{$ms2Kind}: list without miniShop2", ApiException::class, function () use ($call, $sPlain, $ms2Kind) { $call($sPlain, 'list', array('kind' => $ms2Kind)); });
+    check("{$ms2Kind}: list is unavailable without miniShop2", $e && $e->errorCode === 'unavailable');
+    check("{$ms2Kind}: not in the kind list without miniShop2", !in_array($ms2Kind, array_column($call($sPlain, 'describe')['kinds'], 'kind'), true));
+}
+$e = throws('ms2_order: change_status without miniShop2', ApiException::class, function () use ($call, $sPlain) { $call($sPlain, 'invoke', array('kind' => 'ms2_order', 'op' => 'change_status', 'id' => 101, 'args' => array('status' => 2, 'confirm' => true))); });
+check('ms2_order: change_status is unavailable without miniShop2', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'not_installed');
+$sSiteOff = $sSite->options['modxmcp.disabled_groups'] ?? '';
+$sSite->options['modxmcp.disabled_groups'] = 'minishop2';
+$e = throws('ms2_order: group switched off', ApiException::class, function () use ($call, $sAdmin) { $call($sAdmin, 'get', array('kind' => 'ms2_order', 'id' => 101)); });
+check('ms2_order: the minishop2 group switched off for the site makes the kinds unavailable', $e && $e->errorCode === 'unavailable');
+$sSite->options['modxmcp.disabled_groups'] = $sSiteOff;
 
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));

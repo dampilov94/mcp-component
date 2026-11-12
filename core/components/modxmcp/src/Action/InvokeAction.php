@@ -45,7 +45,24 @@ final class InvokeAction extends WriteAction {
         if ($object) { $meta[$keyField] = $key; }
         $handler = $spec['handler'];
         if ($read) { return $meta + $kind->$handler($context, $object, $values); }
+        // An operation with a plan answers with it unless it is confirmed (a plan-only token and dry_run never confirm).
+        if (!empty($spec['plan']) && ($this->isDryRun($args, $context) || empty($values['confirm']))) {
+            return $this->plan($context, $meta + $kind->{$spec['plan']}($context, $object, $values));
+        }
         if ($this->isDryRun($args, $context)) { return $this->plan($context, $meta + array('validated' => true)); }
+        // An irreversible operation that does not change an object the journal could restore (an order's status, which sends
+        // e-mails): the object is only locked, and a changeset without changes records that it happened.
+        if (!empty($spec['informational'])) {
+            list($result, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $kind, $meta, $handler, $values, $key) {
+                $tx->lock($kind->name() . ':' . $key);
+                $object = Objects::resolveKey($context, $kind, $key);
+                $result = $kind->$handler($context, $tx, $object, $values);
+                $summary = isset($result['summary']) ? (string) $result['summary'] : $meta['op'] . ' ' . $meta['kind'] . ' ' . $key;
+                unset($result['summary']);
+                return array('result' => $result, 'summary' => $summary, 'informational' => true);
+            });
+            return $meta + array('changeset_id' => $info['changeset_id'], 'reversible' => false) + $result;
+        }
         list($result, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $kind, $meta, $handler, $values, $key) {
             $object = null;
             if ($key !== null) {

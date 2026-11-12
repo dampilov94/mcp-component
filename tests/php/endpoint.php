@@ -13,7 +13,8 @@ function installMiniShop2($modx, $dir) {
     $core = $dir . '/core/components/minishop2/';
     if (!is_dir($core . 'model/minishop2')) { mkdir($core . 'model/minishop2', 0700, true); }
     touch($core . 'model/minishop2/minishop2.class.php');
-    foreach (array('mgr/settings/option/create', 'mgr/settings/option/update', 'mgr/settings/option/remove', 'mgr/settings/option/assign', 'mgr/category/option/delete') as $processor) {
+    foreach (array('mgr/settings/option/create', 'mgr/settings/option/update', 'mgr/settings/option/remove', 'mgr/settings/option/assign', 'mgr/category/option/delete',
+        'mgr/settings/link/create', 'mgr/settings/link/update', 'mgr/settings/link/remove', 'mgr/product/productlink/create', 'mgr/product/productlink/remove') as $processor) {
         if (!is_dir(dirname($core . 'processors/' . $processor))) { mkdir(dirname($core . 'processors/' . $processor), 0700, true); }
         touch($core . 'processors/' . $processor . '.class.php');
     }
