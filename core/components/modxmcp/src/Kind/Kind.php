@@ -66,6 +66,19 @@ abstract class Kind {
         return array();
     }
 
+    /**
+     * False for kinds that are only read through the generic tools: create, update, delete and duplicate are
+     * refused with genericWritesMessage() before anything else (packages have their own install and uninstall tools).
+     */
+    public function genericWrites() {
+        return true;
+    }
+
+    /** Why the generic write tools refuse this kind; used when genericWrites() is false. */
+    public function genericWritesMessage() {
+        return "Objects of kind '{$this->name()}' cannot be changed with the generic write tools.";
+    }
+
     public function group() {
         return 'elements';
     }
@@ -476,7 +489,7 @@ abstract class Kind {
 
     /** Unix time (or a date string xPDO already formatted) as "YYYY-MM-DD HH:MM:SS"; "" for none. */
     public static function datetime($raw) {
-        if ($raw === null || $raw === '' || $raw === 0 || $raw === '0') { return ''; }
+        if ($raw === null || $raw === '' || $raw === 0 || $raw === '0' || (is_string($raw) && strncmp($raw, '0000-00-00', 10) === 0)) { return ''; }
         $time = is_numeric($raw) ? (int) $raw : strtotime((string) $raw);
         return $time ? date('Y-m-d H:i:s', $time) : '';
     }
@@ -541,7 +554,7 @@ abstract class Kind {
             $operations[] = array('op' => $op, 'description' => $definition['description'], 'read_only' => !empty($definition['read_only']),
                 'needs_object' => !isset($definition['needs_object']) || $definition['needs_object'], 'input' => $definition['input']);
         }
-        return array(
+        $out = array(
             'kind'        => $this->name(),
             'label'       => $this->label(),
             'group'       => $this->group(),
@@ -554,5 +567,7 @@ abstract class Kind {
             'relations'   => $relations,
             'operations'  => $operations,
         );
+        if (!$this->genericWrites()) { $out['generic_writes'] = false; $out['note'] = $this->genericWritesMessage(); }
+        return $out;
     }
 }

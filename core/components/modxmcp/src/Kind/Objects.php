@@ -174,8 +174,13 @@ final class Objects {
         throw new ApiException('revision_conflict', "{$kind->name()} {$key} has changed since it was read. Read it again and retry.", $details);
     }
 
-    /** Run a core processor; a processor error becomes validation_failed with its messages. */
-    public static function process(\modX $modx, $processor, array $data) {
+    /** Refuse create, update, delete and duplicate for a kind that is not written through the generic tools. */
+    public static function assertGenericWrites(Kind $kind) {
+        if (!$kind->genericWrites()) { throw new ApiException('validation_failed', $kind->genericWritesMessage()); }
+    }
+
+    /** Run a core processor and return its response; a processor error becomes validation_failed with its messages. */
+    public static function run(\modX $modx, $processor, array $data) {
         $response = $modx->runProcessor($processor, $data);
         if (!$response) { throw new \RuntimeException("Processor {$processor} did not respond."); }
         if ($response->isError()) {
@@ -183,7 +188,12 @@ final class Objects {
             $text = trim(strip_tags(implode(' ', array_unique($messages))));
             throw new ApiException('validation_failed', $text !== '' ? $text : "Processor {$processor} failed.");
         }
-        $object = $response->getObject();
+        return $response;
+    }
+
+    /** Run a core processor; a processor error becomes validation_failed with its messages. Returns the response object. */
+    public static function process(\modX $modx, $processor, array $data) {
+        $object = self::run($modx, $processor, $data)->getObject();
         return is_array($object) ? $object : array();
     }
 

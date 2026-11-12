@@ -22,6 +22,9 @@ final class Undo {
             if ($changeset['status'] !== 'committed') {
                 throw new ApiException('not_reversible', "Changeset {$changeset['id']} is already undone (status {$changeset['status']}).");
             }
+            if (!$changeset['changes'] && !$changeset['reversible']) {
+                throw new ApiException('not_reversible', "Changeset {$changeset['id']} only records that something happened ({$changeset['summary']}); it changed nothing the journal can restore.");
+            }
             foreach (array_reverse($changeset['changes']) as $change) {
                 if (!$change['reversible']) {
                     throw new ApiException('not_reversible', "Changeset {$changeset['id']} cannot be undone: {$change['kind']} {$change['object_key']} — " . ($change['note'] !== '' ? $change['note'] : 'not reversible.'));

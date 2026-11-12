@@ -26,6 +26,7 @@ final class CreateAction extends WriteAction {
 
     public function run(array $args, Context $context) {
         $kind = Objects::kind($context, $args['kind'], true);
+        Objects::assertGenericWrites($kind);
         $columns = Objects::normalize($kind, $args['fields'], true);
         $relations = isset($args['relations']) ? $args['relations'] : array();
         Objects::assertWritableRelations($kind, $relations);

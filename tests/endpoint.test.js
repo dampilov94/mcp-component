@@ -116,7 +116,7 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
       "modx_check_page", "modx_request_status",
     ]);
     const full = (await call(admin, "manifest")).body.result;
-    assert.equal(full.tools.length, 32);
+    assert.equal(full.tools.length, 34);
     assert.equal(full.tools[full.tools.findIndex((item) => item.name === "modx_delete") + 1].name, "modx_duplicate");
     assert.equal(full.tools.find((item) => item.name === "modx_duplicate").effect.read_only, false);
     assert.notEqual(full.hash, result.hash);
@@ -140,11 +140,11 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
     assert.equal(caps.body.result.integrations.length, 3);
 
     const kinds = await call(read, "describe");
-    // The user and the four access kinds need the admin scope even to be read, so a read token sees 15 of the 20 kinds.
-    assert.equal(kinds.body.result.kinds.length, 15);
+    // The user and the four access kinds need the admin scope even to be read, so a read token sees 17 of the 22 kinds (the two package kinds are readable).
+    assert.equal(kinds.body.result.kinds.length, 17);
     assert.ok(!kinds.body.result.kinds.some((kind) => kind.kind === "user"));
     const adminKinds = await call(admin, "describe");
-    assert.equal(adminKinds.body.result.kinds.length, 20);
+    assert.equal(adminKinds.body.result.kinds.length, 22);
     for (const name of ["access_policy", "policy_template", "context_access", "resourcegroup_access"]) {
       assert.ok(adminKinds.body.result.kinds.some((kind) => kind.kind === name), name);
       assert.ok(!kinds.body.result.kinds.some((kind) => kind.kind === name), name);
@@ -236,7 +236,7 @@ test("bridge + kernel end to end", { skip: available ? false : "PHP with pdo_sql
   t.after(async () => { await client.close(); site.stop(); });
 
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 32);
+  assert.equal(tools.length, 34);
   const run = async (name, args = {}) => {
     const result = await client.callTool({ name, arguments: args });
     assert.equal(result.isError, undefined, `${name}: ${result.content[0].text}`);

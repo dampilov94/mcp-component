@@ -82,11 +82,13 @@ final class Journal {
     /**
      * Record a changeset.
      * @param array $meta    source, token_id, user_id, session_id, request_id, tool, summary, undoes (int[])
-     * @param array $changes each: kind, object_key, label, op, before_revision, after_revision, extra_blob, reversible, note
+     * @param array $changes each: kind, object_key, label, op, before_revision, after_revision, extra_blob, reversible, note.
+     *                       May be empty: such a changeset only records that something happened (an installed package),
+     *                       is never reversible and is skipped by the bulk undo selections.
      * @return int changeset id
      */
     public function commit(array $meta, array $changes) {
-        $reversible = 1;
+        $reversible = $changes ? 1 : 0;
         foreach ($changes as $change) {
             if (empty($change['reversible'])) { $reversible = 0; }
         }
@@ -126,7 +128,8 @@ final class Journal {
     /**
      * Changesets, newest first.
      * @param array $filter session_id, source, kind, object_key, since (unix time), after_id, ids (int[]), status,
-     *                      exclude_undos (skip changesets that are themselves undos)
+     *                      exclude_undos (skip changesets that are themselves undos),
+     *                      with_changes (skip changesets that record no change, e.g. a package install)
      */
     public function changesets(array $filter = array(), $limit = 20) {
         $where = array('1=1');
@@ -135,6 +138,7 @@ final class Journal {
             if (isset($filter[$column])) { $where[] = "c.`{$column}` = ?"; $params[] = $filter[$column]; }
         }
         if (!empty($filter['exclude_undos'])) { $where[] = 'c.`undoes` IS NULL'; }
+        if (!empty($filter['with_changes'])) { $where[] = 'EXISTS (SELECT 1 FROM ' . $this->t('changes') . ' w WHERE w.`changeset_id` = c.`id`)'; }
         if (isset($filter['since'])) { $where[] = 'c.`created_at` >= ?'; $params[] = (int) $filter['since']; }
         if (isset($filter['after_id'])) { $where[] = 'c.`id` > ?'; $params[] = (int) $filter['after_id']; }
         if (isset($filter['ids'])) {
