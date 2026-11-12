@@ -70,6 +70,8 @@ final class ObjectSubject implements Subject {
                 $out[$name] = array('diff' => Diff::lines((string) $old, (string) $new));
             } elseif ($secretColumns !== null ? in_array($column, $secretColumns, true) : preg_match(self::SECRET, $column)) {
                 $out[$name] = array('old' => '[hidden]', 'new' => '[hidden]');
+            } elseif (isset($definitions[$name]) && $definitions[$name]['type'] === 'json') {
+                $out[$name] = array('old' => Kind::jsonDecoded($old), 'new' => Kind::jsonDecoded($new));
             } elseif (isset($definitions[$name]) && $definitions[$name]['type'] === 'object') {
                 // A JSON object stored as text is shown as the object it is, keys sorted.
                 $shown = !empty($definitions[$name]['json']) ? array(Kind::class, 'jsonValue') : array(Kind::class, 'objectValue');

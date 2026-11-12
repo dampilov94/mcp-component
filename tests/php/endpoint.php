@@ -21,9 +21,18 @@ function installMiniShop2($modx, $dir) {
     $modx->store('modNamespace', array('name' => 'minishop2', 'path' => '{core_path}components/minishop2/', 'assets_path' => ''));
 }
 
+/** A site with MIGX "installed": its namespace and the file the integration probe looks for. */
+function installMigx($modx, $dir) {
+    $core = $dir . '/core/components/migx/';
+    if (!is_dir($core . 'model/migx')) { mkdir($core . 'model/migx', 0700, true); }
+    touch($core . 'model/migx/migxconfig.class.php');
+    $modx->store('modNamespace', array('name' => 'migx', 'path' => '{core_path}components/migx/', 'assets_path' => ''));
+}
+
 function testSite($dir) {
     $modx = testSiteOptions($dir);
     if (getenv('MODXMCP_TEST_MS2')) { installMiniShop2($modx, $dir); }
+    if (getenv('MODXMCP_TEST_MIGX')) { installMigx($modx, $dir); }
     return $modx;
 }
 

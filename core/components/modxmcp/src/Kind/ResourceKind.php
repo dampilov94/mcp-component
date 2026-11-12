@@ -5,6 +5,7 @@ use ModxMCP\ApiException;
 use ModxMCP\Auth\Scope;
 use ModxMCP\Context;
 use ModxMCP\Integration\MiniShop2;
+use ModxMCP\Integration\Migx;
 
 final class ResourceKind extends Kind {
     /** More descendants than this cannot be changed in one call. */
@@ -242,7 +243,9 @@ final class ResourceKind extends Kind {
             'tvs' => array(
                 'class' => 'modTemplateVarResource', 'fk' => 'contentid', 'present' => 'value', 'writable' => true, 'map' => true,
                 'description' => 'Template variable values as {tv name: value}, for the TVs of the resource template. '
-                    . 'Reads show the stored value, or the TV default when none is stored. Writing sets only the named TVs.',
+                    . 'Reads show the stored value, or the TV default when none is stored. Writing sets only the named TVs. '
+                    . 'A TV of input type migx holds a JSON list of objects: it is read as that list when the stored text is valid JSON '
+                    . '(otherwise as the text) and may be written as a list of objects (items without MIGX_id get one) or as a string.',
             ),
             'resource_groups' => array(
                 'class' => 'modResourceGroupResource', 'fk' => 'document', 'present' => 'document_group',
@@ -274,12 +277,12 @@ final class ResourceKind extends Kind {
         return null;
     }
 
-    /** TVs attached to the resource template: name => [id, default]. */
+    /** TVs attached to the resource template: name => [id, default, input type]. */
     private function templateTvs(\modX $modx, $object) {
         $out = array();
         foreach ($modx->getCollection('modTemplateVarTemplate', array('templateid' => (int) $object->get('template'))) as $link) {
             $tv = $modx->getObject('modTemplateVar', array('id' => $link->get('tmplvarid')), false);
-            if ($tv) { $out[(string) $tv->get('name')] = array((int) $tv->get('id'), (string) $tv->get('default_text')); }
+            if ($tv) { $out[(string) $tv->get('name')] = array((int) $tv->get('id'), (string) $tv->get('default_text'), (string) $tv->get('type')); }
         }
         ksort($out, SORT_STRING);
         return $out;
@@ -300,7 +303,8 @@ final class ResourceKind extends Kind {
         }
         $out = array();
         foreach ($this->templateTvs($modx, $object) as $tvName => $tv) {
-            $out[$tvName] = isset($stored[$tv[0]]) ? $stored[$tv[0]] : $tv[1];
+            $text = isset($stored[$tv[0]]) ? $stored[$tv[0]] : $tv[1];
+            $out[$tvName] = $tv[2] === Migx::TV_TYPE ? self::migxValue($text) : $text;
         }
         return $out ? $out : new \stdClass();
     }
@@ -327,13 +331,54 @@ final class ResourceKind extends Kind {
             if (!isset($known[$tvName])) {
                 throw new ApiException('validation_failed', "TV '{$tvName}' is not attached to template {$object->get('template')} of this resource. Its TVs: " . implode(', ', array_keys($known)) . '.');
             }
-            if (!is_scalar($tvValue)) { throw new ApiException('validation_failed', "The value of TV '{$tvName}' must be a string, number or boolean."); }
+            if ($known[$tvName][2] === Migx::TV_TYPE && is_array($tvValue)) {
+                $value[$tvName] = self::encodeMigxValue($tvName, $tvValue);
+            } elseif (!is_scalar($tvValue)) {
+                throw new ApiException('validation_failed', $known[$tvName][2] === Migx::TV_TYPE
+                    ? "The value of TV '{$tvName}' must be a string or a list of objects."
+                    : "The value of TV '{$tvName}' must be a string, number or boolean.");
+            }
         }
         foreach ($value as $tvName => $tvValue) {
             if (!$object->setTVValue($known[$tvName][0], is_bool($tvValue) ? (int) $tvValue : (string) $tvValue)) {
                 throw new \RuntimeException("Cannot save TV '{$tvName}'.");
             }
         }
+    }
+
+    // ---- MIGX: a TV of input type migx keeps a JSON list of objects ----
+
+    /**
+     * The stored text of a MIGX TV as the API shows it: the decoded list (or object) when the text is valid JSON,
+     * otherwise the text itself (an empty value, a default such as "@CHUNK x", something an old version wrote).
+     */
+    private static function migxValue($text) {
+        if (!is_string($text) || trim($text) === '') { return $text; }
+        $decoded = json_decode($text, false);
+        return json_last_error() === JSON_ERROR_NONE && (is_array($decoded) || is_object($decoded)) ? $decoded : $text;
+    }
+
+    /**
+     * The text MIGX stores for a list of objects: every item without MIGX_id gets one, continuing from the highest
+     * present (as MIGX's own update processor does for a new row); the items keep their order.
+     */
+    private static function encodeMigxValue($tvName, array $items) {
+        if ($items && array_keys($items) !== range(0, count($items) - 1)) {
+            throw new ApiException('validation_failed', "The value of TV '{$tvName}' must be a list of objects (an object is not a list of rows).");
+        }
+        $highest = 0;
+        foreach ($items as $index => $item) {
+            if (!is_array($item) || ($item && array_keys($item) === range(0, count($item) - 1))) {
+                throw new ApiException('validation_failed', "The value of TV '{$tvName}': item {$index} must be an object.");
+            }
+            if (isset($item['MIGX_id']) && $item['MIGX_id'] !== '' && is_numeric($item['MIGX_id']) && $item['MIGX_id'] > $highest) { $highest = $item['MIGX_id']; }
+        }
+        foreach ($items as $index => $item) {
+            if (!isset($item['MIGX_id']) || $item['MIGX_id'] === '') { $items[$index]['MIGX_id'] = ++$highest; }
+        }
+        $text = json_encode($items, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION);
+        if ($text === false) { throw new ApiException('validation_failed', "The value of TV '{$tvName}' cannot be encoded as JSON (" . json_last_error_msg() . ').'); }
+        return $text;
     }
 
     // ---- writing the product relations ----

@@ -34,6 +34,7 @@ final class KindRegistry {
         Ms2ProductLinkKind::class,
         Ms2OrderKind::class,
         Ms2OrderStatusKind::class,
+        MigxConfigKind::class,
     );
 
     private $kinds = null;

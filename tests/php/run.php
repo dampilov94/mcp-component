@@ -5028,6 +5028,330 @@ $sSite->options['modxmcp.disabled_groups'] = $sSiteOff;
 
 check('list: items of a string-key kind always carry their key', array_key_exists('key', $call($sAdmin, 'list', array('kind' => 'ms2_product_link', 'fields' => array('link')))['items'][0] ?? array('key' => null)));
 
+// --- MIGX: kind migx_config, MIGX TV values, help topic (task 23) ---
+$mgDir = $siteDir . '/migx23';
+$mgCore = $mgDir . '/core/components/migx/';
+mkdir($mgCore . 'model/migx', 0700, true);
+touch($mgCore . 'model/migx/migxconfig.class.php');
+$mSite = fakeSite($mgDir);
+$mSite->store('modNamespace', array('name' => 'migx', 'path' => '{core_path}components/migx/', 'assets_path' => ''));
+$mActor = function ($scope, array $token = array()) use ($mSite, $dev) {
+    $c = new Context($mSite, $token + array('scope' => $scope) + $dev->token, $dev->corePath, function () {});
+    $c->sessionId = 'session-migx23-001';
+    return $c;
+};
+$mAdmin = $mActor('admin');
+$mDev = $mActor('develop');
+$mRead = $mActor('read');
+$mPlain = new Context($site, array('scope' => 'admin') + $dev->token, $dev->corePath, function () {});
+
+// ---- availability and description ----
+$mKinds = array_column($call($mAdmin, 'describe')['kinds'], 'kind');
+check('migx: the kind is listed last when MIGX is installed', end($mKinds) === 'migx_config' && count($mKinds) === count(array_column($call($mPlain, 'describe')['kinds'], 'kind')) + 1);
+check('migx: not in the kind list without MIGX', !in_array('migx_config', array_column($call($mPlain, 'describe')['kinds'], 'kind'), true));
+$e = throws('migx: unavailable where MIGX is not installed', ApiException::class, function () use ($call, $mPlain) { $call($mPlain, 'list', array('kind' => 'migx_config')); });
+check('migx: not installed is reported as unavailable', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'not_installed');
+$mDesc = $call($mAdmin, 'describe', array('kind' => 'migx_config'));
+$mFields = array_column($mDesc['fields'], null, 'name');
+check('migx: describe', $mDesc['group'] === 'migx' && $mDesc['read_scope'] === 'read' && $mDesc['write_scope'] === 'develop' && $mDesc['name_field'] === 'name' && $mDesc['key_type'] === 'integer'
+    && array_column($mDesc['fields'], 'name') === array('id', 'name', 'category', 'published', 'deleted', 'formtabs', 'columns', 'filters', 'extended', 'permissions', 'fieldpermissions', 'contextmenus', 'actionbuttons', 'columnbuttons')
+    && $mFields['name']['required'] === true && $mFields['deleted']['read_only'] === true && $mDesc['relations'] === array() && $mDesc['operations'] === array());
+foreach (array('formtabs', 'columns', 'filters', 'extended', 'permissions', 'fieldpermissions') as $mJson) { check("migx: {$mJson} is a json field", $mFields[$mJson]['type'] === 'json'); }
+foreach (array('contextmenus', 'actionbuttons', 'columnbuttons') as $mText) { check("migx: {$mText} is a string (MIGX joins names with ||)", $mFields[$mText]['type'] === 'string'); }
+
+// ---- create, read, update ----
+$mTabs = array(array('caption' => 'Слайд', 'fields' => array(
+    array('field' => 'image', 'caption' => 'Картинка', 'inputTVtype' => 'image'),
+    array('field' => 'title', 'caption' => 'Заголовок «слайда»', 'inputTVtype' => 'text', 'default' => 'Без названия'))));
+$mColumns = array(array('header' => 'Картинка', 'dataIndex' => 'image', 'width' => 120), array('header' => 'Заголовок', 'dataIndex' => 'title', 'width' => 200));
+$mGallery = $call($mDev, 'create', array('kind' => 'migx_config', 'fields' => array('name' => 'галерея', 'category' => 'Сайт', 'formtabs' => $mTabs, 'columns' => $mColumns,
+    'extended' => array('formcaption' => 'Слайд', 'maxRecords' => '10'), 'contextmenus' => 'update||duplicate||remove', 'permissions' => array('save' => 'migx_save'))));
+check('migx: create returns id, revision and changeset', $mGallery['id'] === 1 && $mGallery['changeset_id'] > 0 && preg_match('/^[a-f0-9]{64}$/', $mGallery['revision']));
+check('migx: the MIGX package was registered through addPackage', in_array('migx', $mSite->addedPackages, true));
+$mRow = $mSite->row('migxConfig', 1);
+check('migx: the row is stored with Cyrillic as typed and published by default', $mRow['name'] === 'галерея' && $mRow['category'] === 'Сайт' && $mRow['published'] === '1' && $mRow['deleted'] === '0'
+    && $mRow['columns'] === json_encode($mColumns, JSON_UNESCAPED_UNICODE) && $mRow['extended'] === '{"formcaption":"Слайд","maxRecords":"10"}' && $mRow['contextmenus'] === 'update||duplicate||remove'
+    && !array_key_exists('preventformtabhandling', $mRow) && $mRow['createdon'] !== null && $mRow['publishedon'] !== null);
+$mGot = $call($mDev, 'get', array('kind' => 'migx_config', 'id' => $mGallery['id']));
+$mTabsBack = json_decode(json_encode($mGot['fields']['formtabs']), true);
+check('migx: get decodes the JSON fields', $mGot['fields']['columns'] == json_decode(json_encode($mColumns)) && $mGot['fields']['extended'] == (object) array('formcaption' => 'Слайд', 'maxRecords' => '10')
+    && $mGot['fields']['permissions'] == (object) array('save' => 'migx_save') && $mGot['fields']['filters'] === null && $mGot['fields']['fieldpermissions'] === null
+    && $mTabsBack[0]['caption'] === 'Слайд' && $mTabsBack[0]['fields'][1]['caption'] === 'Заголовок «слайда»' && $mGot['fields']['deleted'] === false && $mGot['fields']['published'] === true);
+check('migx: MIGX mirrored the form tabs into its tables and wrote the row ids back as MIGX_id (as migxConfig::save does)',
+    count($mSite->tableDump('migxFormtab')) === 1 && count($mSite->tableDump('migxFormtabField')) === 2 && $mTabsBack[0]['MIGX_id'] === '1' && $mTabsBack[0]['pos'] === 1
+    && $mTabsBack[0]['fields'][0]['MIGX_id'] === '1' && $mTabsBack[0]['fields'][1]['MIGX_id'] === '2' && $mSite->row('migxFormtabField', 2)['field'] === 'title' && $mSite->row('migxFormtabField', 2)['config_id'] === '1');
+check('migx: the hidden rows are not shown as relations', $mGot['relations'] == new stdClass());
+check('migx: get by name', $call($mDev, 'get', array('kind' => 'migx_config', 'name' => 'галерея'))['id'] === 1);
+$mFormtabText = $mSite->row('migxConfig', 1)['formtabs'];
+$mFormtabRows = $mSite->tableDump('migxFormtab');
+$mFieldRows = $mSite->tableDump('migxFormtabField');
+
+$mColumns2 = array(array('header' => 'Заголовок', 'dataIndex' => 'title', 'width' => 300));
+$mUpd = $call($mDev, 'update', array('kind' => 'migx_config', 'id' => 1, 'fields' => array('columns' => $mColumns2), 'expected_revision' => $mGallery['revision']));
+check('migx: updating one JSON column changes only it', $mUpd['changed'] === array('columns') && $mSite->row('migxConfig', 1)['columns'] === json_encode($mColumns2, JSON_UNESCAPED_UNICODE));
+check('migx: a change that leaves the form tabs alone does not mirror them again (rows and text as they were)', $mSite->row('migxConfig', 1)['formtabs'] === $mFormtabText
+    && $mSite->tableDump('migxFormtab') === $mFormtabRows && $mSite->tableDump('migxFormtabField') === $mFieldRows && $mSite->row('migxConfig', 1)['editedon'] !== null);
+$mRenamed = $call($mDev, 'update', array('kind' => 'migx_config', 'id' => 1, 'fields' => array('name' => 'галерея слайдов', 'published' => false)));
+check('migx: rename and unpublish', $mRenamed['changed'] === array('name', 'published') && $mSite->row('migxConfig', 1)['name'] === 'галерея слайдов');
+$mDry = $call($mDev, 'update', array('kind' => 'migx_config', 'id' => 1, 'fields' => array('columns' => $mColumns2, 'category' => 'Другое', 'extended' => array('maxRecords' => '10', 'formcaption' => 'Слайд')), 'dry_run' => true));
+check('migx: dry run names only what would change (a JSON value is compared as a value)', $mDry['would_change'] === array('category') && $mSite->row('migxConfig', 1)['category'] === 'Сайт');
+$mSame = $call($mDev, 'update', array('kind' => 'migx_config', 'id' => 1, 'fields' => array('extended' => array('maxRecords' => '10', 'formcaption' => 'Слайд'))));
+check('migx: writing the same JSON value in another key order changes nothing', $mSame['changeset_id'] === null);
+$mClear = $call($mDev, 'update', array('kind' => 'migx_config', 'id' => 1, 'fields' => array('permissions' => null)));
+check('migx: null clears a JSON field', $mClear['changed'] === array('permissions') && $mSite->row('migxConfig', 1)['permissions'] === '' && $call($mDev, 'get', array('kind' => 'migx_config', 'id' => 1, 'fields' => array('permissions')))['fields']['permissions'] === null);
+$mDiff = $call($mDev, 'history_diff', array('changeset_id' => $mClear['changeset_id']));
+check('migx: the history diff shows a JSON field as decoded values', $mDiff['objects'][0]['changed']['permissions'] == array('old' => (object) array('save' => 'migx_save'), 'new' => null));
+
+// editing the form tabs: ids kept and rows updated, or no ids and rows replaced
+$mTabsRead = json_decode(json_encode($call($mDev, 'get', array('kind' => 'migx_config', 'id' => 1))['fields']['formtabs']), true);
+$mTabsRead[0]['fields'][1]['caption'] = 'Название';
+$mTabsRead[0]['fields'][] = array('field' => 'link', 'caption' => 'Ссылка', 'inputTV' => 'linkTv');
+$mTabUpdate = $call($mDev, 'update', array('kind' => 'migx_config', 'id' => 1, 'fields' => array('formtabs' => $mTabsRead)));
+check('migx: formtabs sent back with MIGX_id update the mirrored rows in place', $mTabUpdate['changed'] === array('formtabs') && count($mSite->tableDump('migxFormtabField')) === 3
+    && $mSite->row('migxFormtabField', 2)['caption'] === 'Название' && $mSite->row('migxFormtabField', 3)['field'] === 'link' && $mSite->row('migxFormtab', 1)['caption'] === 'Слайд');
+$mReplaced = $call($mDev, 'update', array('kind' => 'migx_config', 'id' => 1, 'fields' => array('formtabs' => $mTabs)));
+check('migx: formtabs without MIGX_id replace the mirrored rows', $mReplaced['changed'] === array('formtabs') && $mSite->row('migxFormtab', 1) === null && $mSite->row('migxFormtab', 2)['caption'] === 'Слайд'
+    && count($mSite->tableDump('migxFormtabField')) === 2 && $mSite->row('migxFormtabField', 4)['field'] === 'image');
+// undo puts back exactly the rows and the text of that moment
+$mUndone = $call($mDev, 'undo', array('changeset_id' => $mReplaced['changeset_id'], 'confirm' => true));
+check('migx: undo of a form tab change restores the rows with their ids and the text MIGX wrote', $mSite->row('migxFormtab', 1)['caption'] === 'Слайд' && $mSite->row('migxFormtab', 2) === null
+    && count($mSite->tableDump('migxFormtabField')) === 3 && $mSite->row('migxFormtabField', 2)['caption'] === 'Название' && $mSite->row('migxFormtabField', 4) === null
+    && $call($mDev, 'get', array('kind' => 'migx_config', 'id' => 1))['revision'] === $mTabUpdate['revision']);
+$call($mDev, 'undo', array('changeset_id' => $mTabUpdate['changeset_id'], 'confirm' => true));
+check('migx: undo again goes back one more step', count($mSite->tableDump('migxFormtabField')) === 2 && $mSite->row('migxFormtabField', 2)['caption'] === 'Заголовок «слайда»' && $mSite->row('migxConfig', 1)['formtabs'] === $mFormtabText);
+
+// ---- a timestamp MIGX sets on every save is not part of the state ----
+$mRev = $call($mDev, 'get', array('kind' => 'migx_config', 'id' => 1))['revision'];
+$mSite->store('migxConfig', array('editedon' => '2031-01-01 00:00:00', 'editedby' => '77') + $mSite->row('migxConfig', 1));
+check('migx: editedon and editedby alone do not change the revision', $call($mDev, 'get', array('kind' => 'migx_config', 'id' => 1))['revision'] === $mRev
+    && $call($mDev, 'update', array('kind' => 'migx_config', 'id' => 1, 'fields' => array('name' => 'галерея слайдов')))['changeset_id'] === null);
+
+// ---- list: JSON fields are not listed or filterable; deleted configurations are hidden ----
+$mSecond = $call($mDev, 'create', array('kind' => 'migx_config', 'fields' => array('name' => 'Баннеры', 'category' => 'Сайт', 'published' => false)));
+$mList = $call($mRead, 'list', array('kind' => 'migx_config'));
+check('migx: list shows the default fields only', array_keys($mList['items'][0]) === array('id', 'name', 'category', 'published') && $mList['total'] === 2
+    && array_column($mList['items'], 'name') === array('Баннеры', 'галерея слайдов') && $mList['items'][0]['published'] === false);
+check('migx: list can return a JSON field when asked', $call($mRead, 'list', array('kind' => 'migx_config', 'fields' => array('name', 'columns'), 'query' => 'слайд'))['items'][0]['columns'][0]->dataIndex === 'title');
+$e = throws('migx: a JSON field cannot be used in where', ApiException::class, function () use ($call, $mRead) { $call($mRead, 'list', array('kind' => 'migx_config', 'where' => array('formtabs' => 'x'))); });
+check('migx: where on a JSON field is validation_failed', $e && $e->errorCode === 'validation_failed');
+check('migx: list filters by published and category', $call($mRead, 'list', array('kind' => 'migx_config', 'where' => array('published' => true)))['total'] === 0
+    && $call($mRead, 'list', array('kind' => 'migx_config', 'where' => array('published' => false, 'category' => 'Сайт')))['total'] === 2);
+
+// ---- delete marks deleted, undo clears it ----
+$mRevBeforeDelete = $call($mDev, 'get', array('kind' => 'migx_config', 'id' => 1))['revision'];
+$mDelDry = $call($mDev, 'delete', array('kind' => 'migx_config', 'id' => 1, 'dry_run' => true));
+check('migx: delete dry run changes nothing and counts the mirrored rows', $mSite->row('migxConfig', 1)['deleted'] === '0' && $mDelDry['would_delete']['related_rows'] == array('formtab_rows' => 1, 'formtab_fields' => 2));
+$mDel = $call($mDev, 'delete', array('kind' => 'migx_config', 'id' => 1));
+$mDeleted = $mSite->row('migxConfig', 1);
+check('migx: delete sets deleted (and deletedon, deletedby); the row and the mirrored rows stay', $mDel['deleted'] === true && $mDeleted['deleted'] === '1' && $mDeleted['deletedon'] !== null
+    && count($mSite->tableDump('migxFormtab')) === 1 && count($mSite->tableDump('migxFormtabField')) === 2 && $mDeleted['formtabs'] === $mFormtabText);
+check('migx: list hides a deleted configuration', array_column($call($mRead, 'list', array('kind' => 'migx_config'))['items'], 'id') === array(2));
+check('migx: list with where deleted shows it', array_column($call($mRead, 'list', array('kind' => 'migx_config', 'where' => array('deleted' => true)))['items'], 'id') === array(1)
+    && $call($mRead, 'list', array('kind' => 'migx_config', 'where' => array('deleted' => false)))['total'] === 1);
+check('migx: a deleted configuration can still be read by id and says so', $call($mRead, 'get', array('kind' => 'migx_config', 'id' => 1))['fields']['deleted'] === true);
+$e = throws('migx: a second delete', ApiException::class, function () use ($call, $mDev) { $call($mDev, 'delete', array('kind' => 'migx_config', 'id' => 1)); });
+check('migx: deleting a deleted configuration is refused', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'already deleted') !== false);
+$e = throws('migx: update of a deleted configuration', ApiException::class, function () use ($call, $mDev) { $call($mDev, 'update', array('kind' => 'migx_config', 'id' => 1, 'fields' => array('category' => 'x'))); });
+check('migx: updating a deleted configuration is refused', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'modx_undo') !== false);
+$e = throws('migx: a deleted configuration is not found by name', ApiException::class, function () use ($call, $mDev) { $call($mDev, 'get', array('kind' => 'migx_config', 'name' => 'галерея слайдов')); });
+check('migx: a deleted name is free', $e && $e->errorCode === 'not_found');
+$mAgain = $call($mDev, 'create', array('kind' => 'migx_config', 'fields' => array('name' => 'галерея слайдов')));
+$e = throws('migx: undo while a live configuration has the name', ApiException::class, function () use ($call, $mDev, $mDel) { $call($mDev, 'undo', array('changeset_id' => $mDel['changeset_id'], 'confirm' => true)); });
+check('migx: undo of the delete is refused while a live one has the name', $e && $e->errorCode === 'not_reversible' && $mSite->row('migxConfig', 1)['deleted'] === '1');
+$call($mDev, 'undo', array('changeset_id' => $mAgain['changeset_id'], 'confirm' => true));
+check('migx: undoing that create removes it and its (no) rows', $mSite->row('migxConfig', $mAgain['id']) === null);
+$call($mDev, 'undo', array('changeset_id' => $mDel['changeset_id'], 'confirm' => true));
+$mRestored = $mSite->row('migxConfig', 1);
+check('migx: undo of the delete clears deleted and restores the state exactly', $mRestored['deleted'] === '0' && $mRestored['deletedon'] === null && $mRestored['deletedby'] === '0'
+    && $call($mDev, 'get', array('kind' => 'migx_config', 'id' => 1))['revision'] === $mRevBeforeDelete && count($mSite->tableDump('migxFormtabField')) === 2);
+
+// ---- duplicate ----
+$mCopy = $call($mDev, 'duplicate', array('kind' => 'migx_config', 'id' => 1, 'new_name' => 'галерея 2'));
+$mCopyGot = $call($mDev, 'get', array('kind' => 'migx_config', 'id' => $mCopy['id']));
+check('migx: duplicate copies the fields under the new name', $mCopyGot['fields']['name'] === 'галерея 2' && $mCopyGot['fields']['category'] === 'Сайт' && $mCopyGot['fields']['columns'] == json_decode(json_encode($mColumns2))
+    && $mCopyGot['fields']['contextmenus'] === 'update||duplicate||remove' && $mCopyGot['fields']['deleted'] === false);
+$mCopyTabs = json_decode(json_encode($mCopyGot['fields']['formtabs']), true);
+check('migx: the copy has form tab rows of its own with their own MIGX_id', count($mSite->tableDump('migxFormtab')) === 2 && $mCopyTabs[0]['MIGX_id'] !== '1' && $mCopyTabs[0]['caption'] === 'Слайд'
+    && $mSite->row('migxFormtabField', (int) $mCopyTabs[0]['fields'][0]['MIGX_id'])['config_id'] === (string) $mCopy['id']);
+check('migx: the source is untouched by its duplicate', $call($mDev, 'get', array('kind' => 'migx_config', 'id' => 1))['revision'] === $mRevBeforeDelete);
+$mCopyAuto = $call($mDev, 'duplicate', array('kind' => 'migx_config', 'id' => 1));
+check('migx: duplicate without new_name appends copy', $call($mDev, 'get', array('kind' => 'migx_config', 'id' => $mCopyAuto['id']))['fields']['name'] === 'галерея слайдов copy');
+$e = throws('migx: duplicate onto an existing name', ApiException::class, function () use ($call, $mDev) { $call($mDev, 'duplicate', array('kind' => 'migx_config', 'id' => 1, 'new_name' => 'Баннеры')); });
+check('migx: duplicate onto a live name is refused', $e && $e->errorCode === 'validation_failed');
+$call($mDev, 'undo', array('changeset_id' => $mCopy['changeset_id'], 'confirm' => true));
+$mOfCopy = function ($class) use ($mSite, $mCopy) { return array_filter($mSite->tableDump($class), function ($row) use ($mCopy) { return (int) $row['config_id'] === $mCopy['id']; }); };
+check('migx: undo of a create removes the configuration and the rows MIGX mirrored for it (and only those)', $mSite->row('migxConfig', $mCopy['id']) === null && $mOfCopy('migxFormtab') === array() && $mOfCopy('migxFormtabField') === array()
+    && count($mSite->tableDump('migxFormtab')) === 2 && count($mSite->tableDump('migxFormtabField')) === 4);
+
+$call($mDev, 'undo', array('changeset_id' => $mCopyAuto['changeset_id'], 'confirm' => true));
+
+// ---- names ----
+$e = throws('migx: create with a taken name', ApiException::class, function () use ($call, $mDev) { $call($mDev, 'create', array('kind' => 'migx_config', 'fields' => array('name' => 'Баннеры'))); });
+check('migx: a live name is unique', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'already exists') !== false);
+$e = throws('migx: rename onto a taken name', ApiException::class, function () use ($call, $mDev) { $call($mDev, 'update', array('kind' => 'migx_config', 'id' => 1, 'fields' => array('name' => 'Баннеры'))); });
+check('migx: renaming onto a live name is refused', $e && $e->errorCode === 'validation_failed');
+$mLong = $call($mDev, 'create', array('kind' => 'migx_config', 'fields' => array('name' => str_repeat('я', 100))));
+check('migx: 100 Cyrillic characters fit the name column (the limit counts characters, not bytes)', $mSite->row('migxConfig', $mLong['id'])['name'] === str_repeat('я', 100));
+$e = throws('migx: a name of 101 characters', ApiException::class, function () use ($call, $mDev) { $call($mDev, 'create', array('kind' => 'migx_config', 'fields' => array('name' => str_repeat('я', 101)))); });
+check('migx: 101 characters are refused', $e && $e->errorCode === 'validation_failed');
+$e = throws('migx: a blank name', ApiException::class, function () use ($call, $mDev) { $call($mDev, 'update', array('kind' => 'migx_config', 'id' => 1, 'fields' => array('name' => '  '))); });
+check('migx: a blank name is refused', $e && $e->errorCode === 'validation_failed');
+
+// ---- shape of the JSON fields ----
+$mTable = $mSite->tableDump('migxConfig');
+$mBad = array(
+    'formtabs is not a list' => array(array('formtabs' => array('caption' => 'x', 'fields' => array())), 'formtabs must be a list of objects'),
+    'a tab is not an object' => array(array('formtabs' => array('text')), 'formtabs[0] must be an object'),
+    'a tab without caption' => array(array('formtabs' => array(array('fields' => array()))), 'formtabs[0].caption must be a string'),
+    'a tab without fields' => array(array('formtabs' => array(array('caption' => 'A', 'fields' => array()), array('caption' => 'B'))), 'formtabs[1].fields must be a list of fields'),
+    'a field without a key' => array(array('formtabs' => array(array('caption' => 'A', 'fields' => array(array('field' => 'a', 'caption' => 'A'), array('caption' => 'B'))))), 'formtabs[0].fields[1].field must be a non-empty string'),
+    'a field with a blank key' => array(array('formtabs' => array(array('caption' => 'A', 'fields' => array(array('field' => ' ', 'caption' => 'A'))))), 'formtabs[0].fields[0].field'),
+    'a field without caption' => array(array('formtabs' => array(array('caption' => 'A', 'fields' => array(array('field' => 'a'))))), 'formtabs[0].fields[0].caption must be a string'),
+    'inputTV that is not a string' => array(array('formtabs' => array(array('caption' => 'A', 'fields' => array(array('field' => 'a', 'caption' => 'A', 'inputTV' => 5))))), 'formtabs[0].fields[0].inputTV must be a string'),
+    'a string instead of a list' => array(array('formtabs' => '[{"caption":"A","fields":[]}]'), 'formtabs must be a list of objects'),
+    'a column without header' => array(array('columns' => array(array('header' => 'A', 'dataIndex' => 'a'), array('dataIndex' => 'b'))), 'columns[1].header must be a string'),
+    'a column without dataIndex' => array(array('columns' => array(array('header' => 'A'))), 'columns[0].dataIndex must be a non-empty string'),
+    'columns is an object' => array(array('columns' => array('header' => 'A', 'dataIndex' => 'a')), 'columns must be a list of objects'),
+    'filters is a number' => array(array('filters' => 5), 'filters must be a list of objects'),
+    'extended is a list' => array(array('extended' => array(1, 2)), 'extended must be an object'),
+    'permissions is a string' => array(array('permissions' => 'save'), 'permissions must be an object'),
+    'fieldpermissions is a list' => array(array('fieldpermissions' => array('a')), 'fieldpermissions must be an object'),
+);
+foreach ($mBad as $mLabel => $mCase) {
+    $e = throws("migx: {$mLabel}", ApiException::class, function () use ($call, $mDev, $mCase) { $call($mDev, 'update', array('kind' => 'migx_config', 'id' => 1, 'fields' => $mCase[0])); });
+    check("migx: {$mLabel} is refused naming the path", $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), $mCase[1]) !== false);
+    $e = throws("migx: {$mLabel} (create)", ApiException::class, function () use ($call, $mDev, $mCase) { $call($mDev, 'create', array('kind' => 'migx_config', 'fields' => $mCase[0] + array('name' => 'bad'))); });
+    check("migx: {$mLabel} is refused on create as well", $e && $e->errorCode === 'validation_failed');
+}
+check('migx: a refused write changed nothing', $mSite->tableDump('migxConfig') === $mTable);
+$e = throws('migx: the deleted flag is read-only', ApiException::class, function () use ($call, $mDev) { $call($mDev, 'update', array('kind' => 'migx_config', 'id' => 1, 'fields' => array('deleted' => true))); });
+check('migx: deleted cannot be written', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'read-only') !== false);
+$e = throws('migx: a value JSON cannot encode', ApiException::class, function () { \ModxMCP\Kind\Objects::normalize(new \ModxMCP\Kind\MigxConfigKind(), array('extended' => array('a' => "\xB1\x31")), false); });
+check('migx: a value that is not JSON-encodable is validation_failed', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), "Field 'extended' must be a JSON value") !== false);
+check('migx: unknown extra keys are kept in the form tabs and columns', $call($mDev, 'update', array('kind' => 'migx_config', 'id' => $mSecond['id'], 'fields' => array('columns' => array(array('header' => 'A', 'dataIndex' => 'a', 'renderer' => 'this.renderChunk', 'renderchunktpl' => '[[+a]]', 'свойство' => 'да')))))['changeset_id'] > 0
+    && strpos($mSite->row('migxConfig', $mSecond['id'])['columns'], '"свойство":"да"') !== false);
+
+// ---- warnings ----
+$mSite->store('modTemplateVar', array('id' => 31, 'name' => 'linkTv', 'type' => 'text', 'default_text' => '', 'caption' => '', 'category' => 0));
+$mWarnCtx = $mActor('develop');
+$call($mWarnCtx, 'create', array('kind' => 'migx_config', 'fields' => array('name' => 'проверка',
+    'formtabs' => array(array('caption' => 'T', 'fields' => array(array('field' => 'title', 'caption' => 'Т', 'inputTV' => 'linkTv'), array('field' => 'link', 'caption' => 'Л', 'inputTV' => 'нет_такой_tv')))),
+    'columns' => array(array('header' => 'Т', 'dataIndex' => 'title'), array('header' => 'Х', 'dataIndex' => 'виртуальная'), array('header' => 'Id', 'dataIndex' => 'MIGX_id')))));
+check('migx: warnings for an inputTV that is not a TV and a dataIndex without a field (not for a known TV, a known field or MIGX_id)',
+    count($mWarnCtx->warnings) === 2 && strpos($mWarnCtx->warnings[0], "inputTV 'нет_такой_tv'") !== false && strpos($mWarnCtx->warnings[1], "dataIndex 'виртуальная'") !== false);
+$mWarnCtx2 = $mActor('develop');
+$call($mWarnCtx2, 'create', array('kind' => 'migx_config', 'fields' => array('name' => 'без предупреждений', 'formtabs' => $mTabs, 'columns' => $mColumns)));
+check('migx: no warnings for a consistent configuration', $mWarnCtx2->warnings === array());
+
+// ---- scopes and groups ----
+$e = throws('migx: a read token cannot create', ApiException::class, function () use ($call, $mRead) { $call($mRead, 'create', array('kind' => 'migx_config', 'fields' => array('name' => 'x'))); });
+check('migx: write needs the develop scope', $e && $e->errorCode === 'forbidden_scope');
+foreach (array('update' => array('id' => 1, 'fields' => array('category' => 'x')), 'delete' => array('id' => 1), 'duplicate' => array('id' => 1)) as $mTool => $mArgs) {
+    $e = throws("migx: a content token cannot {$mTool}", ApiException::class, function () use ($call, $mActor, $mTool, $mArgs) { $call($mActor('content'), $mTool, array('kind' => 'migx_config') + $mArgs); });
+    check("migx: {$mTool} needs the develop scope", $e && $e->errorCode === 'forbidden_scope');
+}
+check('migx: a read token reads', $call($mRead, 'get', array('kind' => 'migx_config', 'id' => 1))['fields']['name'] === 'галерея слайдов' && in_array('migx_config', array_column($call($mRead, 'describe')['kinds'], 'kind'), true));
+$e = throws('migx: a token denied the group', ApiException::class, function () use ($call, $mActor) { $call($mActor('admin', array('denied_groups' => array('migx'))), 'get', array('kind' => 'migx_config', 'id' => 1)); });
+check('migx: a token denied the migx group cannot use the kind', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'denied_for_token');
+$mSite->options['modxmcp.disabled_groups'] = 'migx';
+$e = throws('migx: group switched off', ApiException::class, function () use ($call, $mAdmin) { $call($mAdmin, 'list', array('kind' => 'migx_config')); });
+check('migx: the migx group switched off for the site makes the kind unavailable', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'disabled_group'
+    && !in_array('migx_config', array_column($call($mAdmin, 'describe')['kinds'], 'kind'), true));
+$mSite->options['modxmcp.disabled_groups'] = '';
+unlink($mgCore . 'model/migx/migxconfig.class.php');
+$e = throws('migx: code missing', ApiException::class, function () use ($call, $mActor) { $call($mActor('admin'), 'list', array('kind' => 'migx_config')); });
+check('migx: installed but its code is gone is unavailable', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'code_missing');
+touch($mgCore . 'model/migx/migxconfig.class.php');
+
+// ---- MIGX TV values ----
+$mSite->store('modTemplate', array('id' => 2, 'templatename' => 'Каталог', 'content' => '', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => '', 'icon' => ''));
+$mSite->store('modTemplateVar', array('id' => 40, 'name' => 'gallery', 'type' => 'migx', 'default_text' => '', 'caption' => '', 'category' => 0));
+$mSite->store('modTemplateVar', array('id' => 41, 'name' => 'slides', 'type' => 'migx', 'default_text' => '@CHUNK slides_default', 'caption' => '', 'category' => 0));
+$mSite->store('modTemplateVar', array('id' => 42, 'name' => 'subtitle', 'type' => 'text', 'default_text' => '', 'caption' => '', 'category' => 0));
+foreach (array(40, 41, 42) as $mTv) { $mSite->store('modTemplateVarTemplate', array('tmplvarid' => $mTv, 'templateid' => 2, 'rank' => 0)); }
+$mPage = $call($mDev, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Галерея', 'template' => 2)));
+$mTvValue = function ($tv) use ($mSite, $mPage) {
+    foreach ($mSite->tableDump('modTemplateVarResource') as $row) { if ((int) $row['tmplvarid'] === $tv && (int) $row['contentid'] === $mPage['id']) { return $row['value']; } }
+    return null;
+};
+$mTvs = function () use ($call, $mDev, $mPage) { return json_decode(json_encode($call($mDev, 'get', array('kind' => 'resource', 'id' => $mPage['id']))['relations']['tvs']), true); };
+check('migx tv: nothing stored reads as the default text, as before', $mTvs() === array('gallery' => '', 'slides' => '@CHUNK slides_default', 'subtitle' => ''));
+$mWrite = $call($mDev, 'update', array('kind' => 'resource', 'id' => $mPage['id'], 'relations' => array('tvs' => array('gallery' => array(
+    array('image' => 'img/1.jpg', 'title' => 'Первый'), array('image' => 'img/2.jpg', 'title' => 'Второй «слайд»', 'nested' => array('a' => 1, 'b' => array(true, null, 1.5)))
+)))));
+$mStored = $mTvValue(40);
+check('migx tv: a list is stored as JSON text with MIGX_id on every row (Cyrillic and slashes unescaped)', $mWrite['changed'] === array('tvs')
+    && $mStored === '[{"image":"img/1.jpg","title":"Первый","MIGX_id":1},{"image":"img/2.jpg","title":"Второй «слайд»","nested":{"a":1,"b":[true,null,1.5]},"MIGX_id":2}]');
+$mBack = $mTvs();
+check('migx tv: modx_get returns the decoded list', is_array($mBack['gallery']) && count($mBack['gallery']) === 2 && $mBack['gallery'][1]['title'] === 'Второй «слайд»' && $mBack['gallery'][1]['MIGX_id'] === 2
+    && $mBack['gallery'][1]['nested'] === array('a' => 1, 'b' => array(true, null, 1.5)) && $mBack['slides'] === '@CHUNK slides_default');
+$mWrite2 = $call($mDev, 'update', array('kind' => 'resource', 'id' => $mPage['id'], 'relations' => array('tvs' => array('gallery' => array(
+    array('image' => 'a', 'MIGX_id' => 5), array('image' => 'b'), array('image' => 'c', 'MIGX_id' => '3'), array('image' => 'd', 'MIGX_id' => ''), array()
+)))));
+$mIds = array_column(json_decode($mTvValue(40), true), 'MIGX_id');
+check('migx tv: items without MIGX_id continue from the highest present, in order; given ids are kept as they are', $mIds === array(5, 6, '3', 7, 8) && json_decode($mTvValue(40), true)[4] === array('MIGX_id' => 8));
+$mEmpty = $call($mDev, 'update', array('kind' => 'resource', 'id' => $mPage['id'], 'relations' => array('tvs' => array('gallery' => array()))));
+check('migx tv: an empty list is stored as [] and read back as a list', $mTvValue(40) === '[]' && $mTvs()['gallery'] === array());
+// a string still works, whatever it holds; and a list gives the same state as its text
+$mText = '[{"image":"img/1.jpg","title":"Первый","MIGX_id":1}]';
+$mStr = $call($mDev, 'update', array('kind' => 'resource', 'id' => $mPage['id'], 'relations' => array('tvs' => array('gallery' => $mText))));
+$mRevString = $call($mDev, 'get', array('kind' => 'resource', 'id' => $mPage['id']))['revision'];
+check('migx tv: a string is stored as it is and reads back decoded', $mStr['changed'] === array('tvs') && $mTvValue(40) === $mText && $mTvs()['gallery'][0]['title'] === 'Первый');
+$call($mDev, 'update', array('kind' => 'resource', 'id' => $mPage['id'], 'relations' => array('tvs' => array('gallery' => array(array('image' => 'z'))))));
+$mAsList = $call($mDev, 'update', array('kind' => 'resource', 'id' => $mPage['id'], 'relations' => array('tvs' => array('gallery' => array(array('image' => 'img/1.jpg', 'title' => 'Первый'))))));
+check('migx tv: the same rows as a list or as text are the same state (the snapshot holds the stored text, nothing new)', $mAsList['revision'] === $mRevString);
+$mBoth = $call($mDev, 'update', array('kind' => 'resource', 'id' => $mPage['id'], 'relations' => array('tvs' => array('gallery' => 'просто текст', 'slides' => array(array('t' => 'x'))))));
+check('migx tv: text that is not JSON reads as the text; several TVs in one call', $mTvValue(40) === 'просто текст' && $mTvs()['gallery'] === 'просто текст' && $mTvs()['slides'][0]['MIGX_id'] === 1);
+foreach (array('"строка"', '123', 'null', '[{"a":', '{"сломано": }') as $mOdd) {
+    $mSite->store('modTemplateVarResource', array('id' => 900, 'tmplvarid' => 40, 'contentid' => $mPage['id'], 'value' => $mOdd));
+    check("migx tv: stored {$mOdd} that is not a list or object reads as the raw text", $mTvs()['gallery'] === $mOdd);
+}
+$mSite->store('modTemplateVarResource', array('id' => 900, 'tmplvarid' => 40, 'contentid' => $mPage['id'], 'value' => '{"MIGX_id":1,"a":"б"}'));
+check('migx tv: a stored JSON object reads as an object', $mTvs()['gallery'] === array('MIGX_id' => 1, 'a' => 'б'));
+// refusals
+foreach (array('an item that is a string' => array('текст'), 'an item that is a list' => array(array(1, 2)), 'a mix' => array(array('a' => 1), 'x'),
+    'an object instead of a list' => array('MIGX_id' => 1, 'a' => 'б')) as $mLabel => $mValue) {
+    $mWas = $mTvValue(40);
+    $e = throws("migx tv: {$mLabel}", ApiException::class, function () use ($call, $mDev, $mPage, $mValue) { $call($mDev, 'update', array('kind' => 'resource', 'id' => $mPage['id'], 'relations' => array('tvs' => array('gallery' => $mValue)))); });
+    check("migx tv: {$mLabel} is refused and nothing changed", $e && $e->errorCode === 'validation_failed' && $mTvValue(40) === $mWas);
+}
+$e = throws('migx tv: item path in the message', ApiException::class, function () use ($call, $mDev, $mPage) { $call($mDev, 'update', array('kind' => 'resource', 'id' => $mPage['id'], 'relations' => array('tvs' => array('gallery' => array(array('a' => 1), 7))))); });
+check('migx tv: the message names the item', strpos($e->getMessage(), "'gallery': item 1 must be an object") !== false);
+$e = throws('migx tv: a number for a MIGX TV', ApiException::class, function () use ($call, $mDev, $mPage) { $call($mDev, 'update', array('kind' => 'resource', 'id' => $mPage['id'], 'relations' => array('tvs' => array('slides' => null)))); });
+check('migx tv: null is neither a string nor a list', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'a string or a list of objects') !== false);
+// non-MIGX TVs behave as before
+$e = throws('migx tv: an array for a text TV', ApiException::class, function () use ($call, $mDev, $mPage) { $call($mDev, 'update', array('kind' => 'resource', 'id' => $mPage['id'], 'relations' => array('tvs' => array('subtitle' => array(array('a' => 1)))))); });
+check('migx tv: a list for a non-MIGX TV is refused with the old message', $e && $e->errorCode === 'validation_failed' && $e->getMessage() === "The value of TV 'subtitle' must be a string, number or boolean.");
+$call($mDev, 'update', array('kind' => 'resource', 'id' => $mPage['id'], 'relations' => array('tvs' => array('subtitle' => '[{"a":1}]'))));
+check('migx tv: a non-MIGX TV whose text is JSON stays a string', $mTvs()['subtitle'] === '[{"a":1}]' && $mTvValue(42) === '[{"a":1}]');
+$call($mDev, 'update', array('kind' => 'resource', 'id' => $mPage['id'], 'relations' => array('tvs' => array('subtitle' => 5))));
+check('migx tv: a number for a non-MIGX TV is stored as a string, as before', $mTvValue(42) === '5' && $mTvs()['subtitle'] === '5');
+// undo and duplicate work on the stored text
+$mRevPre = $call($mDev, 'get', array('kind' => 'resource', 'id' => $mPage['id']))['revision'];
+$mList = $call($mDev, 'update', array('kind' => 'resource', 'id' => $mPage['id'], 'relations' => array('tvs' => array('gallery' => array(array('image' => 'q', 'title' => 'Ёж'))))));
+$call($mDev, 'undo', array('changeset_id' => $mList['changeset_id'], 'confirm' => true));
+check('migx tv: undo of a list write puts the earlier text back', $call($mDev, 'get', array('kind' => 'resource', 'id' => $mPage['id']))['revision'] === $mRevPre && $mTvValue(40) === 'просто текст');
+$call($mDev, 'update', array('kind' => 'resource', 'id' => $mPage['id'], 'relations' => array('tvs' => array('gallery' => array(array('image' => 'q', 'title' => 'Ёж'), array('image' => 'r'))))));
+$mDup = $call($mDev, 'duplicate', array('kind' => 'resource', 'id' => $mPage['id'], 'new_name' => 'Галерея 2'));
+$mDupValue = null;
+foreach ($mSite->tableDump('modTemplateVarResource') as $row) { if ((int) $row['tmplvarid'] === 40 && (int) $row['contentid'] === $mDup['id']) { $mDupValue = $row['value']; } }
+check('migx tv: a duplicated page carries the stored text unchanged', $mDupValue === $mTvValue(40) && $mDupValue !== null);
+// the TV on a site without MIGX: the resource kind does not depend on the integration
+$pTv = $site->row('modTemplateVar', 20);
+$site->store('modTemplateVar', array('id' => 50, 'name' => 'plainmigx', 'type' => 'migx', 'default_text' => '', 'caption' => '', 'category' => 0));
+$site->store('modTemplateVarTemplate', array('tmplvarid' => 50, 'templateid' => 2, 'rank' => 0));
+$call($editor, 'update', array('kind' => 'resource', 'id' => $home['id'], 'relations' => array('tvs' => array('plainmigx' => array(array('x' => 'у'))))));
+check('migx tv: a list is written for a TV of type migx even on a site where the MIGX group is not available', json_decode(json_encode($call($editor, 'get', array('kind' => 'resource', 'id' => $home['id']))['relations']['tvs']), true)['plainmigx'] === array(array('x' => 'у', 'MIGX_id' => 1)));
+
+// ---- the help topic ----
+$mHelp = $call($mRead, 'help', array('topic' => 'migx'));
+check('migx help: the topic is served and listed', in_array('migx', $mHelp['topics'], true) && strpos($mHelp['content'], 'modx_create {kind: "migx_config"') !== false && strpos($mHelp['content'], 'relations: {tvs:') !== false);
+foreach (array('modx_migx_', 'modx_update_resource_tvs', 'modx_get_resource_tvs', 'modx_create_element', 'create_element', 'clear_cache') as $mLegacy) {
+    check("migx help: no 1.x name {$mLegacy}", strpos($mHelp['content'], $mLegacy) === false);
+}
+check('migx help: the index lists the topic', strpos($call($mRead, 'help')['content'], '`migx`') !== false);
+check('migx help: no legacy copy is left', !is_file(dirname(dirname(__DIR__)) . '/docs/legacy-help/migx.md'));
+
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));
 check('canonical: list order is kept', Kernel::canonical(array(3, 1, 2)) === array(3, 1, 2));

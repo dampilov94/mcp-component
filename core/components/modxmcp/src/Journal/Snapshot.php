@@ -125,7 +125,7 @@ final class Snapshot {
             }
             foreach ($after['relations'] as $name => $rows) {
                 // Rows that back `via` fields are named by those fields.
-                if ($rows && !in_array($name, $kind->viaRelations(), true)) { $created[] = $name; }
+                if ($rows && !in_array($name, $kind->viaRelations(), true) && !self::namedByField($kind, $name)) { $created[] = $name; }
             }
             return $created;
         }
@@ -155,7 +155,16 @@ final class Snapshot {
                 $changed[] = $column;
             }
         }
+        // Rows that mirror a field (`named_by`) are named by that field when it changed too.
+        foreach ($kind->relationSpecs() as $name => $spec) {
+            if (!empty($spec['named_by']) && in_array($spec['named_by'], $changed, true)) { $changed = array_diff($changed, array($name)); }
+        }
         return array_values(array_unique($changed));
+    }
+
+    private static function namedByField(Kind $kind, $name) {
+        $specs = $kind->relationSpecs();
+        return !empty($specs[$name]['named_by']);
     }
 
     /**
@@ -200,6 +209,7 @@ final class Snapshot {
                 self::writeFile($path, $kind->fileContent((string) $fields[$kind->column($kind->codeField())]));
             }
         }
+        $kind->prepareRestore($object);
         if (!$object->save()) { throw new \RuntimeException("Cannot restore {$kind->name()} {$key}."); }
 
         $rows = $state['relations'] + $extra;

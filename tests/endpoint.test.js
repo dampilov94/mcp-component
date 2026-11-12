@@ -350,3 +350,64 @@ test("miniShop2: the option kind and the product relations appear when it is ins
   assert.equal(refused.error.code, "validation_failed");
   assert.equal(refused.error.message, "Unknown miniShop2 option 'nonexistent'.");
 });
+
+test("MIGX: the configuration kind and MIGX TV values appear when it is installed", { skip: available ? false : "PHP with pdo_sqlite is not available" }, async (t) => {
+  const site = await startSite({ MODXMCP_TEST_MIGX: "1" });
+  t.after(site.stop);
+  const { admin, read } = site.info.tokens;
+  const call = (token, action, args = {}) => site.post(token, { v: 2, action, args });
+  // 22 kinds without MIGX (see "kernel: wire protocol"), one more with it; a read token reads it.
+  const adminKinds = (await call(admin, "describe")).body.result.kinds.map((kind) => kind.kind);
+  assert.equal(adminKinds.length, 23);
+  assert.equal(adminKinds[adminKinds.length - 1], "migx_config");
+  const readKinds = (await call(read, "describe")).body.result.kinds.map((kind) => kind.kind);
+  assert.equal(readKinds.length, 18);
+  assert.equal(readKinds[readKinds.length - 1], "migx_config");
+  const integration = (await call(read, "capabilities")).body.result.integrations.find((item) => item.key === "migx");
+  assert.equal(integration.available, true);
+
+  const created = (await call(admin, "create", {
+    kind: "migx_config",
+    fields: {
+      name: "галерея", category: "Сайт",
+      formtabs: [{ caption: "Слайд", fields: [{ field: "title", caption: "Заголовок", inputTVtype: "text" }] }],
+      columns: [{ header: "Заголовок", dataIndex: "title" }],
+      extended: { formcaption: "Слайд" },
+    },
+  })).body;
+  assert.equal(created.ok, true, JSON.stringify(created));
+  const got = (await call(read, "get", { kind: "migx_config", id: created.result.id })).body.result;
+  assert.equal(got.fields.name, "галерея");
+  assert.equal(got.fields.formtabs[0].caption, "Слайд");
+  assert.equal(got.fields.formtabs[0].fields[0].MIGX_id, "1");
+  assert.deepEqual(got.fields.columns, [{ header: "Заголовок", dataIndex: "title" }]);
+  assert.deepEqual(got.fields.extended, { formcaption: "Слайд" });
+  assert.equal(got.fields.filters, null);
+  const refused = (await call(admin, "update", { kind: "migx_config", id: created.result.id, fields: { columns: [{ header: "X" }] } })).body;
+  assert.equal(refused.error.code, "validation_failed");
+  assert.match(refused.error.message, /columns\[0\]\.dataIndex/);
+  assert.equal((await call(read, "update", { kind: "migx_config", id: created.result.id, fields: { category: "x" } })).body.error.code, "forbidden_scope");
+
+  const removed = (await call(admin, "delete", { kind: "migx_config", id: created.result.id })).body;
+  assert.equal(removed.ok, true, JSON.stringify(removed));
+  assert.equal((await call(read, "list", { kind: "migx_config" })).body.result.total, 0);
+  assert.equal((await call(read, "list", { kind: "migx_config", where: { deleted: true } })).body.result.total, 1);
+  assert.equal((await call(admin, "undo", { changeset_id: removed.result.changeset_id, confirm: true })).body.ok, true);
+  assert.equal((await call(read, "list", { kind: "migx_config" })).body.result.items[0].name, "галерея");
+
+  const template = (await call(admin, "create", { kind: "template", fields: { name: "Каталог" } })).body.result;
+  const tv = (await call(admin, "create", { kind: "tv", fields: { name: "gallery", type: "migx" }, relations: { templates: [template.id] } })).body;
+  assert.equal(tv.ok, true, JSON.stringify(tv));
+  const page = (await call(admin, "create", { kind: "resource", fields: { pagetitle: "Галерея", template: template.id } })).body.result;
+  const written = (await call(admin, "update", { kind: "resource", id: page.id, relations: { tvs: { gallery: [{ image: "a.jpg", title: "Первый" }, { image: "b.jpg", MIGX_id: 7 }, { image: "c.jpg" }] } } })).body;
+  assert.equal(written.ok, true, JSON.stringify(written));
+  const shown = (await call(read, "get", { kind: "resource", id: page.id })).body.result.relations.tvs.gallery;
+  assert.deepEqual(shown, [{ image: "a.jpg", title: "Первый", MIGX_id: 8 }, { image: "b.jpg", MIGX_id: 7 }, { image: "c.jpg", MIGX_id: 9 }]);
+  const bad = (await call(admin, "update", { kind: "resource", id: page.id, relations: { tvs: { gallery: ["текст"] } } })).body;
+  assert.equal(bad.error.code, "validation_failed");
+  assert.match(bad.error.message, /item 0 must be an object/);
+
+  const help = (await call(read, "help", { topic: "migx" })).body.result;
+  assert.match(help.content, /modx_create \{kind: "migx_config"/);
+  assert.ok(!/modx_migx_|modx_update_resource_tvs|modx_get_resource_tvs|modx_create_element/.test(help.content));
+});

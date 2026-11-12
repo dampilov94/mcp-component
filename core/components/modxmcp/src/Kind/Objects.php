@@ -85,6 +85,10 @@ final class Objects {
                 throw new ApiException('validation_failed', "Field '{$name}' is read-only.");
             }
             $type = $fields[$name]['type'];
+            if ($type === 'json') {
+                $out[$kind->column($name)] = self::normalizeJsonValue($name, $value);
+                continue;
+            }
             if ($type === 'object') {
                 $out[$kind->column($name)] = !empty($fields[$name]['json']) ? self::normalizeJson($name, $value) : self::normalizeObject($kind, $name, $value);
                 continue;
@@ -133,9 +137,21 @@ final class Objects {
         return $value ? json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '{}';
     }
 
+    /** A field of type json: any JSON value. Returns its JSON text; null is "" (nothing stored). */
+    public static function normalizeJsonValue($name, $value) {
+        if ($value === null) { return ''; }
+        $text = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION);
+        if ($text === false) { throw new ApiException('validation_failed', "Field '{$name}' must be a JSON value (" . json_last_error_msg() . ').'); }
+        return $text;
+    }
+
     /** True when a stored value of a field equals the value a caller sent for it (maps compare as maps). */
     public static function sameValue(Kind $kind, $name, $stored, $value) {
         $fields = $kind->fields();
+        if ($fields[$name]['type'] === 'json') {
+            $a = is_string($stored) ? ($stored === '' ? null : json_decode($stored, true)) : json_decode(json_encode($stored), true);
+            return Kind::canonicalValue($a) === Kind::canonicalValue(json_decode(json_encode($value), true));
+        }
         if ($fields[$name]['type'] === 'object' && !empty($fields[$name]['json'])) {
             return Kind::canonicalJson($stored) === Kind::canonicalJson($value instanceof \stdClass || is_array($value) ? $value : null);
         }
@@ -223,10 +239,16 @@ final class Objects {
         }
         if ($id === null) {
             $after = $kind->beforeCreate($context, $columns);
-            $created = self::process($modx, $kind->processorPath() . 'create', $kind->processorData('create', $columns + $kind->processorExtras('create')), $kind->processorOptions());
-            $id = $kind->createdKey($created, $columns);
+            if ($kind->usesProcessors()) {
+                $created = self::process($modx, $kind->processorPath() . 'create', $kind->processorData('create', $columns + $kind->processorExtras('create')), $kind->processorOptions());
+                $id = $kind->createdKey($created, $columns);
+            } else {
+                $id = $kind->writeObject($context, null, $columns);
+            }
             $tx->created($kind, $id);
             if ($after) { $after($tx, $id); }
+        } elseif ($columns && !$kind->usesProcessors()) {
+            $kind->writeObject($context, $id, $columns);
         } elseif ($columns) {
             $object = $kind->findByKey($modx, $id);
             // The update processors expect the complete record; omitted fields would be reset.
