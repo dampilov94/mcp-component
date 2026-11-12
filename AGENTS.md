@@ -79,6 +79,8 @@ MODX traps already handled; keep them handled:
 A full MODX 2.8.8 source tree is available locally (ignored by git) in `modx-example-2-8-8/`.
 Read the real processors and maps there instead of guessing how MODX behaves; never modify
 or execute anything in it.
+Source of add-ons installed on the stand is copied to `.local/reference/<addon>-<version>/`
+(ignored) when a brief needs it; the same rules apply.
 
 ## Tests
 
