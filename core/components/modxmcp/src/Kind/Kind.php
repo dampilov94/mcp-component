@@ -138,7 +138,7 @@ abstract class Kind {
         return array();
     }
 
-    /** Special operations for modx_invoke: op => [description, read_only]. */
+    /** Special operations: op => description, read_only, needs_object (default true), input schema, handler. */
     public function operations() {
         return array();
     }
@@ -305,7 +305,8 @@ abstract class Kind {
         }
         $operations = array();
         foreach ($this->operations() as $op => $definition) {
-            $operations[] = array('op' => $op, 'description' => $definition[0], 'read_only' => !empty($definition[1]));
+            $operations[] = array('op' => $op, 'description' => $definition['description'], 'read_only' => !empty($definition['read_only']),
+                'needs_object' => !isset($definition['needs_object']) || $definition['needs_object'], 'input' => $definition['input']);
         }
         return array(
             'kind'        => $this->name(),

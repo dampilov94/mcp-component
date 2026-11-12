@@ -27,6 +27,18 @@ class FakeObject {
     public function initialize() { return true; }
     public function getBasePath() { return (string) $this->get('basePath'); }
     public function getSourceFile() { return !empty($this->fields['static']) ? (string) $this->fields['static_file'] : false; }
+    public function joinGroup($id) {
+        if (!$this->modx->getObject('modResourceGroup', $id)) { return false; }
+        $where = array('document' => $this->get('id'), 'document_group' => $id);
+        if ($this->modx->getCount('modResourceGroupResource', $where)) { return false; }
+        $row = $this->modx->newObject('modResourceGroupResource');
+        $row->fromArray($where);
+        return $row->save();
+    }
+    public function leaveGroup($id) {
+        $row = $this->modx->getObject('modResourceGroupResource', array('document' => $this->get('id'), 'document_group' => $id));
+        return $row ? $row->remove() : false;
+    }
     public function setTVValue($tvId, $value) {
         $this->modx->removeCollection('modTemplateVarResource', array('tmplvarid' => $tvId, 'contentid' => $this->fields['id']));
         $this->modx->store('modTemplateVarResource', array(
@@ -128,9 +140,9 @@ trait FakeResourceProcessors {
         if ($action === 'create') {
             $resource = $this->newObject('modResource');
             // MODX generates an alias from the title when create receives an empty alias.
-            if (empty($data['alias'])) { $data['alias'] = strtolower(str_replace(' ', '-', $data['pagetitle'])); }
+            if (empty($data['alias'])) { $data['alias'] = mb_strtolower(str_replace(' ', '-', $data['pagetitle']), 'UTF-8'); }
             $data += array(
-                'longtitle' => '', 'description' => '', 'introtext' => '', 'menutitle' => '', 'alias' => strtolower(str_replace(' ', '-', $data['pagetitle'])),
+                'longtitle' => '', 'description' => '', 'introtext' => '', 'menutitle' => '', 'alias' => mb_strtolower(str_replace(' ', '-', $data['pagetitle']), 'UTF-8'),
                 'uri_override' => 0, 'parent' => 0, 'context_key' => 'web', 'template' => 0, 'content' => '', 'published' => 0, 'deleted' => 0,
                 'deletedon' => 0, 'hidemenu' => 0, 'isfolder' => 0, 'menuindex' => 0, 'richtext' => 1, 'searchable' => 1, 'cacheable' => 1,
                 'class_key' => 'modDocument', 'content_type' => 1, 'link_attributes' => '', 'pub_date' => 0, 'unpub_date' => 0,
@@ -261,7 +273,7 @@ class modX extends xPDO {
         return $out;
     }
     public function getObject($class, $criteria = null, $cacheFlag = true) {
-        if ($class === 'modUser') { return new FakeObject($this, 'modUser', array('id' => 1, 'active' => 1), false); }
+        if ($class === 'modUser' && (is_array($criteria) ? (isset($criteria['id']) ? $criteria['id'] : null) : $criteria) == 1 && !$this->row('modUser', 1)) { return new FakeObject($this, 'modUser', array('id' => 1, 'active' => 1), false); }
         $rows = $this->match($class, is_array($criteria) || $criteria instanceof FakeQuery ? $criteria : array('id' => $criteria));
         return $rows ? new FakeObject($this, $class, $rows[0], false) : null;
     }
@@ -333,6 +345,29 @@ class modX extends xPDO {
 
     /** Minimal create / update / remove processors with the validation the real ones have. */
     public function runProcessor($path, array $data = array()) {
+        if ($path === 'security/group/user/create' || $path === 'security/group/user/remove') {
+            $where = array('user_group' => $data['usergroup'], 'member' => $data['user']);
+            $member = $this->getObject('modUserGroupMember', $where);
+            $user = $this->getObject('modUser', $data['user']);
+            $group = $this->getObject('modUserGroup', $data['usergroup']);
+            if ($path === 'security/group/user/create') {
+                if (!$user || !$group || (!empty($data['role']) && !$this->getObject('modUserGroupRole', $data['role']))) { return new FakeResponse('User, group or role not found.'); }
+                if ($member) { return new FakeResponse('User is already in this group.'); }
+                $member = $this->newObject('modUserGroupMember');
+                $rank = $this->getCount('modUserGroupMember', array('member' => $data['user']));
+                $member->fromArray($where + array('role' => isset($data['role']) ? $data['role'] : 0, 'rank' => $rank));
+                $this->invokeEvent('OnUserBeforeAddToGroup');
+                $member->save();
+                $this->invokeEvent('OnUserAddToGroup');
+                if ($rank === 0) { $user->set('primary_group', $data['usergroup']); $user->save(); }
+            } else {
+                if (!$member) { return new FakeResponse('Membership not found.'); }
+                $member->remove();
+                if ($user && $group && $user->get('primary_group') == $group->get('id')) { $user->set('primary_group', 0); $user->save(); }
+            }
+            return new FakeResponse(null, $member->toArray());
+        }
+
         if (in_array($path, array('system/refreshuris', 'system/remove_locks', 'security/access/flush', 'resource/emptyrecyclebin'), true)) {
             $this->maintenanceProcessors[] = $path;
             if ($this->failProcessor === $path) { return new FakeResponse('Maintenance processor refused.'); }

@@ -113,14 +113,14 @@ $context = function ($scope, array $denied = array(), array $options = array()) 
 $read = $context('read');
 $tools = Manifest::tools($read);
 $names = array_column($tools, 'name');
-check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_resource_tree', 'modx_view_code', 'modx_search', 'modx_find_usages', 'modx_list_files', 'modx_read_file', 'modx_history', 'modx_history_diff', 'modx_request_status'));
+check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_invoke', 'modx_resource_tree', 'modx_view_code', 'modx_search', 'modx_find_usages', 'modx_list_files', 'modx_read_file', 'modx_history', 'modx_history_diff', 'modx_request_status'));
 check('manifest: protocol action is not a tool', !in_array('modx_manifest', $names, true));
 check('manifest: hash is stable', Manifest::hash($tools) === Manifest::hash(Manifest::tools($context('read'))));
 foreach ($tools as $tool) {
-    check("manifest: {$tool['name']} is read-only", $tool['effect']['read_only'] === true && $tool['effect']['destructive'] === false);
+    check("manifest: {$tool['name']} is read-only", $tool['name'] === 'modx_invoke' || ($tool['effect']['read_only'] === true && $tool['effect']['destructive'] === false));
 }
 $all = array_column(Manifest::tools($context('admin')), null, 'name');
-check('manifest: full tool count', count($all) === 29);
+check('manifest: full tool count', count($all) === 30);
 check('manifest: duplicate is a reversible write after delete', $all['modx_duplicate']['effect']['read_only'] === false
     && $all['modx_duplicate']['effect']['reversible'] === true && $all['modx_duplicate']['effect']['destructive'] === false
     && array_search('modx_duplicate', array_keys($all), true) === array_search('modx_delete', array_keys($all), true) + 1);
@@ -1028,6 +1028,97 @@ foreach (array(array('user_group', 1), array('user_group', $namedAdmin['id']), a
 $call($accessAdmin, 'update', array('kind' => 'role', 'id' => 1, 'fields' => array('name' => 'Renamed ordinary role')));
 $call($accessAdmin, 'delete', array('kind' => 'role', 'id' => 1));
 check('access: role protection follows names, not id, as in MODX', $accessSite->row('modUserGroupRole', 1) === null);
+
+// Invoke: membership operations through the existing access fixture.
+$accessSite->store('modUser', array('id' => 501, 'username' => 'участник', 'primary_group' => 0));
+$opSpecs = array_column($call($accessAdmin, 'describe', array('kind' => 'user_group'))['operations'], null, 'op');
+check('invoke: describe includes schemas and needs_object', $opSpecs['add_member']['needs_object'] && !$opSpecs['add_member']['read_only']
+    && $opSpecs['add_member']['input']['required'] === array('user') && $opSpecs['member_count']['read_only']);
+$opBase = array('kind' => 'user_group', 'id' => $groupId);
+$beforeMemberCount = $call($accessContext('read'), 'invoke', $opBase + array('op' => 'member_count'))['members'];
+$invokeDry = $call($accessAdmin, 'invoke', $opBase + array('op' => 'add_member', 'args' => array('user' => 501), 'dry_run' => true));
+check('invoke: validated dry run does not call handler', $invokeDry['validated'] && $invokeDry['dry_run'] && !$accessSite->getCount('modUserGroupMember', array('member' => 501)));
+check('invoke: plan-only forces dry run', $call($accessContext('admin', array('plan_only' => true)), 'invoke', $opBase + array('op' => 'add_member', 'args' => array('user' => 501)))['planned']);
+$addedMember = $call($accessAdmin, 'invoke', $opBase + array('op' => 'add_member', 'args' => array('user' => 501)));
+check('invoke: member addition is journaled with default role zero', $addedMember['changed'] === array('members') && $addedMember['changeset_id'] !== null
+    && count($accessAdmin->journal()->changes(array($addedMember['changeset_id']))) === 1
+    && $accessSite->getObject('modUserGroupMember', array('member' => 501))->get('role') === '0');
+check('invoke: read member_count works and tool is visible', $call($accessContext('read'), 'invoke', $opBase + array('op' => 'member_count'))['members'] === $beforeMemberCount + 1
+    && in_array('modx_invoke', array_column(Manifest::tools($accessContext('read')), 'name'), true));
+$lastInvoke = $accessAdmin->journal()->lastChangesetId();
+$e = throws('invoke: duplicate member', ApiException::class, function () use ($call, $accessAdmin, $opBase) { $call($accessAdmin, 'invoke', $opBase + array('op' => 'add_member', 'args' => array('user' => 501))); });
+check('invoke: duplicate add passes error without journal', $e && $e->errorCode === 'validation_failed' && $accessAdmin->journal()->lastChangesetId() === $lastInvoke);
+$removedMember = $call($accessAdmin, 'invoke', $opBase + array('op' => 'remove_member', 'args' => array('user' => 501)));
+check('invoke: member removal journaled', $removedMember['changed'] === array('members') && !$accessSite->getCount('modUserGroupMember', array('member' => 501)));
+$e = throws('invoke: removing non-member', ApiException::class, function () use ($call, $accessAdmin, $opBase) { $call($accessAdmin, 'invoke', $opBase + array('op' => 'remove_member', 'args' => array('user' => 501))); });
+check('invoke: remove non-member error and no journal', $e && $e->errorCode === 'validation_failed' && $accessAdmin->journal()->lastChangesetId() === $removedMember['changeset_id']);
+$call($accessAdmin, 'undo', array('changeset_id' => $removedMember['changeset_id'], 'confirm' => true));
+check('invoke: undo member removal', $accessSite->getCount('modUserGroupMember', array('member' => 501)) === 1);
+$call($accessAdmin, 'undo', array('changeset_id' => $addedMember['changeset_id'], 'confirm' => true));
+check('invoke: undo member addition', !$accessSite->getCount('modUserGroupMember', array('member' => 501)));
+$opPage = $call($accessAdmin, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Страница группы')));
+$resourceOp = array('kind' => 'resource_group', 'id' => $resourceGroupId, 'args' => array('resource' => $opPage['id']));
+$addedResource = $call($accessAdmin, 'invoke', $resourceOp + array('op' => 'add_resource'));
+check('invoke: resource and group share one changeset', $addedResource['changed'] === array('resources')
+    && count($accessAdmin->journal()->changes(array($addedResource['changeset_id']))) === 2 && end($accessSite->events) === 'OnResourceAddToResourceGroup');
+$e = throws('invoke: duplicate resource membership', ApiException::class, function () use ($call, $accessAdmin, $resourceOp) { $call($accessAdmin, 'invoke', $resourceOp + array('op' => 'add_resource')); });
+check('invoke: duplicate resource does not journal', $e && $e->errorCode === 'validation_failed' && $accessAdmin->journal()->lastChangesetId() === $addedResource['changeset_id']);
+$removedResource = $call($accessAdmin, 'invoke', $resourceOp + array('op' => 'remove_resource'));
+check('invoke: resource removal fires event and journals both', count($accessAdmin->journal()->changes(array($removedResource['changeset_id']))) === 2 && end($accessSite->events) === 'OnResourceRemoveFromResourceGroup');
+$e = throws('invoke: removing non-member resource', ApiException::class, function () use ($call, $accessAdmin, $resourceOp) { $call($accessAdmin, 'invoke', $resourceOp + array('op' => 'remove_resource')); });
+check('invoke: resource refusal', $e && $e->errorCode === 'validation_failed' && $accessAdmin->journal()->lastChangesetId() === $removedResource['changeset_id']);
+$call($accessAdmin, 'undo', array('changeset_id' => $removedResource['changeset_id'], 'confirm' => true));
+check('invoke: undo restores resource relation', in_array($resourceGroupId, $call($accessAdmin, 'get', array('kind' => 'resource', 'id' => $opPage['id']))['relations']['resource_groups'], true));
+$call($accessAdmin, 'undo', array('changeset_id' => $addedResource['changeset_id'], 'confirm' => true));
+check('invoke: undo removes resource relation', !in_array($resourceGroupId, $call($accessAdmin, 'get', array('kind' => 'resource', 'id' => $opPage['id']))['relations']['resource_groups'], true));
+foreach (array(array(), array('user' => '501'), array('user' => 501, 'extra' => true)) as $invalidOp) {
+    $e = throws('invoke: schema validation', ApiException::class, function () use ($call, $accessAdmin, $opBase, $invalidOp) { $call($accessAdmin, 'invoke', $opBase + array('op' => 'add_member', 'args' => $invalidOp)); });
+    check('invoke: schema error path', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'args.') !== false);
+}
+foreach (array(array('kind' => 'user_group', 'op' => 'unknown', 'id' => $groupId), array('kind' => 'role', 'op' => 'member_count', 'id' => $roleId)) as $unknownOp) {
+    $e = throws('invoke: unknown operation', ApiException::class, function () use ($call, $accessAdmin, $unknownOp) { $call($accessAdmin, 'invoke', $unknownOp); });
+    check('invoke: unknown op points to describe', $e && $e->errorCode === 'not_found' && strpos($e->getMessage(), 'modx_describe') !== false);
+}
+$e = throws('invoke: object required', ApiException::class, function () use ($call, $accessAdmin) { $call($accessAdmin, 'invoke', array('kind' => 'user_group', 'op' => 'member_count')); });
+check('invoke: missing object reference', $e && $e->errorCode === 'validation_failed');
+$e = throws('invoke: write scope', ApiException::class, function () use ($call, $accessContext, $opBase) { $call($accessContext('develop'), 'invoke', $opBase + array('op' => 'add_member', 'args' => array('user' => 501))); });
+check('invoke: write denied to develop', $e && $e->errorCode === 'forbidden_scope');
+$accessSite->options['modxmcp.disabled_groups'] = 'access';
+$e = throws('invoke: disabled group', ApiException::class, function () use ($call, $accessAdmin, $opBase) { $call($accessAdmin, 'invoke', $opBase + array('op' => 'member_count')); });
+check('invoke: group disabled is unavailable', $e && $e->errorCode === 'unavailable');
+$accessSite->options['modxmcp.disabled_groups'] = '';
+
+// Exercise the generic object-less contract before real object-less ops land in task 11.
+$invokeFixtureContext = $accessContext();
+$fixtureKind = new class extends ModxMCP\Kind\Kind {
+    public function name() { return 'invoke_fixture'; }
+    public function label() { return 'Invoke fixture'; }
+    public function modelClass() { return 'modUserGroup'; }
+    public function processorPath() { return 'security/group/'; }
+    public function fields() { return (new ModxMCP\Kind\UserGroupKind())->fields(); }
+    public function operations() {
+        return array('read' => array('description' => 'Fixture read.', 'read_only' => true, 'needs_object' => false, 'input' => Schema::obj(), 'handler' => 'read'),
+            'noop' => array('description' => 'Fixture no-op.', 'read_only' => false, 'input' => Schema::obj(), 'handler' => 'noop'));
+    }
+    public function read(Context $context, $object, array $args): array { return array('object_is_null' => $object === null); }
+    public function noop(Context $context, ModxMCP\Write\Transaction $tx, $object, array $args): array { return array(); }
+};
+$fixtureKinds = $invokeFixtureContext->kinds->all();
+$fixtureKinds['invoke_fixture'] = $fixtureKind;
+$fixtureProperty = new ReflectionProperty(ModxMCP\Kind\KindRegistry::class, 'kinds');
+$fixtureProperty->setAccessible(true);
+$fixtureProperty->setValue($invokeFixtureContext->kinds, $fixtureKinds);
+check('invoke: object-less read receives null', $call($invokeFixtureContext, 'invoke', array('kind' => 'invoke_fixture', 'op' => 'read'))['object_is_null']);
+foreach (array(array('id' => $groupId), array('name' => 'any')) as $badReference) {
+    $e = throws('invoke: object-less reference forbidden', ApiException::class, function () use ($call, $invokeFixtureContext, $badReference) {
+        $call($invokeFixtureContext, 'invoke', array('kind' => 'invoke_fixture', 'op' => 'read') + $badReference);
+    });
+    check('invoke: object-less validation code', $e && $e->errorCode === 'validation_failed');
+}
+$noOpState = ModxMCP\Journal\Snapshot::capture($accessSite, $fixtureKind, $groupId);
+$invokeNoop = $call($invokeFixtureContext, 'invoke', array('kind' => 'invoke_fixture', 'op' => 'noop', 'id' => $groupId));
+check('invoke: no-op returns current revision', $invokeNoop['changeset_id'] === null && $invokeNoop['changed'] === array()
+    && $invokeNoop['revision'] === ModxMCP\Journal\Snapshot::revision($noOpState));
 
 // --- Files ---
 use ModxMCP\Files\FileRoot;
