@@ -14,5 +14,7 @@ Quick reference:
 - `modx_resource_tree`, `modx_bulk_resources` — the page tree and bulk page operations.
 - `modx_list_files`, `modx_read_file`, `modx_write_file`, `modx_move_path`,
   `modx_delete_path` — files in media sources; component code read-only.
+- `modx_search`, `modx_replace`, `modx_find_usages` — find and change text across code.
+- `modx_read_log` — the MODX error log; `modx_maintenance` — cache, URIs, locks, trash.
 - `modx_history`, `modx_history_diff`, `modx_checkpoint`, `modx_undo` — the change journal.
 - `modx_request_status` — outcome of a write whose response was lost.

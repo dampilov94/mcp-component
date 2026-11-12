@@ -88,3 +88,18 @@ URI regeneration, permission flushing, cache behavior and purge events on the st
 The real purge processor may skip resources denied by delete policy; `removed` deliberately
 reports the pre-run count as specified, not independently verified deletion count.
 No blocking questions, site operations or push.
+
+## Review
+
+Accepted and merged with the rest of the stack (03–08). Verified on the stand with
+`scripts/stand/check-code-tools.cjs`.
+
+Changes by the architect:
+
+1. `clear_cache` failed on the stand: `modCacheManager::refresh()` returns false for
+   partitions that share a cache key, which is normal. The return value is no longer
+   treated as an error (the brief did not ask for that check).
+2. `empty_trash` reports what was really removed (count before minus count after) and
+   `left_in_trash` when MODX's delete policy kept something — the caveat in the report.
+
+`empty_trash` with `confirm` has not been run on the stand (its trash is empty).

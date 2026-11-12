@@ -100,3 +100,12 @@ Interpretation: `objects` is the per-object array in both preview and real resul
 preview's limit. No other deviations or changes to the previous task's behavior.
 Only fake MODX and local files were checked; verify real processor events, static file
 writes, batch rollback and undo on the stand. No open blocking questions, deployment or push.
+
+## Review
+
+Accepted and merged with the rest of the stack (03–08). Verified on the stand with
+`scripts/stand/check-code-tools.cjs`.
+
+Change by the architect: the case-insensitive replace used `str_ireplace` (ASCII only). It
+now uses a Unicode-aware literal pattern; the replacement text stays literal (`$0`, `\1`
+are not interpreted).

@@ -98,6 +98,27 @@ Rules that keep a live site safe:
   `modx_request_status` with the reported `request_id`, or retry the identical call with
   that ID as `_request_id`.
 
+## Finding and replacing across code
+
+- `modx_search {query}` — literal search in the code of chunks, snippets, templates and
+  plugins (add `kinds: ["resource"]` for page content). Returns line numbers you can use
+  with `modx_view_code` and `modx_edit_code`.
+- `modx_find_usages {kind, id|name}` — where a chunk, snippet, TV, template, category or
+  page is used. Run it before renaming or deleting. Matching is textual: a name built at
+  run time is not found.
+- `modx_replace {find, replacement, dry_run: true}` shows what would change and returns
+  `revisions`; call it again with `expected_revisions: <that map>` to apply. Everything is
+  one changeset: if any object changed in between or the result would break PHP, nothing
+  is written.
+
+## Checking the result
+
+- `modx_read_log` returns the tail of the MODX error log and an `end_offset`. Read it
+  before a risky change, then call it with `after_offset` afterwards to see only new errors.
+- `modx_maintenance {operation}` (admin): `clear_cache`, `refresh_uris`, `remove_locks`,
+  `flush_permissions`, `empty_trash`. Writes already refresh the cache. `empty_trash` is
+  permanent and cannot be undone.
+
 ## Undo
 
 - `modx_checkpoint {label}` before a larger task.

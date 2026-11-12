@@ -94,3 +94,10 @@ one line; matches contains the first five occurrences in source order. Truncated
 use the same scanned-subset ordering as search. No changes to delete or dependency graphs.
 Only fake MODX/local files were exercised; verify real xPDO relation counts, resource
 prefiltering and static reads on the stand. No blocking questions, deployment or push.
+
+## Review
+
+Accepted and merged with the rest of the stack (03–08). Verified on the stand with
+`scripts/stand/check-code-tools.cjs`.
+
+No changes.

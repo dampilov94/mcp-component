@@ -51,15 +51,17 @@ final class LogReader {
                 $raw = rtrim(substr($window, $offset, $end - $offset), "\r\n");
                 if ($raw === '') { continue; }
                 $raw = json_decode(json_encode($raw, JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR), true);
-                if ($contains !== '' && stripos($raw, $contains) === false) { continue; }
+                if ($contains !== '' && \ModxMCP\Code\CodeSearch::position($raw, $contains, false) === false) { continue; }
                 $entry = array();
                 if (preg_match('/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\][ \t]*(.*)$/s', $raw, $m)) {
                     $entry['time'] = $m[1];
                     $raw = $m[2];
-                    if (preg_match('/^\(([A-Za-z]+) @ ([^\r\n]*?)\)[ \t]*(.*)$/s', $raw, $parts)) {
+                    // MODX writes "(LEVEL @ file : line)" or "(LEVEL in Class::method @ file : line)".
+                    if (preg_match('/^\(([A-Za-z]+)(?: in ([^\r\n@]*?))? @ ([^\r\n]*?)\)[ \t]*(.*)$/s', $raw, $parts)) {
                         $entry['level'] = $parts[1];
-                        $entry['location'] = $parts[2];
-                        $raw = $parts[3];
+                        if ($parts[2] !== '') { $entry['in'] = $parts[2]; }
+                        $entry['location'] = $parts[3];
+                        $raw = $parts[4];
                     }
                 }
                 $chars = preg_split('//u', $raw, -1, PREG_SPLIT_NO_EMPTY);

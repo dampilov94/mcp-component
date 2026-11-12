@@ -1,7 +1,6 @@
 <?php
 namespace ModxMCP\Action;
 
-use ModxMCP\ApiException;
 use ModxMCP\Auth\Scope;
 use ModxMCP\Context;
 use ModxMCP\Kind\Objects;
@@ -45,11 +44,16 @@ final class MaintenanceAction extends Action {
             }
             Objects::process($context->modx, 'resource/emptyrecyclebin', array());
             $context->warnings[] = 'Resources removed from the trash cannot be restored by modx_undo.';
-            $result['removed'] = $count;
+            // MODX skips resources its delete policy protects, so report what really went.
+            $left = (int) $context->modx->getCount('modResource', array('deleted' => 1));
+            $result['removed'] = $count - $left;
+            if ($left > 0) { $result['left_in_trash'] = $left; }
         } else {
             if ($plan) { return $result; }
             if ($op === 'clear_cache') {
-                if ($context->modx->getCacheManager()->refresh() === false) { throw new ApiException('validation_failed', 'MODX could not refresh the cache.'); }
+                // The return value is not a failure signal: MODX reports false for partitions
+                // that share a cache key, which is normal on real sites.
+                $context->modx->getCacheManager()->refresh();
             } else {
                 $processors = array('refresh_uris' => 'system/refreshuris', 'remove_locks' => 'system/remove_locks', 'flush_permissions' => 'security/access/flush');
                 Objects::process($context->modx, $processors[$op], array());

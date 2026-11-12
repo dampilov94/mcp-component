@@ -33,8 +33,14 @@ final class CodeSearch {
             if (count($page) < 200) { break; }
         }
     }
+    /** Byte offset of the first occurrence, or false. Case folding covers non-ASCII text (e.g. Cyrillic). */
     public static function position($text, $query, $sensitive) {
-        return $sensitive ? strpos($text, $query) : stripos($text, $query);
+        if ($sensitive) { return strpos($text, $query); }
+        if (!function_exists('mb_stripos') || preg_match('//u', $text) !== 1 || preg_match('//u', $query) !== 1) {
+            return stripos($text, $query);
+        }
+        $at = mb_stripos($text, $query, 0, 'UTF-8');
+        return $at === false ? false : strlen(mb_substr($text, 0, $at, 'UTF-8'));
     }
     public static function excerpt($line, $byteOffset) {
         $trimmed = ltrim($line);

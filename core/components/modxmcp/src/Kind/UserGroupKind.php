@@ -22,7 +22,16 @@ final class UserGroupKind extends Kind {
         );
     }
     public function relationSpecs() {
-        return array('members' => array('class' => 'modUserGroupMember', 'fk' => 'user_group',
+        $relations = array('members' => array('class' => 'modUserGroupMember', 'fk' => 'user_group',
             'present' => array('member', 'role'), 'description' => 'Users in the group with their role ids.'));
+        // Access rules granted to the group go when it is deleted; keep them so an undo is complete.
+        foreach (array(
+            'acl_contexts' => 'modAccessContext', 'acl_resource_groups' => 'modAccessResourceGroup',
+            'acl_categories' => 'modAccessCategory', 'acl_media_sources' => 'sources.modAccessMediaSource',
+            'acl_namespaces' => 'modAccessNamespace',
+        ) as $name => $class) {
+            $relations[$name] = array('class' => $class, 'fk' => 'principal', 'where' => array('principal_class' => 'modUserGroup'), 'delete_only' => true);
+        }
+        return $relations;
     }
 }

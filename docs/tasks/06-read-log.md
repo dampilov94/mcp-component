@@ -89,3 +89,15 @@ Reader tests use real local files; the action was verified only with fake MODX. 
 configured real cache path and production log formats on the stand. Rotation with a file
 that regrows beyond the old offset is inherently undetectable with a size-only cursor.
 No blocking questions, site operations or push.
+
+## Review
+
+Accepted and merged with the rest of the stack (03–08). Verified on the stand with
+`scripts/stand/check-code-tools.cjs`.
+
+Changes by the architect:
+
+1. The real MODX header is often `(LEVEL in Class::method @ file : line)`. The parser only
+   knew `(LEVEL @ …)`, so on the stand every entry came back unparsed. It now reads both
+   and returns the method as `in`. The brief described the format incompletely.
+2. `contains` is Unicode-aware, like search.

@@ -114,3 +114,14 @@ fit entirely in the specified excerpt; the window includes their start. No other
 Only fake MODX/local files were exercised. Check real xPDO paging, MySQL LIKE escaping and
 static-file reads on the stand. No site operations or pushes. Open question: confirm the
 truncated-subset ordering interpretation above.
+
+## Review
+
+Accepted and merged with the rest of the stack (03–08). Verified on the stand with
+`scripts/stand/check-code-tools.cjs`.
+
+The truncated-subset ordering in the report is confirmed.
+
+Change by the architect: case-insensitive matching used `stripos`, which folds ASCII only,
+so a Russian query did not match the same word in another case. `CodeSearch::position()` is
+now Unicode-aware. Only real content showed this; the fake's test data was ASCII.

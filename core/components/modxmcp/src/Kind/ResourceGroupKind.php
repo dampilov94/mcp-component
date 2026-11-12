@@ -18,7 +18,12 @@ final class ResourceGroupKind extends Kind {
         );
     }
     public function relationSpecs() {
-        return array('resources' => array('class' => 'modResourceGroupResource', 'fk' => 'document_group',
-            'present' => 'document', 'description' => 'Ids of resources in the group.'));
+        return array(
+            'resources' => array('class' => 'modResourceGroupResource', 'fk' => 'document_group',
+                'present' => 'document', 'description' => 'Ids of resources in the group.'),
+            // Rules and TV restrictions that point at the group go with it; keep them for undo.
+            'acl' => array('class' => 'modAccessResourceGroup', 'fk' => 'target', 'delete_only' => true),
+            'tv_access' => array('class' => 'modTemplateVarResourceGroup', 'fk' => 'documentgroup', 'delete_only' => true),
+        );
     }
 }

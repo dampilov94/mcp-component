@@ -119,3 +119,16 @@ Real group/resource-group deletion also cascades ACLs and other relations (inclu
 customization or TV access links); these were deliberately not added to snapshots because
 this brief explicitly excludes them. Their restoration remains outside this task.
 No blocking questions, deployments, pushes or main changes after the initial pull.
+
+## Review
+
+Accepted and merged with the rest of the stack (03–08). Verified on the stand with
+`scripts/stand/check-code-tools.cjs`.
+
+The source-driven deviations in the report are confirmed.
+
+Change by the architect: the report rightly noted that deleting a group also removes access
+rules that are not in the snapshot. They are now kept as delete-only relations, so an undo
+restores them: for `user_group` the ACL rows of contexts, resource groups, categories,
+media sources and namespaces; for `resource_group` its ACL rows and TV access rows. Verified
+on the stand only for groups without such rows.

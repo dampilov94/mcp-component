@@ -90,6 +90,20 @@ After stage 3:
   the newest changeset always stays. Unreferenced snapshots are collected after a one-hour
   grace period. Runs at most hourly after a write and can never fail the write.
 
+- `modx_search`: literal, Unicode-aware search in the effective code of elements (and resource
+  content on request) with line numbers.
+- `modx_replace`: literal replace across element code in two steps — a dry run returns the
+  affected objects and their revisions, the real run applies exactly those as one changeset
+  after checking revisions and PHP syntax.
+- `modx_find_usages`: where a chunk, snippet, TV, template, category or resource is used
+  (tags, API calls, snippet properties, Fenom).
+- `modx_read_log`: bounded tail of the MODX error log with a byte cursor for "only new entries".
+- `modx_maintenance` (admin): clear_cache, refresh_uris, remove_locks, flush_permissions and
+  empty_trash (permanent, needs confirm). Not journaled.
+- Kinds `user_group`, `role`, `resource_group` in the toggleable `access` group; writes need
+  `admin`. Members, resources and access rules are part of the snapshot, so a deleted group
+  comes back complete.
+
 - Offline tests (`npm test`): pure PHP logic, the real kernel behind PHP's built-in server with
   stubbed MODX classes, and the Node bridge end to end. CI runs them.
 

@@ -1280,6 +1280,27 @@ $graceContext->blobs()->put('reused content');
 clearstatcache(true, $reusedPath);
 check('blobs: storing existing content again refreshes its age', filemtime($reusedPath) > time() - 60);
 
+// Review additions: case-insensitive matching must work for non-ASCII text.
+use ModxMCP\Code\CodeSearch;
+check('search: Cyrillic is matched regardless of case', CodeSearch::position('<h1>Привет, мир</h1>', 'привет', false) === 4
+    && CodeSearch::position('<h1>Привет</h1>', 'привет', true) === false && CodeSearch::position('abc DEF', 'def', false) === 4);
+list($cyrSite, $cyrContext) = $retentionSite();
+$call($cyrContext, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'cyr', 'content' => "ЗАГОЛОВОК и заголовок\nЦена: \$1")));
+$cyrDry = $call($cyrContext, 'replace', array('find' => 'заголовок', 'replacement' => 'Title \\1 $0', 'case_sensitive' => false, 'dry_run' => true));
+check('replace: Cyrillic case-insensitive preview', $cyrDry['total_occurrences'] === 2);
+$call($cyrContext, 'replace', array('find' => 'заголовок', 'replacement' => 'Title \\1 $0', 'case_sensitive' => false, 'expected_revisions' => (array) $cyrDry['revisions']));
+check('replace: the replacement text is literal', $cyrSite->row('modChunk', 1)['snippet'] === "Title \\1 \$0 и Title \\1 \$0\nЦена: \$1");
+check('search: Cyrillic through the tool', $call($cyrContext, 'search', array('query' => 'ЦЕНА'))['objects'] === 1);
+
+$inLog = sys_get_temp_dir() . '/modxmcp-log-' . bin2hex(random_bytes(6)) . '.log';
+file_put_contents($inLog, "[2026-11-11 20:06:18] (ERROR in modRestCurlClient::__construct @ /var/www/site/core/model/modx/rest/modrestcurlclient.class.php : 26) cURL is missing\n"
+    . "[2026-11-11 20:06:19] (ERROR @ /var/www/site/index.php : 5) plain\n");
+$inEntries = ModxMCP\Verify\LogReader::tail($inLog)['entries'];
+check('log: the "LEVEL in Class::method @ file : line" header is parsed', $inEntries[0] === array('time' => '2026-11-11 20:06:18', 'level' => 'ERROR',
+    'in' => 'modRestCurlClient::__construct', 'location' => '/var/www/site/core/model/modx/rest/modrestcurlclient.class.php : 26', 'message' => 'cURL is missing')
+    && $inEntries[1] === array('time' => '2026-11-11 20:06:19', 'level' => 'ERROR', 'location' => '/var/www/site/index.php : 5', 'message' => 'plain'));
+unlink($inLog);
+
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));
 check('canonical: list order is kept', Kernel::canonical(array(3, 1, 2)) === array(3, 1, 2));

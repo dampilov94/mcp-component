@@ -35,9 +35,17 @@ final class ReplaceAction extends WriteAction {
             'revisions' => Schema::obj(array(), array(), true)), array('objects', 'total_occurrences'), true);
     }
     private function replace($code, array $args, &$count) {
-        return !isset($args['case_sensitive']) || $args['case_sensitive']
-            ? str_replace($args['find'], $args['replacement'], $code, $count)
-            : str_ireplace($args['find'], $args['replacement'], $code, $count);
+        if (!isset($args['case_sensitive']) || $args['case_sensitive']) {
+            return str_replace($args['find'], $args['replacement'], $code, $count);
+        }
+        // str_ireplace folds ASCII only; a Unicode-aware pattern also matches Cyrillic in any case.
+        if (preg_match('//u', $code) !== 1 || preg_match('//u', $args['find']) !== 1) {
+            return str_ireplace($args['find'], $args['replacement'], $code, $count);
+        }
+        $replacement = $args['replacement'];
+        $new = preg_replace_callback('/' . preg_quote($args['find'], '/') . '/iu', function () use ($replacement) { return $replacement; }, $code, -1, $count);
+        if ($new === null) { throw new \RuntimeException('Replacement failed on this text.'); }
+        return $new;
     }
     public function run(array $args, Context $context) {
         $kinds = CodeSearch::kinds($context, isset($args['kinds']) ? $args['kinds'] : null, true);
