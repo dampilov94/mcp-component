@@ -140,7 +140,7 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
     assert.equal(caps.body.result.integrations.length, 3);
 
     const kinds = await call(read, "describe");
-    assert.equal(kinds.body.result.kinds.length, 8);
+    assert.equal(kinds.body.result.kinds.length, 11);
     const plugin = await call(read, "describe", { kind: "plugin" });
     assert.ok(plugin.body.result.fields.some((field) => field.name === "content" && field.code));
     const missing = await call(read, "describe", { kind: "nope" });

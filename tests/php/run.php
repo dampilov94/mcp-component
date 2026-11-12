@@ -133,7 +133,7 @@ check('manifest: encodes', is_string(json_encode($tools, JSON_THROW_ON_ERROR)));
 
 $describe = $read->actions->get('describe');
 $list = $describe->run(array(), $read);
-check('describe: lists element kinds', array_column($list['kinds'], 'kind') === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source'));
+check('describe: lists element kinds', array_column($list['kinds'], 'kind') === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source', 'user_group', 'role', 'resource_group'));
 $chunk = $describe->run(array('kind' => 'chunk'), $read);
 $fields = array_column($chunk['fields'], null, 'name');
 check('describe: chunk exposes content as code', !empty($fields['content']['code']) && $fields['name']['required'] === true && $fields['id']['read_only'] === true);
@@ -895,6 +895,115 @@ check('maintenance: confirmed purge removes exactly trashed pages and relations'
     && end($maintenanceSite->maintenanceProcessors) === 'resource/emptyrecyclebin');
 check('maintenance: purge warns and never journals', $maintenanceAdmin->warnings === array('Resources removed from the trash cannot be restored by modx_undo.')
     && $maintenanceAdmin->journal()->lastChangesetId() === $maintenanceHistory);
+
+// Access kinds: only admin writes; ordinary read scopes and group gates still apply.
+$accessDir = $siteDir . '/access';
+mkdir($accessDir . '/core', 0700, true);
+$accessSite = fakeSite($accessDir);
+$accessContext = function ($scope = 'admin', array $extra = array()) use ($accessSite, $dev) {
+    $context = new Context($accessSite, $extra + array('scope' => $scope) + $dev->token, $dev->corePath, function () {});
+    $context->sessionId = 'access-session-0001';
+    return $context;
+};
+$accessAdmin = $accessContext();
+$accessSite->store('modUserGroup', array('id' => 1, 'name' => 'Renamed core group', 'description' => '', 'parent' => 0, 'rank' => 0, 'dashboard' => 1));
+$accessSite->store('modUserGroupRole', array('id' => 1, 'name' => 'Super User', 'description' => '', 'authority' => 0));
+$accessSite->store('modUserGroupRole', array('id' => 2, 'name' => 'Member', 'description' => '', 'authority' => 9999));
+$accessCreated = array();
+foreach (array('user_group', 'role', 'resource_group') as $kindName) {
+    $fields = array('name' => 'Test ' . $kindName);
+    if ($kindName === 'user_group') { $fields += array('description' => 'group description', 'parent' => 0, 'rank' => 7, 'dashboard' => 2); }
+    if ($kindName === 'role') { $fields += array('description' => 'role description', 'authority' => 500); }
+    $made = $call($accessAdmin, 'create', array('kind' => $kindName, 'fields' => $fields));
+    $accessCreated[$kindName] = $made;
+    $gotAccess = $call($accessAdmin, 'get', array('kind' => $kindName, 'id' => $made['id']));
+    check('access: create/get ' . $kindName, $gotAccess['fields']['name'] === $fields['name'] && $gotAccess['revision'] === $made['revision']
+        && $made['changeset_id'] !== null);
+    foreach ($fields as $field => $value) { check('access: field ' . $kindName . '.' . $field, $gotAccess['fields'][$field] === $value); }
+    $changedAccess = $call($accessAdmin, 'update', array('kind' => $kindName, 'id' => $made['id'], 'fields' => array('name' => 'Updated ' . $kindName)));
+    check('access: update/list ' . $kindName, $changedAccess['changeset_id'] !== null
+        && $call($accessAdmin, 'list', array('kind' => $kindName, 'query' => 'Updated'))['items'][0]['name'] === 'Updated ' . $kindName);
+    $duplicatedAccess = $call($accessAdmin, 'duplicate', array('kind' => $kindName, 'id' => $made['id']));
+    check('access: duplicate ' . $kindName, $duplicatedAccess['name'] === 'Updated ' . $kindName . ' copy' && $duplicatedAccess['id'] !== $made['id']);
+    $call($accessAdmin, 'delete', array('kind' => $kindName, 'id' => $duplicatedAccess['id']));
+    check('access: delete ' . $kindName, $accessSite->row($accessAdmin->kinds->get($kindName)->modelClass(), $duplicatedAccess['id']) === null);
+    $beforeError = $accessAdmin->journal()->lastChangesetId();
+    $e = throws('access: duplicate names rejected', ApiException::class, function () use ($call, $accessAdmin, $kindName) {
+        $call($accessAdmin, 'create', array('kind' => $kindName, 'fields' => array('name' => 'Updated ' . $kindName)));
+    });
+    check('access: duplicate error journals nothing', $e && $e->errorCode === 'validation_failed' && $accessAdmin->journal()->lastChangesetId() === $beforeError);
+    foreach (array('read', 'content', 'develop') as $scope) {
+        $reader = $accessContext($scope);
+        check('access: lower scope reads ' . $kindName, $call($reader, 'list', array('kind' => $kindName))['total'] > 0
+            && $call($reader, 'get', array('kind' => $kindName, 'id' => $made['id']))['id'] === $made['id']);
+        foreach (array('create', 'update', 'delete', 'duplicate') as $action) {
+            $e = throws('access: lower scope write refused', ApiException::class, function () use ($call, $reader, $kindName, $made, $action) {
+                $args = array('kind' => $kindName, 'id' => $made['id']);
+                if ($action === 'create') { $args = array('kind' => $kindName, 'fields' => array('name' => 'Forbidden')); }
+                if ($action === 'update') { $args['fields'] = array('name' => 'Forbidden'); }
+                $call($reader, $action, $args);
+            });
+            check('access: write scope is forbidden_scope', $e && $e->errorCode === 'forbidden_scope');
+        }
+    }
+}
+foreach (array('disabled_group', 'denied_for_token') as $reason) {
+    $accessSite->options['modxmcp.disabled_groups'] = $reason === 'disabled_group' ? 'access' : '';
+    $blockedAccess = $accessContext('admin', array('denied_groups' => $reason === 'denied_for_token' ? array('access') : array()));
+    $visible = array_column($call($blockedAccess, 'describe')['kinds'], 'kind');
+    $capsAccess = $call($blockedAccess, 'capabilities');
+    $unavailableAccess = array_column($capsAccess['unavailable_kinds'], 'reason', 'name');
+    foreach ($accessCreated as $kindName => $made) {
+        check('access: hidden kind and reason ' . $reason, !in_array($kindName, $visible, true)
+            && !in_array($kindName, $capsAccess['kinds'], true) && $unavailableAccess[$kindName] === $reason);
+        foreach (array('describe', 'list', 'get', 'create', 'update', 'delete', 'duplicate', 'view_code', 'edit_code', 'find_usages', 'search', 'replace') as $action) {
+            $args = array('kind' => $kindName, 'id' => $made['id']);
+            if ($action === 'describe' || $action === 'list') { unset($args['id']); }
+            if ($action === 'create') { $args = array('kind' => $kindName, 'fields' => array('name' => 'Blocked')); }
+            if ($action === 'update') { $args['fields'] = array('name' => 'Blocked'); }
+            if ($action === 'edit_code') { $args['edits'] = array(array('start_line' => 1, 'replacement' => 'Blocked')); }
+            if ($action === 'search') { $args = array('query' => 'Blocked', 'kinds' => array($kindName)); }
+            if ($action === 'replace') { $args = array('find' => 'Blocked', 'replacement' => '', 'kinds' => array($kindName), 'dry_run' => true); }
+            $e = throws('access: blocked kind tool ' . $action, ApiException::class, function () use ($call, $blockedAccess, $action, $args) { $call($blockedAccess, $action, $args); });
+            check('access: blocked kind is unavailable', $e && $e->errorCode === 'unavailable');
+        }
+    }
+}
+$accessSite->options['modxmcp.disabled_groups'] = '';
+$groupId = $accessCreated['user_group']['id'];
+$roleId = $accessCreated['role']['id'];
+$resourceGroupId = $accessCreated['resource_group']['id'];
+$memberRows = array(array('id' => 11, 'user_group' => $groupId, 'member' => 101, 'role' => $roleId, 'rank' => 2),
+    array('id' => 12, 'user_group' => $groupId, 'member' => 102, 'role' => 2, 'rank' => 3));
+$resourceRows = array(array('id' => 21, 'document_group' => $resourceGroupId, 'document' => 201), array('id' => 22, 'document_group' => $resourceGroupId, 'document' => 202));
+foreach ($memberRows as $row) { $accessSite->store('modUserGroupMember', $row); }
+foreach ($resourceRows as $row) { $accessSite->store('modResourceGroupResource', $row); }
+foreach (array('user_group' => array('members', $groupId, 'modUserGroupMember'), 'resource_group' => array('resources', $resourceGroupId, 'modResourceGroupResource')) as $kindName => $info) {
+    list($relationName, $objectId, $relationClass) = $info;
+    $withRelations = $call($accessAdmin, 'get', array('kind' => $kindName, 'id' => $objectId));
+    check('access: related rows exposed ' . $kindName, $withRelations['relations'][$relationName] === ($kindName === 'user_group'
+        ? array(array('member' => 101, 'role' => $roleId), array('member' => 102, 'role' => 2)) : array(201, 202)));
+    $e = throws('access: relations remain read-only', ApiException::class, function () use ($call, $accessAdmin, $kindName, $objectId, $relationName) {
+        $call($accessAdmin, 'update', array('kind' => $kindName, 'id' => $objectId, 'relations' => array($relationName => array())));
+    });
+    check('access: relation write refused', $e && $e->errorCode === 'validation_failed');
+    $removedAccess = $call($accessAdmin, 'delete', array('kind' => $kindName, 'id' => $objectId));
+    check('access: delete cascades links', $accessSite->getCount($relationClass) === 0);
+    $call($accessAdmin, 'undo', array('changeset_id' => $removedAccess['changeset_id'], 'confirm' => true));
+    check('access: undo restores id and complete relation state', $call($accessAdmin, 'get', array('kind' => $kindName, 'id' => $objectId))['revision'] === $withRelations['revision']
+        && $accessSite->getCount($relationClass) === 2);
+}
+$namedAdmin = $call($accessAdmin, 'create', array('kind' => 'user_group', 'fields' => array('name' => 'Administrator')));
+foreach (array(array('user_group', 1), array('user_group', $namedAdmin['id']), array('role', 1), array('role', 2), array('role', $roleId)) as $protectedAccess) {
+    $lastAccess = $accessAdmin->journal()->lastChangesetId();
+    $e = throws('access: MODX protected/assigned object refusal', ApiException::class, function () use ($call, $accessAdmin, $protectedAccess) {
+        $call($accessAdmin, 'delete', array('kind' => $protectedAccess[0], 'id' => $protectedAccess[1]));
+    });
+    check('access: refusal is validation_failed with no changeset', $e && $e->errorCode === 'validation_failed' && $accessAdmin->journal()->lastChangesetId() === $lastAccess);
+}
+$call($accessAdmin, 'update', array('kind' => 'role', 'id' => 1, 'fields' => array('name' => 'Renamed ordinary role')));
+$call($accessAdmin, 'delete', array('kind' => 'role', 'id' => 1));
+check('access: role protection follows names, not id, as in MODX', $accessSite->row('modUserGroupRole', 1) === null);
 
 // --- Files ---
 use ModxMCP\Files\FileRoot;
