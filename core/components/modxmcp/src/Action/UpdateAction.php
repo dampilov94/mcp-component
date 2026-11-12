@@ -39,7 +39,7 @@ final class UpdateAction extends WriteAction {
         $kind->assertUpdatable($context->modx, $object, $columns);
         $kind->assertKeepsSecret($context, $object, $columns, 'update');
         $relations = isset($args['relations']) ? $args['relations'] : array();
-        Objects::assertWritableRelations($kind, $relations);
+        Objects::assertWritableRelations($kind, $relations, $context);
         if (!$columns && !$relations) { throw new ApiException('validation_failed', 'Nothing to change: give fields or relations.'); }
         $dry = $this->isDryRun($args, $context);
 

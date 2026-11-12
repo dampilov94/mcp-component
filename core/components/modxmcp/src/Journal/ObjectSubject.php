@@ -16,6 +16,7 @@ final class ObjectSubject implements Subject {
     public function __construct(\modX $modx, Kind $kind, $id) {
         $this->modx = $modx;
         $this->kind = $kind;
+        $kind->prepare($modx);
         $this->id = $kind->normalizeKey($id);
     }
 
@@ -71,7 +72,8 @@ final class ObjectSubject implements Subject {
                 $out[$name] = array('old' => '[hidden]', 'new' => '[hidden]');
             } elseif (isset($definitions[$name]) && $definitions[$name]['type'] === 'object') {
                 // A JSON object stored as text is shown as the object it is, keys sorted.
-                $out[$name] = array('old' => $old === null ? null : Kind::objectValue($old), 'new' => $new === null ? null : Kind::objectValue($new));
+                $shown = !empty($definitions[$name]['json']) ? array(Kind::class, 'jsonValue') : array(Kind::class, 'objectValue');
+                $out[$name] = array('old' => $old === null ? null : call_user_func($shown, $old), 'new' => $new === null ? null : call_user_func($shown, $new));
             } else {
                 $out[$name] = array('old' => $old, 'new' => $new);
             }

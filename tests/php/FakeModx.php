@@ -69,6 +69,9 @@ class FakeObject {
         $code = modX::codeColumn($this->class);
         $pk = modX::primaryKey($this->class);
         $stored = $this->modx->rowOf($this->class, $this->fields);
+        // miniShop2 classes whose save() does more than store the row.
+        if ($this->class === 'msProductData') { $this->modx->ms2PrepareData($this); }
+        $wasProduct = $this->class === 'modResource' && $stored && $stored['class_key'] === 'msProduct';
         if ($pk === 'id' && empty($this->fields['id'])) { $this->fields['id'] = $this->modx->nextId($this->class); }
         // Like modElement::save(): the static file is written only when the column changed.
         if ($code && !empty($this->fields['static']) && !empty($this->fields['static_file'])
@@ -83,16 +86,41 @@ class FakeObject {
         }
         $this->modx->store($this->class, $this->fields);
         $this->isNew = false;
+        if ($this->class === 'msProductData') { $this->modx->ms2DataSaved($this); }
+        if ($this->class === 'msCategoryOption') { $this->modx->ms2LinkSaved($this->fields); }
+        if ($this->class === 'modResource') { $this->modx->ms2ProductSaved($this->fields, $wasProduct); }
         return true;
     }
     public function remove() {
-        $this->modx->drop($this->class, $this->fields);
+        if ($this->class === 'msProductData') { $this->modx->ms2DataRemoving($this->fields); }
+        if ($this->class === 'msCategoryOption') { $this->modx->ms2LinkRemoving($this->fields); }
+        if ($this->class === 'modResource' && isset($this->fields['class_key']) && $this->fields['class_key'] === 'msProduct') { $this->modx->ms2ProductRemoving($this->fields); }
+        // xPDO removes the composites first and the object last; the miniShop2 option's links need the option to find its key.
+        if ($this->class !== 'msOption') { $this->modx->drop($this->class, $this->fields); }
         foreach (modX::$cascades as $spec) {
             if ($spec[0] !== $this->class) { continue; }
             // Like xPDO: each composite row is removed as an object, so its own composites go too (child policies).
             foreach ($this->modx->getCollection($spec[1], array($spec[2] => $this->fields[isset($spec[4]) ? $spec[4] : 'id']) + $spec[3]) as $child) { $child->remove(); }
         }
+        if ($this->class === 'msOption') { $this->modx->drop($this->class, $this->fields); }
         return true;
+    }
+}
+
+/**
+ * A resource of class msProduct as xPDO loads it once the miniShop2 package is registered: toArray() mixes in the product
+ * data (and the vendor), like msProduct::toArray(); getResourceFieldsNames() lists the columns of the resource itself.
+ */
+class FakeProductObject extends FakeObject {
+    public $_fields;
+    public function __construct(modX $modx, $class, array $fields, $isNew) {
+        parent::__construct($modx, $class, $fields, $isNew);
+        $this->_fields = &$this->fields;
+    }
+    public function getResourceFieldsNames() { return array_keys($this->fields); }
+    public function toArray($prefix = '', $raw = false) {
+        $data = $this->xpdo->getObject('msProductData', array('id' => $this->fields['id']));
+        return $this->fields + ($data ? $data->fields : array()) + array('vendor.id' => '0', 'vendor.name' => '');
     }
 }
 
@@ -112,13 +140,25 @@ class FakeQuery {
         $this->criteria = (array) $criteria + $this->criteria;
         return $this;
     }
+    public $modx; public $selected = array();
+    public function select($columns) { $this->selected = (array) $columns; return $this; }
     public function __call($name, $arguments) { return $this; }
-    public function prepare() { return true; }
+    public function prepare() {
+        // Capabilities asks which namespaces exist: the first selected column of the matching rows.
+        if ($this->class === 'modNamespace' && $this->modx && $this->selected) {
+            $rows = array();
+            foreach ($this->modx->getCollection('modNamespace', $this) as $namespace) { $rows[] = $namespace->get(reset($this->selected)); }
+            $this->stmt = new FakeStatement($rows);
+        }
+        return true;
+    }
 }
 class FakeStatement {
+    private $rows;
+    public function __construct(array $rows = array()) { $this->rows = $rows; }
     public function execute() { return true; }
     public function fetch() { return false; }
-    public function fetchColumn() { return false; }
+    public function fetchColumn() { return $this->rows ? array_shift($this->rows) : false; }
 }
 class FakeResponse {
     private $error; private $object;
@@ -150,6 +190,177 @@ class xPDO {
     public function prepare($sql) { return $this->pdo->prepare($sql); }
     public function exec($sql) { return $this->pdo->exec($sql); }
     public function lastInsertId() { return $this->pdo->lastInsertId(); }
+}
+
+/**
+ * Stand-in for the parts of miniShop2 3.0.7 the component relies on (classes msProductData, msProductOption,
+ * msCategoryMember, msOption, msCategoryOption and the processors of options): what their save() and remove() do beyond
+ * storing the row, as read in the source. Active only while the package is registered (addPackage).
+ */
+trait FakeMiniShop2 {
+    public $ms2Calls = array();
+    private static $ms2Json = array('tags', 'color', 'size');
+    private static $ms2Reserved = 'id|type|contentType|pagetitle|longtitle|description|alias|link_attributes|published|pub_date|unpub_date|parent|isfolder|introtext|content|richtext|template|menuindex|searchable|cacheable|createdby|createdon|editedby|editedon|deleted|deletedby|deletedon|publishedon|publishedby|menutitle|donthit|privateweb|privatemgr|content_dispo|hidemenu|class_key|context_key|content_type|uri|uri_override|hide_children_in_tree|show_in_tree|article|price|old_price|weight|image|thumb|vendor|made_in|new|popular|favorite|tags|color|size|source|action';
+
+    private function ms2On() { return isset($this->packages['minishop2']); }
+
+    /** msProductData::prepareObject(): defaults of a new row (with the default media source whatever was given), clean lists, float prices. */
+    public function ms2PrepareData(FakeObject $data) {
+        if (!$this->ms2On()) { return; }
+        if ($data->isNew) {
+            foreach (array('article' => null, 'price' => '0', 'old_price' => '0', 'weight' => '0', 'image' => null, 'thumb' => null, 'vendor' => '0', 'made_in' => '',
+                'new' => '0', 'popular' => '0', 'favorite' => '0', 'tags' => null, 'color' => null, 'size' => null, 'source' => '1') as $column => $default) {
+                if (!array_key_exists($column, $data->fields)) { $data->fields[$column] = $default; }
+            }
+            $data->fields['source'] = (string) $this->getOption('ms2_product_source_default', null, 1);
+        }
+        foreach (self::$ms2Json as $column) {
+            $value = isset($data->fields[$column]) ? $data->fields[$column] : null;
+            if (is_string($value)) { $value = json_decode($value, true); }
+            if (!is_array($value)) { $data->fields[$column] = null; continue; }
+            if ($value) {
+                $clean = array();
+                foreach ($value as $item) { $item = trim((string) $item); if ($item !== '' && !in_array($item, $clean, true)) { $clean[] = $item; } }
+                $value = $clean ? $clean : null;
+            }
+            $data->fields[$column] = $value === null ? null : json_encode($value);
+        }
+        foreach (array('price', 'old_price', 'weight') as $column) { $data->fields[$column] = (string) (float) (isset($data->fields[$column]) ? $data->fields[$column] : 0); }
+    }
+
+    /** msProductData::saveProductOptions(): the JSON columns are copied into option values (their rows are deleted first). */
+    public function ms2DataSaved(FakeObject $data) {
+        if (!$this->ms2On()) { return; }
+        $id = $data->fields['id'];
+        $this->removeCollection('msProductOption', array('product_id' => $id, 'key:IN' => self::$ms2Json));
+        foreach (self::$ms2Json as $column) {
+            $list = isset($data->fields[$column]) ? json_decode($data->fields[$column], true) : null;
+            foreach (is_array($list) ? $list : array() as $value) { $this->store('msProductOption', array('product_id' => $id, 'key' => $column, 'value' => $value)); }
+        }
+    }
+
+    /** msProductData::remove(): the product's option values and category memberships go with the data. */
+    public function ms2DataRemoving(array $fields) {
+        if (!$this->ms2On()) { return; }
+        $this->removeCollection('msProductOption', array('product_id' => $fields['id']));
+        $this->removeCollection('msCategoryMember', array('product_id' => $fields['id']));
+    }
+
+    /** msProduct::save(): a product always has a data row, saved with it; a resource that stops being a product loses it. */
+    public function ms2ProductSaved(array $fields, $wasProduct) {
+        if (!$this->ms2On()) { return; }
+        $data = $this->getObject('msProductData', array('id' => $fields['id']));
+        if (isset($fields['class_key']) && $fields['class_key'] === 'msProduct') {
+            // fake_ms2_no_data: a create path that leaves the data row out (the component must not rely on it being there).
+            if (!$data && $this->getOption('fake_ms2_no_data')) { return; }
+            if (!$data) { $data = $this->newObject('msProductData'); $data->fromArray(array('id' => $fields['id']), '', true, true); }
+            $data->save();
+        } elseif ($wasProduct && $data) {
+            $data->remove();
+        }
+    }
+
+    public function ms2ProductRemoving(array $fields) {
+        if (!$this->ms2On()) { return; }
+        $data = $this->getObject('msProductData', array('id' => $fields['id']));
+        if ($data) { $data->remove(); }
+    }
+
+    private function ms2ProductIds($category) {
+        $ids = array();
+        foreach ($this->getCollection('modResource', array('parent' => $category, 'class_key' => 'msProduct')) as $product) { $ids[] = $product->get('id'); }
+        return $ids;
+    }
+
+    /** msCategoryOption::save(): products of the category that have no value for the option get the default value. */
+    public function ms2LinkSaved(array $fields) {
+        if (!$this->ms2On()) { return; }
+        $option = $this->getObject('msOption', array('id' => $fields['option_id']));
+        foreach ($this->ms2ProductIds($fields['category_id']) as $product) {
+            if (!$this->getCount('msProductOption', array('key' => $option->get('key'), 'product_id' => $product))) {
+                $this->store('msProductOption', array('product_id' => $product, 'key' => $option->get('key'), 'value' => isset($fields['value']) ? $fields['value'] : ''));
+            }
+        }
+    }
+
+    /** msCategoryOption::remove(): the option's values of the category's own products are deleted. */
+    public function ms2LinkRemoving(array $fields) {
+        if (!$this->ms2On()) { return; }
+        $option = $this->getObject('msOption', array('id' => $fields['option_id']));
+        $ids = $this->ms2ProductIds($fields['category_id']);
+        if ($option && $ids) { $this->removeCollection('msProductOption', array('key' => $option->get('key'), 'product_id:IN' => $ids)); }
+    }
+
+    private static function ms2Json($value) {
+        if (is_string($value)) { $value = json_decode($value, true); }
+        return is_array($value) ? json_encode($value) : $value;   // like xPDO's toJSON: no JSON_UNESCAPED_UNICODE
+    }
+
+    /** The miniShop2 processors: found only through the `processors_path` option, like the real ones. */
+    private function ms2Processor($path, array $data, array $options) {
+        $this->ms2Calls[] = array($path, $data, $options);
+        $root = isset($options['processors_path']) ? $options['processors_path'] : $this->getOption('core_path') . 'processors/';
+        if (!$this->ms2On() || !is_file($root . $path . '.class.php')) { return null; }
+        if (in_array($path, array('mgr/settings/option/create', 'mgr/settings/option/update'), true)) { return $this->ms2OptionSave($path === 'mgr/settings/option/create', $data); }
+        if ($path === 'mgr/settings/option/remove') {
+            $option = $this->getObject('msOption', array('id' => $data['id']));
+            if (!$option) { return new FakeResponse('Option not found.'); }
+            $option->remove();
+            return new FakeResponse(null, array('id' => $data['id']));
+        }
+        if ($path === 'mgr/settings/option/assign') {
+            if (empty($data['option_id']) || !$this->getCount('msOption', array('id' => $data['option_id']))) { return new FakeResponse('Option not found.'); }
+            if (empty($data['category_id']) || !$this->getCount('modResource', array('id' => $data['category_id'], 'class_key' => 'msCategory'))) { return new FakeResponse('Category not found.'); }
+            if ($this->getCount('msCategoryOption', array('option_id' => $data['option_id'], 'category_id' => $data['category_id'], 'active' => 1))) { return new FakeResponse('The option is already assigned.'); }
+            $link = $this->newObject('msCategoryOption');
+            $row = array('option_id' => $data['option_id'], 'category_id' => $data['category_id'], 'rank' => $this->getCount('msCategoryOption', array('category_id' => $data['category_id'])),
+                'active' => 1, 'required' => 0, 'value' => '');
+            foreach (array('active', 'required', 'value', 'rank') as $column) { if (array_key_exists($column, $data)) { $row[$column] = $data[$column]; } }
+            $link->fromArray($row, '', true, true);
+            $link->save();
+            return new FakeResponse(null, $row);
+        }
+        if ($path === 'mgr/category/option/delete') {
+            $link = $this->getObject('msCategoryOption', array('option_id' => $data['option_id'], 'category_id' => $data['category_id']));
+            if (!$link) { return new FakeResponse('The option is not assigned.'); }
+            $rank = (int) $link->get('rank');
+            $link->remove();
+            // afterRemove(): a plain UPDATE (no save()), the links after this one move up.
+            foreach ($this->getCollection('msCategoryOption', array('category_id' => $data['category_id'])) as $next) {
+                if ((int) $next->get('rank') > $rank) { $this->store('msCategoryOption', array('rank' => (int) $next->get('rank') - 1) + $next->fields); }
+            }
+            return new FakeResponse(null, array('option_id' => $data['option_id']));
+        }
+        return null;
+    }
+
+    private function ms2OptionSave($creating, array $data) {
+        $columns = array('key', 'caption', 'description', 'measure_unit', 'category', 'type', 'properties');
+        $key = isset($data['key']) ? (string) $data['key'] : '';
+        if ($key === '') { return new FakeResponse('Please specify the option key.'); }
+        $key = str_replace('.', '_', $key);
+        $object = $creating ? $this->newObject('msOption') : $this->getObject('msOption', array('id' => $data['id']));
+        if (!$object) { return new FakeResponse('Option not found.'); }
+        $oldKey = $creating ? null : $object->get('key');
+        foreach ($this->getCollection('msOption', array('key' => $key)) as $other) {
+            if ($creating || (string) $other->get('id') !== (string) $data['id']) { return new FakeResponse('An option with the key ' . $key . ' already exists.'); }
+        }
+        // msOption's validation rules.
+        if (!preg_match('/^(?!\W+)(?!\d)[a-zA-Z0-9\x2d-\x2f\x7f-\xff-_]+(?!\s)$/', $key)) { return new FakeResponse('The option key is invalid.'); }
+        if (!preg_match('/^(?!(' . self::$ms2Reserved . ')$)/', $key)) { return new FakeResponse('The option key is reserved.'); }
+        // No default in the database for category: an insert without it fails in strict mode.
+        if ($creating && !array_key_exists('category', $data)) { return new FakeResponse("Field 'category' doesn't have a default value."); }
+        $row = array_intersect_key($data, array_flip($columns));
+        $row['key'] = $key;
+        if ($creating) { $row += array('caption' => '', 'description' => null, 'measure_unit' => null, 'type' => '', 'properties' => null); }
+        if (array_key_exists('properties', $row)) { $row['properties'] = self::ms2Json($row['properties']); }
+        $object->fromArray($row, '', false, true);
+        $object->save();
+        if (!$creating && $oldKey !== $key) {
+            foreach ($this->getCollection('msProductOption', array('key' => $oldKey)) as $value) { $this->drop('msProductOption', $value->fields); $value->fields['key'] = $key; $this->store('msProductOption', $value->fields); }
+        }
+        return new FakeResponse(null, $object->toArray());
+    }
 }
 
 /** Stand-in for the core resource processors, with the behaviours that matter to callers. */
@@ -211,10 +422,23 @@ trait FakeResourceProcessors {
             if ($date === 'pub_date' && $time <= time()) { $data['published'] = 1; $time = 0; }
             $data[$date] = (int) $time;
         }
+        // msProduct::set() sends every non-resource property to the product data; the processor's checkboxes
+        // (new, popular, favorite) change only when sent. msProductCreate/UpdateProcessor::beforeSave() makes it not a container.
+        $dataProps = array();
+        if (isset($this->packages['minishop2']) && isset($data['class_key']) && $data['class_key'] === 'msProduct') {
+            $dataProps = array_intersect_key($data, array_flip(array('article', 'price', 'old_price', 'weight', 'vendor', 'made_in', 'new', 'popular', 'favorite', 'tags', 'color', 'size', 'source')));
+            $data = array_diff_key($data, $dataProps);
+            $data['isfolder'] = 0;
+        }
         $data['editedon'] = ((int) $resource->get('editedon')) + 1;   // changes on every save
         if (empty($data['uri_override'])) { $data['uri'] = isset($data['alias']) ? $data['alias'] : $resource->get('alias'); }
         $resource->fromArray($data, '', false, true);
         $resource->save();
+        if ($dataProps) {
+            $product = $this->getObject('msProductData', array('id' => $resource->get('id')));
+            foreach ($dataProps as $column => $given) { $product->set($column, $given); }
+            $product->save();
+        }
         $this->fixFolder((int) $resource->get('parent'));
         if ($oldParent !== (int) $resource->get('parent')) { $this->fixFolder($oldParent); }
         if ($syncsite) { $this->getCacheManager()->refresh(); }
@@ -317,6 +541,7 @@ trait FakePackageProcessors {
 
 class modX extends xPDO {
     use FakeResourceProcessors;
+    use FakeMiniShop2;
     use FakePackageProcessors;
     public $maintenanceProcessors = array();
     const LOG_LEVEL_ERROR = 1;
@@ -342,6 +567,8 @@ class modX extends xPDO {
         array('modNamespace', 'modSystemSetting', 'namespace', array(), 'name'),
         array('modNamespace', 'modContextSetting', 'namespace', array(), 'name'),
         array('modNamespace', 'modLexiconEntry', 'namespace', array(), 'name'),
+        // miniShop2: an option takes its category links (whose remove() deletes the product values of the category's products).
+        array('msOption', 'msCategoryOption', 'option_id', array()),
         // Access control: a policy removes its child policies; a template its permissions and policies (which remove theirs).
         array('modAccessPolicy', 'modAccessPolicy', 'parent', array()),
         array('modAccessPolicyTemplate', 'modAccessPermission', 'template', array()),
@@ -367,11 +594,15 @@ class modX extends xPDO {
     }
     private function persist() { if ($this->file) { file_put_contents($this->file, json_encode($this->tables)); } }
     /** Primary key column(s) per class; rows of other classes are matched by id (or by their whole content without one). */
-    public static $primaryKeys = array('modSystemSetting' => 'key', 'modContext' => 'key', 'modNamespace' => 'name', 'modContextSetting' => array('context_key', 'key'), 'modUserSetting' => array('user', 'key'), 'transport.modTransportPackage' => 'signature');
-    public static function primaryKey($class) { return isset(self::$primaryKeys[$class]) ? self::$primaryKeys[$class] : 'id'; }
+    public static $primaryKeys = array('modSystemSetting' => 'key', 'modContext' => 'key', 'modNamespace' => 'name', 'modContextSetting' => array('context_key', 'key'), 'modUserSetting' => array('user', 'key'), 'transport.modTransportPackage' => 'signature',
+        'msCategoryMember' => array('product_id', 'category_id'), 'msCategoryOption' => array('option_id', 'category_id'),
+        // xPDO class without a primary key: rows are told apart by their whole content.
+        'msProductOption' => null);
+    public static function primaryKey($class) { return array_key_exists($class, self::$primaryKeys) ? self::$primaryKeys[$class] : 'id'; }
     /** The identity of a row as one string, or null when a primary key column is missing. */
     private static function identity($class, array $fields) {
         $parts = array();
+        if (!self::primaryKey($class)) { return null; }
         foreach ((array) self::primaryKey($class) as $column) {
             if (!isset($fields[$column])) { return null; }
             $parts[] = (string) $fields[$column];
@@ -454,7 +685,14 @@ class modX extends xPDO {
     public function getObject($class, $criteria = null, $cacheFlag = true) {
         if ($class === 'modUser' && (is_array($criteria) ? (isset($criteria['id']) ? $criteria['id'] : null) : $criteria) == 1 && !$this->row('modUser', 1)) { return new FakeObject($this, 'modUser', array('id' => 1, 'active' => 1), false); }
         $rows = $this->match($class, is_array($criteria) || $criteria instanceof FakeQuery ? $criteria : array(is_array(self::primaryKey($class)) ? 'id' : self::primaryKey($class) => $criteria));
-        return $rows ? new FakeObject($this, $class, $rows[0], false) : null;
+        return $rows ? $this->wrap($class, $rows[0]) : null;
+    }
+    /** A resource row of class msProduct is an msProduct object while the miniShop2 package is registered. */
+    private function wrap($class, array $row) {
+        if ($class === 'modResource' && isset($this->packages['minishop2']) && isset($row['class_key']) && $row['class_key'] === 'msProduct') {
+            return new FakeProductObject($this, $class, $row, false);
+        }
+        return new FakeObject($this, $class, $row, false);
     }
     public function getCollection($class, $criteria = null) {
         if ($criteria instanceof FakeQuery && $criteria->broken) { return array(); }
@@ -469,12 +707,12 @@ class modX extends xPDO {
             if ($criteria->limit) { $rows = array_slice($rows, $criteria->offset, $criteria->limit); }
         }
         $out = array();
-        foreach ($rows as $row) { $out[] = new FakeObject($this, $class, $row, false); }
+        foreach ($rows as $row) { $out[] = $this->wrap($class, $row); }
         return $out;
     }
     public function getCount($class, $criteria = null) { return count($this->match($class, $criteria)); }
     public function escape($name) { return '`' . str_replace('`', '', $name) . '`'; }
-    public function newQuery($class, $criteria = array()) { return new FakeQuery($class, $criteria); }
+    public function newQuery($class, $criteria = array()) { $query = new FakeQuery($class, $criteria); $query->modx = $this; return $query; }
     public function newObject($class) { return new FakeObject($this, $class, array(), true); }
     public function removeCollection($class, $criteria) {
         foreach ($this->match($class, $criteria) as $row) { $this->drop($class, $row); }
@@ -495,7 +733,14 @@ class modX extends xPDO {
         $permissions = $this->getOption('fake_permissions', null, array('settings' => true));
         return !empty($permissions[$permission]);
     }
-    public function addPackage($name, $path) { return true; }
+    /** Registered xPDO packages, as xPDO::$packages. */
+    public $packages = array();
+    public $addedPackages = array();
+    public function addPackage($name, $path) {
+        $this->packages[$name] = array('path' => $path, 'prefix' => 'modx_');
+        $this->addedPackages[] = $name;
+        return true;
+    }
     public function getCachePath() { return $this->getOption('core_path') . 'cache/'; }
     public function getCacheManager() { return $this->cache; }
     /** Like modX::reloadConfig(): the in-memory configuration is read again from the system settings. */
@@ -896,6 +1141,7 @@ class modX extends xPDO {
             }
             return new FakeResponse(null);
         }
+        if (strpos($path, 'mgr/') === 0) { return $this->ms2Processor($path, $data, $options); }
         if (strpos($path, 'workspace/packages/') === 0 || strpos($path, 'workspace/providers/') === 0) { return $this->packageProcessor($path, $data); }
         $action = basename($path);
         $base = substr($path, 0, -strlen($action));

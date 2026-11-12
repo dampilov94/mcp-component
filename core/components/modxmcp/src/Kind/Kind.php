@@ -40,6 +40,8 @@ abstract class Kind {
      *               through viaRow(); sent to the processors like any field, never filterable, not a column
      *               of the model class (snapshots keep it in the relation's rows)
      *   write_only  accepted on write, never read, listed or sent back (a password)
+     *   json        with type "object": any JSON object (not only name => boolean), stored as JSON text; shown as the
+     *               object it is, written as an object (nested empty objects cannot be told from empty lists)
      */
     abstract public function fields();
 
@@ -173,6 +175,45 @@ abstract class Kind {
     }
 
     // ---- hooks of kinds that need extra care; the defaults change nothing ----
+
+    /** Called once when the registry builds the kind for a request; a kind that depends on the site keeps the context. */
+    public function attach(Context $context) {
+    }
+
+    /** Called before an action works with objects of this kind (registers add-on models); may throw when the add-on is gone. */
+    public function prepare(\modX $modx) {
+    }
+
+    /** Raw column => value of an object, as the snapshot takes them. Kinds whose objects mix in other data override. */
+    public function objectColumns($object) {
+        return $object->toArray('', true);
+    }
+
+    /** Whether a declared relation exists for this particular object (modx_get shows it, modx_duplicate copies it). */
+    public function hasRelation(\modX $modx, $object, $name) {
+        return true;
+    }
+
+    /** Why this token cannot use a relation (a denied group), or null. Checked by modx_get and before relations are written. */
+    public function relationBlockReason(Context $context, $name) {
+        return null;
+    }
+
+    /**
+     * Restore the rows of a relation from a recorded state. Return true when the kind did it; false lets the
+     * generic restore replace the rows (remove them all, save the recorded ones).
+     * @param array $spec the relation spec
+     * @param int|string $key key of the object
+     * @param array $rows recorded rows (column => string)
+     */
+    public function restoreRelation(\modX $modx, $name, array $spec, $key, array $rows) {
+        return false;
+    }
+
+    /** Options of the processor calls (e.g. `processors_path` for an add-on's processors). */
+    public function processorOptions() {
+        return array();
+    }
 
     /** The one related row that holds the `via` fields of this relation, or null when there is none. */
     public function viaRow($object, $relation) {
@@ -467,7 +508,7 @@ abstract class Kind {
         }
         if (!empty($fields[$field]['write_only'])) { return ''; }
         $raw = $this->rawValue($object, $field);
-        if ($fields[$field]['type'] === 'object') { return self::objectValue($raw); }
+        if ($fields[$field]['type'] === 'object') { return !empty($fields[$field]['json']) ? self::jsonValue($raw) : self::objectValue($raw); }
         if (isset($fields[$field]['format']) && $fields[$field]['format'] === 'datetime') {
             return self::datetime($raw);
         }
@@ -485,6 +526,26 @@ abstract class Kind {
         $map = array_map(function ($flag) { return (bool) $flag; }, $map);
         ksort($map, SORT_STRING);
         return (object) $map;
+    }
+
+    /** A stored JSON object of any content (text or an already decoded map) as the API shows it; always an object. */
+    public static function jsonValue($raw) {
+        $map = is_string($raw) ? json_decode($raw, true) : $raw;
+        if (!is_array($map) || !$map) { return new \stdClass(); }
+        return (object) $map;
+    }
+
+    /** Canonical text of a JSON value for comparing two of them: nested keys sorted, no matter how it was spelled. */
+    public static function canonicalJson($raw) {
+        $value = is_string($raw) ? json_decode($raw, true) : json_decode(json_encode($raw), true);
+        $sort = function (&$node) use (&$sort) {
+            if (!is_array($node)) { return; }
+            foreach ($node as &$child) { $sort($child); }
+            unset($child);
+            if ($node && array_keys($node) !== range(0, count($node) - 1)) { ksort($node, SORT_STRING); }
+        };
+        $sort($value);
+        return json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 
     /** Unix time (or a date string xPDO already formatted) as "YYYY-MM-DD HH:MM:SS"; "" for none. */

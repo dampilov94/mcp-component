@@ -4052,6 +4052,467 @@ $xQuery('after the setting is turned off again', 'SELECT 1', 'unavailable');
 $xSite->options['modxmcp.allow_run_processor'] = false;
 $xRefuse('run_processor after the setting is turned off again', function () use ($call, $xAdmin) { $call($xAdmin, 'run_processor', array('processor' => 'resource/getlist', 'confirm' => true)); }, 'unavailable');
 
+// --- miniShop2: product data, options and extra categories (task 21) ---
+$ms2Dir = $siteDir . '/shop21';
+$ms2Core = $ms2Dir . '/core/components/minishop2/';
+mkdir($ms2Core . 'model/minishop2', 0700, true);
+touch($ms2Core . 'model/minishop2/minishop2.class.php');
+foreach (array('mgr/settings/option/create', 'mgr/settings/option/update', 'mgr/settings/option/remove', 'mgr/settings/option/assign', 'mgr/category/option/delete') as $ms2Processor) {
+    if (!is_dir(dirname($ms2Core . 'processors/' . $ms2Processor))) { mkdir(dirname($ms2Core . 'processors/' . $ms2Processor), 0700, true); }
+    touch($ms2Core . 'processors/' . $ms2Processor . '.class.php');
+}
+$sSite = fakeSite($ms2Dir);
+$sSite->store('modNamespace', array('name' => 'minishop2', 'path' => '{core_path}components/minishop2/', 'assets_path' => ''));
+$sSite->store('sources.modMediaSource', array('id' => 1, 'name' => 'Filesystem'));
+$sSite->store('sources.modMediaSource', array('id' => 2, 'name' => 'Каталог товаров'));
+$sSite->store('msVendor', array('id' => 5, 'name' => 'Вендор'));
+$sActor = function ($scope, array $token = array()) use ($sSite, $dev) {
+    $c = new Context($sSite, $token + array('scope' => $scope) + $dev->token, $dev->corePath, function () {});
+    $c->sessionId = 'session-shop21-01';
+    return $c;
+};
+$sAdmin = $sActor('admin');
+// the same kind of token on the main fake site, where miniShop2 is not installed
+$sPlain = new Context($site, array('scope' => 'admin') + $dev->token, $dev->corePath, function () {});
+$sEditor = $sActor('content');
+$sDev = $sActor('develop');
+$sRead = $sActor('read');
+$sTables = function () use ($sSite) {
+    $out = array();
+    // Rows without a primary key are told apart by content: compare them as sorted sets of rows, whatever the order of columns.
+    foreach (array('msProductData', 'msProductOption', 'msCategoryMember', 'msCategoryOption', 'msOption') as $class) {
+        $rows = array();
+        foreach ($sSite->tableDump($class) as $row) { ksort($row); $rows[] = json_encode($row, JSON_UNESCAPED_UNICODE); }
+        sort($rows);
+        $out[$class] = $rows;
+    }
+    return $out;
+};
+$sRelations = function ($id) use ($call, $sAdmin) { return json_decode(json_encode($call($sAdmin, 'get', array('kind' => 'resource', 'id' => $id))['relations'], JSON_PRESERVE_ZERO_FRACTION), true); };
+// kind:id => [op, changed names] of one changeset, from the journal
+$sChanges = function ($changesetId) use ($call, $sAdmin) {
+    $out = array();
+    foreach ($call($sAdmin, 'history_diff', array('changeset_id' => $changesetId))['objects'] as $item) {
+        $out[$item['kind'] . ':' . (isset($item['id']) ? $item['id'] : $item['key'])] = array($item['op'], array_keys((array) $item['changed']));
+    }
+    return $out;
+};
+$sRelNames = function ($id, $ctx = null) use ($call, $sAdmin) { return array_keys((array) $call($ctx ? $ctx : $sAdmin, 'get', array('kind' => 'resource', 'id' => $id))['relations']); };
+
+// ---- availability ----
+$sKinds = array_column($call($sAdmin, 'describe')['kinds'], 'kind');
+check('ms2: kind list with miniShop2 installed', $sKinds === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source', 'user_group', 'role', 'resource_group', 'system_setting', 'context', 'context_setting', 'namespace', 'user',
+    'access_policy', 'policy_template', 'context_access', 'resourcegroup_access', 'package', 'provider', 'ms2_option'));
+check('ms2: kind list without miniShop2 is unchanged', !in_array('ms2_option', array_column($call($sPlain, 'describe')['kinds'], 'kind'), true));
+$e = throws('ms2: ms2_option is unavailable where miniShop2 is not installed', ApiException::class, function () use ($call, $sPlain) { $call($sPlain, 'describe', array('kind' => 'ms2_option')); });
+check('ms2: not installed is reported as unavailable', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'not_installed');
+$sDesc = $call($sAdmin, 'describe', array('kind' => 'resource'));
+check('ms2: the resource kind declares the product relations as writable', array_column($sDesc['relations'], 'writable', 'name') === array('tvs' => true, 'resource_groups' => false, 'ms2_data' => true, 'ms2_options' => true, 'ms2_categories' => true));
+check('ms2: without miniShop2 the resource kind has no product relations', array_column($call($sPlain, 'describe', array('kind' => 'resource'))['relations'], 'name') === array('tvs', 'resource_groups'));
+
+// ---- the kind ms2_option ----
+$oDesc = $call($sAdmin, 'describe', array('kind' => 'ms2_option'));
+$oFields = array_column($oDesc['fields'], null, 'name');
+check('ms2_option: describe', $oDesc['group'] === 'minishop2' && $oDesc['read_scope'] === 'read' && $oDesc['write_scope'] === 'develop' && $oDesc['name_field'] === 'key' && $oDesc['key_type'] === 'integer'
+    && array_column($oDesc['fields'], 'name') === array('id', 'key', 'caption', 'description', 'measure_unit', 'category', 'type', 'properties')
+    && $oFields['key']['required'] === true && $oFields['key']['immutable'] === true && $oFields['properties']['type'] === 'object' && strpos($oFields['type']['description'], 'combo-options') !== false
+    && array_column($oDesc['relations'], 'name') === array('categories') && array_column($oDesc['operations'], 'op') === array('assign_to_category', 'remove_from_category'));
+$oBrand = $call($sDev, 'create', array('kind' => 'ms2_option', 'fields' => array('key' => 'brand', 'caption' => 'Бренд', 'type' => 'combo-options', 'description' => 'Производитель изделия',
+    'measure_unit' => 'шт.', 'properties' => array('values' => array('Звезда', 'Ёлка', 'Север')))));
+$oBrandRow = $sSite->row('msOption', $oBrand['id']);
+check('ms2_option: create runs the miniShop2 processor from its own processors path', $oBrand['changeset_id'] > 0 && $oBrandRow['key'] === 'brand' && $oBrandRow['caption'] === 'Бренд' && $oBrandRow['category'] === '0'
+    && $oBrandRow['measure_unit'] === 'шт.' && json_decode($oBrandRow['properties'], true) === array('values' => array('Звезда', 'Ёлка', 'Север'))
+    && end($sSite->ms2Calls)[0] === 'mgr/settings/option/create' && end($sSite->ms2Calls)[2]['processors_path'] === $ms2Core . 'processors/');
+$oGot = $call($sDev, 'get', array('kind' => 'ms2_option', 'name' => 'brand'));
+check('ms2_option: get shows Cyrillic text and the properties object', $oGot['fields']['caption'] === 'Бренд' && $oGot['fields']['description'] === 'Производитель изделия' && $oGot['fields']['type'] === 'combo-options'
+    && $oGot['fields']['category'] === 0 && json_encode($oGot['fields']['properties'], JSON_UNESCAPED_UNICODE) === '{"values":["Звезда","Ёлка","Север"]}' && $oGot['relations']['categories'] === array());
+$oMaterial = $call($sDev, 'create', array('kind' => 'ms2_option', 'fields' => array('key' => 'body_материал', 'caption' => 'Материал корпуса')));
+$oMaterialGot = $call($sDev, 'get', array('kind' => 'ms2_option', 'id' => $oMaterial['id']));
+check('ms2_option: the type defaults to textfield, the element category to 0, and a Cyrillic key is allowed', $oMaterialGot['fields']['type'] === 'textfield' && $oMaterialGot['fields']['category'] === 0
+    && $oMaterialGot['fields']['key'] === 'body_материал' && json_encode($oMaterialGot['fields']['properties']) === '{}');
+$oDotted = $call($sDev, 'create', array('kind' => 'ms2_option', 'fields' => array('key' => 'pack.size', 'caption' => 'Упаковка')));
+check('ms2_option: a dot in the key becomes an underscore, as in the manager', $sSite->row('msOption', $oDotted['id'])['key'] === 'pack_size');
+foreach (array(
+    'an unknown type' => array(array('key' => 'k1', 'type' => 'slider'), 'Unknown option type'),
+    'a key that starts with a digit' => array(array('key' => '1abc'), 'invalid'),
+    'a key with a space' => array(array('key' => 'two words'), 'invalid'),
+    'a key that starts with a Cyrillic letter (the pattern of msOption treats the bytes as non-word characters)' => array(array('key' => 'материал'), 'invalid'),
+    'a reserved key' => array(array('key' => 'price'), 'reserved'),
+    'a taken key' => array(array('key' => 'brand'), 'already exists'),
+    'a taken key with a dot' => array(array('key' => 'pack.size'), 'already exists'),
+    'no key' => array(array('caption' => 'x'), 'key'),
+    'properties that are not an object' => array(array('key' => 'k2', 'properties' => array('a', 'b')), 'JSON object'),
+) as $label => $case) {
+    $lastOption = $sAdmin->journal()->lastChangesetId();
+    $e = throws("ms2_option: create refuses {$label}", ApiException::class, function () use ($call, $sAdmin, $case) { $call($sAdmin, 'create', array('kind' => 'ms2_option', 'fields' => $case[0])); });
+    check("ms2_option: {$label} is validation_failed and leaves no trace", $e && $e->errorCode === 'validation_failed' && stripos($e->getMessage(), $case[1]) !== false && $sAdmin->journal()->lastChangesetId() === $lastOption);
+}
+check('ms2_option: list with query on key and caption, and a where filter', array_column($call($sRead, 'list', array('kind' => 'ms2_option', 'query' => 'Материал'))['items'], 'key') === array('body_материал')
+    && array_column($call($sRead, 'list', array('kind' => 'ms2_option', 'query' => 'bran'))['items'], 'id') === array($oBrand['id'])
+    && array_column($call($sRead, 'list', array('kind' => 'ms2_option', 'where' => array('type' => 'textfield')))['items'], 'key') === array('body_материал', 'pack_size'));
+$e = throws('ms2_option: properties cannot be filtered on', ApiException::class, function () use ($call, $sRead) { $call($sRead, 'list', array('kind' => 'ms2_option', 'where' => array('properties' => 'x'))); });
+check('ms2_option: a where on properties is refused', $e && $e->errorCode === 'validation_failed');
+// scopes
+$e = throws('ms2_option: a content token cannot write', ApiException::class, function () use ($call, $sEditor, $oBrand) { $call($sEditor, 'update', array('kind' => 'ms2_option', 'id' => $oBrand['id'], 'fields' => array('caption' => 'x'))); });
+check('ms2_option: writing needs develop', $e && $e->errorCode === 'forbidden_scope' && $call($sRead, 'get', array('kind' => 'ms2_option', 'id' => $oBrand['id']))['fields']['key'] === 'brand');
+$e = throws('ms2_option: a token denied the group', ApiException::class, function () use ($call, $sActor, $oBrand) { $call($sActor('admin', array('denied_groups' => array('minishop2'))), 'get', array('kind' => 'ms2_option', 'id' => $oBrand['id'])); });
+check('ms2_option: a token denied the minishop2 group cannot use the kind', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'denied_for_token');
+// update, diff, undo
+$oUpdated = $call($sDev, 'update', array('kind' => 'ms2_option', 'id' => $oBrand['id'], 'expected_revision' => $oGot['revision'],
+    'fields' => array('caption' => 'Торговая марка', 'properties' => array('values' => array('Звезда', 'Ёлка', 'Север', 'Юг')))));
+check('ms2_option: update changes the caption and the properties', $oUpdated['changed'] === array('caption', 'properties') && $sSite->row('msOption', $oBrand['id'])['key'] === 'brand'
+    && json_decode($sSite->row('msOption', $oBrand['id'])['properties'], true)['values'][3] === 'Юг' && $sSite->row('msOption', $oBrand['id'])['measure_unit'] === 'шт.');
+$oDiff = $call($sDev, 'history_diff', array('changeset_id' => $oUpdated['changeset_id']))['objects'][0]['changed'];
+check('ms2_option: the diff shows the properties as objects and the Cyrillic caption', $oDiff['caption']['old'] === 'Бренд' && $oDiff['caption']['new'] === 'Торговая марка'
+    && json_encode($oDiff['properties']['new'], JSON_UNESCAPED_UNICODE) === '{"values":["Звезда","Ёлка","Север","Юг"]}' && json_encode($oDiff['properties']['old'], JSON_UNESCAPED_UNICODE) === '{"values":["Звезда","Ёлка","Север"]}');
+$oSame = $call($sDev, 'update', array('kind' => 'ms2_option', 'id' => $oBrand['id'], 'fields' => array('properties' => array('values' => array('Звезда', 'Ёлка', 'Север', 'Юг')))));
+check('ms2_option: the same properties are no change', $oSame['changeset_id'] === null);
+$oDry = $call($sDev, 'update', array('kind' => 'ms2_option', 'id' => $oBrand['id'], 'dry_run' => true, 'fields' => array('properties' => array('values' => array('Звезда', 'Ёлка', 'Север', 'Юг')), 'caption' => 'Бренд')));
+check('ms2_option: a dry run names only what differs', $oDry['would_change'] === array('caption'));
+$e = throws('ms2_option: the key cannot be changed', ApiException::class, function () use ($call, $sDev, $oBrand) { $call($sDev, 'update', array('kind' => 'ms2_option', 'id' => $oBrand['id'], 'fields' => array('key' => 'maker'))); });
+check('ms2_option: a changed key is refused (it names the values of every product)', $e && $e->errorCode === 'validation_failed' && $sSite->row('msOption', $oBrand['id'])['key'] === 'brand');
+$oSameKey = $call($sDev, 'update', array('kind' => 'ms2_option', 'id' => $oBrand['id'], 'fields' => array('key' => 'brand')));
+check('ms2_option: sending the same key is no change', $oSameKey['changeset_id'] === null);
+$e = throws('ms2_option: an unknown type on update', ApiException::class, function () use ($call, $sDev, $oBrand) { $call($sDev, 'update', array('kind' => 'ms2_option', 'id' => $oBrand['id'], 'fields' => array('type' => 'nope'))); });
+check('ms2_option: an unknown type on update is refused', $e && $e->errorCode === 'validation_failed');
+$call($sDev, 'undo', array('changeset_id' => $oUpdated['changeset_id'], 'confirm' => true));
+check('ms2_option: undo restores caption and properties', $sSite->row('msOption', $oBrand['id'])['caption'] === 'Бренд' && count(json_decode($sSite->row('msOption', $oBrand['id'])['properties'], true)['values']) === 3);
+$oDup = $call($sDev, 'duplicate', array('kind' => 'ms2_option', 'id' => $oBrand['id'], 'new_name' => 'brand_copy'));
+check('ms2_option: duplicate copies the fields under a new key', $sSite->row('msOption', $oDup['id'])['key'] === 'brand_copy' && $sSite->row('msOption', $oDup['id'])['caption'] === 'Бренд'
+    && $sSite->row('msOption', $oDup['id'])['type'] === 'combo-options' && count(json_decode($sSite->row('msOption', $oDup['id'])['properties'], true)['values']) === 3);
+$call($sDev, 'undo', array('changeset_id' => $oDup['changeset_id'], 'confirm' => true));
+check('ms2_option: undo of a duplicate removes the copy', $sSite->row('msOption', $oDup['id']) === null);
+
+// ---- products: create, read ----
+$catPhones = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Телефоны', 'class_key' => 'msCategory')))['id'];
+$catAccessories = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Аксессуары', 'class_key' => 'msCategory')))['id'];
+$docId = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Статья про телефоны')))['id'];
+check('ms2: a plain resource has no product relations and its snapshot holds them empty', $sRelNames($docId) === array('tvs', 'resource_groups')
+    && \ModxMCP\Journal\Snapshot::capture($sSite, $sAdmin->kinds->get('resource'), $docId)['relations']['ms2_data'] === array()
+    && \ModxMCP\Journal\Snapshot::capture($sSite, $sAdmin->kinds->get('resource'), $docId)['relations']['ms2_options'] == array()
+    && \ModxMCP\Journal\Snapshot::capture($sSite, $sAdmin->kinds->get('resource'), $docId)['relations']['ms2_categories'] === array());
+$sBefore = $sTables();
+$e = throws('ms2: product relations cannot be written on a plain resource', ApiException::class, function () use ($call, $sEditor, $docId) {
+    $call($sEditor, 'update', array('kind' => 'resource', 'id' => $docId, 'relations' => array('ms2_data' => array('price' => 100))));
+});
+check('ms2: writing ms2_data on a plain resource is refused and changes nothing', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'not a miniShop2 product') !== false && $sTables() == $sBefore);
+$e = throws('ms2: the same on create', ApiException::class, function () use ($call, $sEditor) {
+    $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Не товар'), 'relations' => array('ms2_categories' => array())));
+});
+check('ms2: relations of a product on a new plain resource are refused', $e && $e->errorCode === 'validation_failed');
+check('ms2: the refused create left no resource behind', $sSite->getCount('modResource', array('pagetitle' => 'Не товар')) === 0);
+
+$pBare = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Чехол', 'class_key' => 'msProduct', 'parent' => $catAccessories)));
+$bareData = $sSite->getObject('msProductData', array('id' => $pBare['id']));
+check('ms2: a product created without relations still gets its data row, with the miniShop2 defaults', $bareData && $bareData->get('price') === '0' && $bareData->get('source') === '1' && $bareData->get('article') === null
+    && $sSite->getCount('msProductData', array('id' => $pBare['id'])) === 1 && $pBare['reversible'] === true);
+$bareGot = $call($sRead, 'get', array('kind' => 'resource', 'id' => $pBare['id']));
+check('ms2: get shows the three relations of a product', array_keys((array) $bareGot['relations']) === array('tvs', 'resource_groups', 'ms2_data', 'ms2_options', 'ms2_categories')
+    && $bareGot['relations']['ms2_data']['price'] === 0.0 && $bareGot['relations']['ms2_data']['tags'] === array() && $bareGot['relations']['ms2_data']['new'] === false && $bareGot['relations']['ms2_data']['source'] === 1
+    && $bareGot['relations']['ms2_data']['image'] === '' && json_encode($bareGot['relations']['ms2_options']) === '{}' && $bareGot['relations']['ms2_categories'] === array()
+    && array_keys($bareGot['relations']['ms2_data']) === array('article', 'price', 'old_price', 'weight', 'image', 'thumb', 'vendor', 'made_in', 'new', 'popular', 'favorite', 'tags', 'color', 'size', 'source'));
+check('ms2: a product is a container never', $sSite->row('modResource', $pBare['id'])['isfolder'] === '0' && $sSite->row('modResource', $pBare['id'])['class_key'] === 'msProduct');
+$sSite->options['fake_ms2_no_data'] = true;
+$pLoose = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Без строки данных', 'class_key' => 'msProduct', 'parent' => $catAccessories)));
+unset($sSite->options['fake_ms2_no_data']);
+check('ms2: a product whose create path left no data row gets one from the component', $sSite->getCount('msProductData', array('id' => $pLoose['id'])) === 1 && $call($sRead, 'get', array('kind' => 'resource', 'id' => $pLoose['id']))['relations']['ms2_data']['price'] === 0.0);
+$noWarn = $sActor('content');
+$call($noWarn, 'update', array('kind' => 'resource', 'id' => $pBare['id'], 'fields' => array('longtitle' => 'Чехол для телефона')));
+check('ms2: a product no longer gets the journaling warning', $noWarn->warnings === array());
+
+$pPhone = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Смартфон «Звезда»', 'class_key' => 'msProduct', 'parent' => $catPhones),
+    'relations' => array('ms2_data' => array('price' => 1500, 'old_price' => 1800.5, 'article' => 'А-100', 'vendor' => 5, 'made_in' => 'Россия', 'new' => true, 'tags' => array('новинка', 'хит', 'новинка'), 'color' => array('чёрный'), 'weight' => 0.25),
+        'ms2_categories' => array($catAccessories))));
+$phoneId = $pPhone['id'];
+$phoneRel = $sRelations($phoneId);
+check('ms2: create with ms2_data and ms2_categories', $phoneRel['ms2_data']['price'] === 1500.0 && $phoneRel['ms2_data']['old_price'] === 1800.5 && $phoneRel['ms2_data']['article'] === 'А-100'
+    && $phoneRel['ms2_data']['vendor'] === 5 && $phoneRel['ms2_data']['made_in'] === 'Россия' && $phoneRel['ms2_data']['new'] === true && $phoneRel['ms2_data']['popular'] === false
+    && $phoneRel['ms2_data']['tags'] === array('новинка', 'хит') && $phoneRel['ms2_data']['color'] === array('чёрный') && $phoneRel['ms2_data']['weight'] === 0.25
+    && $phoneRel['ms2_categories'] === array($catAccessories) && $phoneRel['ms2_options'] == array());
+check('ms2: the create result names the relations that were written (the option rows come from the JSON columns)', in_array('ms2_data', $pPhone['changed'], true) && in_array('ms2_categories', $pPhone['changed'], true) && in_array('ms2_options', $pPhone['changed'], true));
+check('ms2: miniShop2 copies the JSON columns into option rows (and the API does not show those as options)', $sSite->getCount('msProductOption', array('product_id' => $phoneId, 'key' => 'color')) === 1
+    && $sSite->getCount('msProductOption', array('product_id' => $phoneId, 'key' => 'tags')) === 2 && $phoneRel['ms2_options'] == array());
+$phoneSnap = \ModxMCP\Journal\Snapshot::capture($sSite, $sAdmin->kinds->get('resource'), $phoneId);
+check('ms2: the snapshot of a product keeps only resource columns in fields, and the product rows as relations', !array_key_exists('price', $phoneSnap['fields']) && !array_key_exists('vendor.id', $phoneSnap['fields'])
+    && $phoneSnap['fields']['class_key'] === 'msProduct' && count($phoneSnap['relations']['ms2_data']) === 1 && $phoneSnap['relations']['ms2_data'][0]['price'] === '1500'
+    && count($phoneSnap['relations']['ms2_categories']) === 1);
+check('ms2: the product package was registered through addPackage', in_array('minishop2', $sSite->addedPackages, true));
+
+// ---- ms2_data ----
+$phoneRev = $call($sRead, 'get', array('kind' => 'resource', 'id' => $phoneId))['revision'];
+$sBefore = $sTables();
+$beforeRow = $sSite->getObject('msProductData', array('id' => $phoneId))->fields;
+$priceChange = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'expected_revision' => $phoneRev, 'relations' => array('ms2_data' => array('price' => 1750.5))));
+$afterRow = $sSite->getObject('msProductData', array('id' => $phoneId))->fields;
+check('ms2: updating one ms2_data column changes only that column', $priceChange['changed'] === array('ms2_data') && $afterRow['price'] === '1750.5' && array_diff_assoc($afterRow, $beforeRow) === array('price' => '1750.5'));
+$priceDiff = $call($sEditor, 'history_diff', array('changeset_id' => $priceChange['changeset_id']));
+check('ms2: the diff of the product shows the data rows', $priceDiff['objects'][0]['changed']['ms2_data']['old'][0]['price'] === '1500' && $priceDiff['objects'][0]['changed']['ms2_data']['new'][0]['price'] === '1750.5');
+$call($sEditor, 'undo', array('changeset_id' => $priceChange['changeset_id'], 'confirm' => true));
+check('ms2: undo of a data change restores every table exactly', $sTables() == $sBefore && $call($sRead, 'get', array('kind' => 'resource', 'id' => $phoneId))['revision'] === $phoneRev);
+$sameData = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'relations' => array('ms2_data' => array('price' => 1500, 'tags' => array('новинка', 'хит')))));
+check('ms2: writing the values a product already has is no change', $sameData['changeset_id'] === null && $sameData['changed'] === array());
+$dryData = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'dry_run' => true, 'relations' => array('ms2_data' => array('price' => 1))));
+check('ms2: a dry run names the relation and changes nothing', $dryData['would_change'] === array('ms2_data') && $sTables() == $sBefore);
+$multi = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'relations' => array('ms2_data' => array('popular' => true, 'favorite' => true, 'size' => array('L', 'XL'), 'tags' => array(), 'article' => '', 'source' => 2, 'vendor' => 0, 'weight' => 1))));
+$multiRel = $sRelations($phoneId)['ms2_data'];
+check('ms2: booleans, lists, an empty list, an empty string, the media source and a whole-number weight', $multiRel['popular'] === true && $multiRel['favorite'] === true && $multiRel['size'] === array('L', 'XL') && $multiRel['tags'] === array()
+    && $multiRel['article'] === '' && $multiRel['source'] === 2 && $multiRel['vendor'] === 0 && $multiRel['weight'] === 1.0 && $multiRel['price'] === 1500.0 && $multiRel['color'] === array('чёрный'));
+check('ms2: emptying tags removes their option rows with them', $sSite->getCount('msProductOption', array('product_id' => $phoneId, 'key' => 'tags')) === 0 && $sSite->getCount('msProductOption', array('product_id' => $phoneId, 'key' => 'size')) === 2);
+$call($sEditor, 'undo', array('changeset_id' => $multi['changeset_id'], 'confirm' => true));
+check('ms2: and undo brings them all back', $sTables() == $sBefore);
+foreach (array(
+    'an unknown column' => array(array('colour' => array('red')), 'Unknown column'),
+    'image' => array(array('image' => 'x.jpg'), 'read-only'),
+    'thumb' => array(array('thumb' => 'x.jpg'), 'read-only'),
+    'a text price' => array(array('price' => '10'), 'number'),
+    'a negative price' => array(array('price' => -1), 'number'),
+    'a text vendor' => array(array('vendor' => 'x'), 'whole number'),
+    'a vendor that does not exist' => array(array('vendor' => 99), 'vendor 99 does not exist'),
+    'a media source that does not exist' => array(array('source' => 9), 'Media source 9 does not exist'),
+    'a number for a boolean' => array(array('new' => 1), 'true or false'),
+    'tags that are not a list' => array(array('tags' => 'a'), 'list of strings'),
+    'tags with a number in them' => array(array('tags' => array('a', 5)), 'list of strings'),
+    'tags as a map' => array(array('tags' => array('a' => 'b')), 'list of strings'),
+    'article that is not text' => array(array('article' => 7), 'string'),
+) as $label => $case) {
+    $e = throws("ms2: ms2_data with {$label}", ApiException::class, function () use ($call, $sEditor, $phoneId, $case) { $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'relations' => array('ms2_data' => $case[0]))); });
+    check("ms2: ms2_data with {$label} is refused and nothing changes", $e && $e->errorCode === 'validation_failed' && stripos($e->getMessage(), $case[1]) !== false && $sTables() == $sBefore);
+}
+$e = throws('ms2: ms2_data must be a map', ApiException::class, function () use ($call, $sEditor, $phoneId) { $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'relations' => array('ms2_data' => array(1500)))); });
+check('ms2: a list for ms2_data is refused', $e && $e->errorCode === 'validation_failed');
+$e = throws('ms2: a failing write after the resource saved rolls everything back', ApiException::class, function () use ($call, $sEditor, $phoneId) {
+    $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'fields' => array('pagetitle' => 'Смартфон «Заря»'), 'relations' => array('ms2_data' => array('price' => 2000, 'colour' => 'x'))));
+});
+check('ms2: the title was put back too', $e && $sSite->row('modResource', $phoneId)['pagetitle'] === 'Смартфон «Звезда»' && $sTables() == $sBefore);
+
+// ---- ms2_options ----
+$sOptStart = $sTables();
+$optionsSet = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'relations' => array('ms2_options' => array('brand' => array('Звезда', ' Ёлка ', 'Звезда', ''), 'body_материал' => array('алюминий')))));
+$optionsRel = $sRelations($phoneId)['ms2_options'];
+check('ms2: ms2_options sets the values of each given key (trimmed, without duplicates and empty ones)', $optionsRel == array('brand' => array('Звезда', 'Ёлка'), 'body_материал' => array('алюминий')) && $optionsSet['changed'] === array('ms2_options'));
+$sOptSet = $sTables();
+$optionsReplace = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'relations' => array('ms2_options' => array('brand' => array('Север')))));
+check('ms2: replacing one key leaves the others', $sRelations($phoneId)['ms2_options'] == array('brand' => array('Север'), 'body_материал' => array('алюминий')));
+$optionsRemove = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'relations' => array('ms2_options' => array('body_материал' => array()))));
+check('ms2: [] removes the key', $sRelations($phoneId)['ms2_options'] == array('brand' => array('Север')) && $sSite->getCount('msProductOption', array('product_id' => $phoneId, 'key' => 'body_материал')) === 0);
+foreach (array(
+    'an unknown option key' => array(array('brand' => array('x'), 'nonexistent' => array('y')), "Unknown miniShop2 option 'nonexistent'."),
+    'a JSON-mirrored key (color)' => array(array('color' => array('red')), 'ms2_data'),
+    'a JSON-mirrored key (tags)' => array(array('tags' => array('red')), 'ms2_data'),
+    'a value that is not a list' => array(array('brand' => 'x'), 'list of values'),
+    'a map instead of a list' => array(array('brand' => array('a' => 'b')), 'list of values'),
+    'a boolean value' => array(array('brand' => array(true)), 'strings or numbers'),
+) as $label => $case) {
+    $before = $sTables();
+    $e = throws("ms2: ms2_options with {$label}", ApiException::class, function () use ($call, $sEditor, $phoneId, $case) { $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'relations' => array('ms2_options' => $case[0]))); });
+    check("ms2: ms2_options with {$label} is refused before anything is written", $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), $case[1]) !== false && $sTables() == $before);
+}
+$e = throws('ms2: the unknown key message names just that key', ApiException::class, function () use ($call, $sEditor, $phoneId) { $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'relations' => array('ms2_options' => array('nonexistent' => array('y'))))); });
+check('ms2: the unknown key message is exactly one sentence', $e && $e->getMessage() === "Unknown miniShop2 option 'nonexistent'.");
+$optionsNumbers = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'relations' => array('ms2_options' => array('brand' => array('Звезда'), 'pack_size' => array('10', 5, 2.5)))));
+check('ms2: numbers are stored as text', $sRelations($phoneId)['ms2_options'] == array('brand' => array('Звезда'), 'pack_size' => array('10', '5', '2.5'), 'body_материал' => array()) || $sRelations($phoneId)['ms2_options'] == array('brand' => array('Звезда'), 'pack_size' => array('10', '5', '2.5')));
+foreach (array($optionsNumbers, $optionsRemove, $optionsReplace) as $undoStep) { $call($sEditor, 'undo', array('changeset_id' => $undoStep['changeset_id'], 'confirm' => true)); }
+check('ms2: undo of the later option changes, one by one, restores the tables exactly', $sTables() == $sOptSet);
+$call($sEditor, 'undo', array('changeset_id' => $optionsSet['changeset_id'], 'confirm' => true));
+check('ms2: and the first one returns the product to where it began', $sTables() == $sOptStart && $sRelations($phoneId)['ms2_options'] == array());
+
+// ---- ms2_categories ----
+$catSet = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'relations' => array('ms2_categories' => array())));
+check('ms2: [] removes the additional categories', $catSet['changed'] === array('ms2_categories') && $sRelations($phoneId)['ms2_categories'] === array());
+$catAdd = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'relations' => array('ms2_categories' => array($catAccessories))));
+check('ms2: a list of category ids sets the additional categories', $sRelations($phoneId)['ms2_categories'] === array($catAccessories) && $sSite->getCount('msCategoryMember', array('product_id' => $phoneId)) === 1);
+$sCatBefore = $sTables();
+foreach (array(
+    'a resource that is not a category' => array(array($docId), 'not a miniShop2 category'),
+    'an id that does not exist' => array(array(999), 'not a miniShop2 category'),
+    'the parent category' => array(array($catPhones), 'parent category'),
+    'a text id' => array(array('x'), 'list of resource ids'),
+    'one valid and one invalid id' => array(array($catAccessories, $docId), 'not a miniShop2 category'),
+) as $label => $case) {
+    $e = throws("ms2: ms2_categories with {$label}", ApiException::class, function () use ($call, $sEditor, $phoneId, $case) { $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'relations' => array('ms2_categories' => $case[0]))); });
+    check("ms2: ms2_categories with {$label} is refused", $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), $case[1]) !== false && $sTables() == $sCatBefore);
+}
+$e = throws('ms2: ms2_categories must be a list', ApiException::class, function () use ($call, $sEditor, $phoneId) { $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'relations' => array('ms2_categories' => array('a' => 1)))); });
+check('ms2: a map for ms2_categories is refused', $e && $e->errorCode === 'validation_failed');
+$call($sEditor, 'undo', array('changeset_id' => $catAdd['changeset_id'], 'confirm' => true));
+check('ms2: undo of a category change restores the membership rows', $sRelations($phoneId)['ms2_categories'] === array());
+$call($sEditor, 'undo', array('changeset_id' => $catSet['changeset_id'], 'confirm' => true));
+check('ms2: and the earlier removal too', $sRelations($phoneId)['ms2_categories'] === array($catAccessories));
+
+// ---- a plain resource update keeps the product data ----
+$call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'relations' => array('ms2_options' => array('brand' => array('Звезда', 'Север'), 'body_материал' => array('алюминий')), 'ms2_data' => array('price' => 1500, 'new' => true, 'popular' => true))));
+$plainBefore = $sTables();
+$plainRels = $sRelations($phoneId);
+$sSite->events = array();
+$plain = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'fields' => array('pagetitle' => 'Смартфон «Звезда» 2', 'published' => true, 'hidemenu' => true)));
+check('ms2: a plain update of the title leaves price, options, categories and flags as they were', $plain['changed'] === array('pagetitle', 'published', 'hidemenu') && $sTables() == $plainBefore && $sRelations($phoneId) === $plainRels
+    && $sRelations($phoneId)['ms2_data']['price'] === 1500.0 && $sRelations($phoneId)['ms2_data']['new'] === true && $sRelations($phoneId)['ms2_data']['popular'] === true
+    && $sRelations($phoneId)['ms2_options']['brand'] === array('Звезда', 'Север'));
+check('ms2: the resource processor ran once for that call, the product update processor did not touch miniShop2 data', count(array_filter($sSite->events, function ($name) { return $name === 'OnDocFormSave'; })) <= 1);
+check('ms2: the product is still a product after a plain update', $sSite->row('modResource', $phoneId)['class_key'] === 'msProduct' && $sSite->getCount('msProductData', array('id' => $phoneId)) === 1);
+$plainFields = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'fields' => array('content' => '<p>Описание</p>', 'menuindex' => 3, 'published' => false)));
+check('ms2: more plain updates, same result', $sTables() == $plainBefore && $plainFields['changed'] === array('content', 'published', 'menuindex'));
+// the change that does both
+$both = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'fields' => array('longtitle' => 'Новая модель'), 'relations' => array('ms2_data' => array('price' => 1999))));
+check('ms2: a field and a relation in one call are one changeset', $both['changed'] === array('longtitle', 'ms2_data') && $sRelations($phoneId)['ms2_data']['price'] === 1999.0 && $sRelations($phoneId)['ms2_options']['brand'] === array('Звезда', 'Север'));
+$call($sEditor, 'undo', array('changeset_id' => $both['changeset_id'], 'confirm' => true));
+check('ms2: and one undo reverts both', $sTables() == $plainBefore && $sSite->row('modResource', $phoneId)['longtitle'] === '');
+
+// ---- delete and undo ----
+$phoneRevBeforeDelete = $call($sRead, 'get', array('kind' => 'resource', 'id' => $phoneId))['revision'];
+$deleted = $call($sEditor, 'delete', array('kind' => 'resource', 'id' => $phoneId));
+check('ms2: deleting a product only trashes it; its data, options and categories stay', $sSite->row('modResource', $phoneId)['deleted'] === '1' && $sTables() == $plainBefore);
+$call($sEditor, 'undo', array('changeset_id' => $deleted['changeset_id'], 'confirm' => true));
+check('ms2: undo of a delete returns the product with identical data', $sTables() == $plainBefore && $call($sRead, 'get', array('kind' => 'resource', 'id' => $phoneId))['revision'] === $phoneRevBeforeDelete);
+// the trash was emptied outside the journal: the product and everything it kept are gone, and an undo brings them all back
+$sourceRow = $sSite->row('msProductData', $phoneId);
+$sSite->store('msProductData', array('source' => '2') + $sourceRow);
+$purgeBefore = $sTables();
+$purgeRel = $sRelations($phoneId);
+$deleted2 = $call($sEditor, 'delete', array('kind' => 'resource', 'id' => $phoneId));
+$sSite->getObject('modResource', array('id' => $phoneId))->remove();
+check('ms2: removing the product itself removes its data, options and categories (miniShop2 remove())', $sSite->getCount('msProductData', array('id' => $phoneId)) === 0 && $sSite->getCount('msProductOption', array('product_id' => $phoneId)) === 0
+    && $sSite->getCount('msCategoryMember', array('product_id' => $phoneId)) === 0);
+$purgeUndo = $call($sEditor, 'undo', array('changeset_id' => $deleted2['changeset_id'], 'confirm' => true, 'force' => true));
+check('ms2: undo after the trash was emptied recreates the product with its data, options and categories, and keeps the media source', $sTables() == $purgeBefore && $sRelations($phoneId) === $purgeRel
+    && $sSite->getObject('msProductData', array('id' => $phoneId))->get('source') === '2' && $sSite->row('modResource', $phoneId)['deleted'] === '0');
+
+$plainBefore = $sTables();
+
+// ---- class changes ----
+$classBefore = $sTables();
+$toProduct = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $docId, 'fields' => array('class_key' => 'msProduct')));
+check('ms2: a resource turned into a product gets its data row, and the relations appear', $sSite->getCount('msProductData', array('id' => $docId)) === 1 && in_array('ms2_data', $call($sRead, 'get', array('kind' => 'resource', 'id' => $docId))['relations'] ? array_keys((array) $call($sRead, 'get', array('kind' => 'resource', 'id' => $docId))['relations']) : array(), true)
+    && in_array('ms2_data', $toProduct['changed'], true) && in_array('class_key', $toProduct['changed'], true));
+$call($sEditor, 'update', array('kind' => 'resource', 'id' => $docId, 'relations' => array('ms2_data' => array('price' => 50), 'ms2_categories' => array($catAccessories), 'ms2_options' => array('brand' => array('Север')))));
+$toDoc = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $docId, 'fields' => array('class_key' => 'modDocument')));
+check('ms2: a product turned back into a plain resource loses its data, options and categories, like in miniShop2', $sSite->getCount('msProductData', array('id' => $docId)) === 0
+    && $sSite->getCount('msProductOption', array('product_id' => $docId)) === 0 && $sSite->getCount('msCategoryMember', array('product_id' => $docId)) === 0 && in_array('ms2_data', $toDoc['changed'], true));
+$call($sEditor, 'undo', array('changeset_id' => $toDoc['changeset_id'], 'confirm' => true));
+check('ms2: undo of that returns the product with price, option and category', $sRelations($docId)['ms2_data']['price'] === 50.0 && $sRelations($docId)['ms2_options'] == array('brand' => array('Север')) && $sRelations($docId)['ms2_categories'] === array($catAccessories));
+$call($sEditor, 'update', array('kind' => 'resource', 'id' => $docId, 'fields' => array('class_key' => 'modDocument')));
+$call($sEditor, 'update', array('kind' => 'resource', 'id' => $docId, 'fields' => array('class_key' => 'modDocument', 'pagetitle' => 'Статья про телефоны')));
+
+// ---- duplicate ----
+$phoneCopy = $call($sEditor, 'duplicate', array('kind' => 'resource', 'id' => $phoneId, 'new_name' => 'Смартфон «Звезда» (копия)'));
+$copyRel = $sRelations($phoneCopy['id']);
+check('ms2: duplicating a product copies its data, options and categories', $copyRel['ms2_data']['price'] === 1500.0 && $copyRel['ms2_data']['article'] === 'А-100' && $copyRel['ms2_data']['tags'] === array('новинка', 'хит')
+    && $copyRel['ms2_options'] == array('brand' => array('Звезда', 'Север'), 'body_материал' => array('алюминий')) && $copyRel['ms2_categories'] === array($catAccessories)
+    && $sSite->getCount('msProductData', array('id' => $phoneCopy['id'])) === 1);
+$call($sEditor, 'undo', array('changeset_id' => $phoneCopy['changeset_id'], 'confirm' => true));
+check('ms2: undo of the duplicate removes the copy and its rows', $sSite->getCount('msProductData', array('id' => $phoneCopy['id'])) === 0 && $sSite->getCount('msProductOption', array('product_id' => $phoneCopy['id'])) === 0
+    && $sSite->getCount('msCategoryMember', array('product_id' => $phoneCopy['id'])) === 0);
+$docCopy = $call($sEditor, 'duplicate', array('kind' => 'resource', 'id' => $docId, 'new_name' => 'Копия статьи'));
+check('ms2: duplicating a plain resource copies no product relations', $sSite->getCount('msProductData', array('id' => $docCopy['id'])) === 0 && $sRelNames($docCopy['id']) === array('tvs', 'resource_groups'));
+
+// ---- scopes and groups ----
+$e = throws('ms2: a read token cannot write the product data', ApiException::class, function () use ($call, $sRead, $phoneId) { $call($sRead, 'update', array('kind' => 'resource', 'id' => $phoneId, 'relations' => array('ms2_data' => array('price' => 1)))); });
+check('ms2: writing product data needs the content scope', $e && $e->errorCode === 'forbidden_scope' && $sRelations($phoneId)['ms2_data']['price'] === 1500.0);
+$sDenied = $sActor('admin', array('denied_groups' => array('minishop2')));
+check('ms2: a token denied the minishop2 group does not see the product relations', $sRelNames($phoneId, $sDenied) === array('tvs', 'resource_groups'));
+$e = throws('ms2: nor write them', ApiException::class, function () use ($call, $sDenied, $phoneId) { $call($sDenied, 'update', array('kind' => 'resource', 'id' => $phoneId, 'relations' => array('ms2_data' => array('price' => 1)))); });
+check('ms2: writing product relations with a denied group is unavailable', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'denied_for_token' && $sRelations($phoneId)['ms2_data']['price'] === 1500.0);
+$deniedUpdate = $call($sDenied, 'update', array('kind' => 'resource', 'id' => $phoneId, 'fields' => array('longtitle' => 'Права есть')));
+check('ms2: the same token can still change the resource fields, and the product data stays', $deniedUpdate['changed'] === array('longtitle') && $sTables() == $plainBefore);
+$call($sDenied, 'update', array('kind' => 'resource', 'id' => $phoneId, 'fields' => array('longtitle' => '')));
+$sSite->options['modxmcp.disabled_groups'] = 'minishop2';
+$sOff = $sActor('admin');
+$e = throws('ms2: with the group switched off the kind is unavailable', ApiException::class, function () use ($call, $sOff) { $call($sOff, 'list', array('kind' => 'ms2_option')); });
+check('ms2: a disabled minishop2 group makes ms2_option unavailable', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'disabled_group');
+check('ms2: and hides the product relations', $sRelNames($phoneId, $sOff) === array('tvs', 'resource_groups'));
+$offSnap = \ModxMCP\Journal\Snapshot::capture($sSite, $sOff->kinds->get('resource'), $phoneId);
+check('ms2: and the snapshot of a product has no product rows at all, as before this task', !array_key_exists('ms2_data', $offSnap['relations']) && array_keys($offSnap['relations']) === array('tvs', 'resource_groups'));
+$offWarn = $sActor('content');
+$offUpdate = $call($offWarn, 'update', array('kind' => 'resource', 'id' => $phoneId, 'fields' => array('longtitle' => 'Без магазина')));
+check('ms2: a plain update still works and the journaling warning comes back', $offUpdate['changed'] === array('longtitle') && count($offWarn->warnings) === 1 && strpos($offWarn->warnings[0], 'msProduct') !== false && $sTables() == $plainBefore);
+$e = throws('ms2: product relations are unknown relations while the group is off', ApiException::class, function () use ($call, $sOff, $phoneId) { $call($sOff, 'update', array('kind' => 'resource', 'id' => $phoneId, 'relations' => array('ms2_data' => array('price' => 1)))); });
+check('ms2: writing them is refused as unknown', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'Unknown relation') !== false);
+unset($sSite->options['modxmcp.disabled_groups']);
+$priceRecorded = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $phoneId, 'relations' => array('ms2_data' => array('price' => 1501))));
+$sSite->options['modxmcp.disabled_groups'] = 'minishop2';
+$e = throws('ms2: undo of a product data change while miniShop2 is off', ApiException::class, function () use ($call, $sActor, $priceRecorded) { $call($sActor('content'), 'undo', array('changeset_id' => $priceRecorded['changeset_id'], 'confirm' => true)); });
+check('ms2: is refused as not reversible, and nothing is touched', $e && $e->errorCode === 'not_reversible' && strpos($e->getMessage(), 'switched off') !== false && $sSite->getObject('msProductData', array('id' => $phoneId))->get('price') === '1501');
+unset($sSite->options['modxmcp.disabled_groups']);
+$call($sEditor, 'undo', array('changeset_id' => $priceRecorded['changeset_id'], 'confirm' => true));
+check('ms2: and works once it is switched on', $sSite->getObject('msProductData', array('id' => $phoneId))->get('price') === '1500');
+$call($sActor('content'), 'update', array('kind' => 'resource', 'id' => $phoneId, 'fields' => array('longtitle' => '')));
+check('ms2: switching the group on again brings everything back with the data unchanged', $sTables() == $plainBefore && $sRelations($phoneId)['ms2_data']['price'] === 1500.0);
+
+// ---- option links to categories ----
+$pInCat1 = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Наушники', 'class_key' => 'msProduct', 'parent' => $catAccessories), 'relations' => array('ms2_options' => array('brand' => array('Север')))))['id'];
+$pInCat2 = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Кабель', 'class_key' => 'msProduct', 'parent' => $catAccessories)))['id'];
+$pElsewhere = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Подставка', 'class_key' => 'msProduct', 'parent' => $catPhones), 'relations' => array('ms2_options' => array('brand' => array('Юг')))))['id'];
+$beforeAssign = $sTables();
+$assignDry = $call($sDev, 'invoke', array('kind' => 'ms2_option', 'op' => 'assign_to_category', 'id' => $oBrand['id'], 'args' => array('category' => $catAccessories), 'dry_run' => true));
+check('ms2_option: assign dry run changes nothing', $assignDry['dry_run'] === true && $sTables() == $beforeAssign);
+$assign = $call($sDev, 'invoke', array('kind' => 'ms2_option', 'op' => 'assign_to_category', 'id' => $oBrand['id'], 'args' => array('category' => $catAccessories, 'required' => true, 'value' => 'Звезда')));
+$links = $call($sDev, 'get', array('kind' => 'ms2_option', 'id' => $oBrand['id']))['relations']['categories'];
+check('ms2_option: assign_to_category links the option with the given flags and the processor ranks it', $links === array(array('category_id' => $catAccessories, 'active' => 1, 'required' => 1, 'rank' => 0, 'value' => 'Звезда'))
+    && end($sSite->ms2Calls)[0] === 'mgr/settings/option/assign' && end($sSite->ms2Calls)[2]['processors_path'] === $ms2Core . 'processors/');
+$assignChanged = array_map(function ($change) { return $change[1]; }, $sChanges($assign['changeset_id']));
+check('ms2_option: the products that got the default value are journaled in the same changeset, the others are not', isset($assignChanged['ms2_option:' . $oBrand['id']]) && $assignChanged['ms2_option:' . $oBrand['id']] === array('categories')
+    && isset($assignChanged['resource:' . $pInCat2]) && $assignChanged['resource:' . $pInCat2] === array('ms2_options') && !isset($assignChanged['resource:' . $pInCat1]) && !isset($assignChanged['resource:' . $pElsewhere]));
+check('ms2_option: a product without a value got the default, one with a value kept it', $sRelations($pInCat2)['ms2_options'] == array('brand' => array('Звезда')) && $sRelations($pInCat1)['ms2_options'] == array('brand' => array('Север')));
+$e = throws('ms2_option: assigning twice', ApiException::class, function () use ($call, $sDev, $oBrand, $catAccessories) { $call($sDev, 'invoke', array('kind' => 'ms2_option', 'op' => 'assign_to_category', 'id' => $oBrand['id'], 'args' => array('category' => $catAccessories))); });
+check('ms2_option: a second assign is refused', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'already assigned') !== false);
+foreach (array('a plain resource' => $docId, 'a missing resource' => 999, 'a product' => $phoneId) as $label => $category) {
+    $e = throws("ms2_option: assigning to {$label}", ApiException::class, function () use ($call, $sDev, $oBrand, $category) { $call($sDev, 'invoke', array('kind' => 'ms2_option', 'op' => 'assign_to_category', 'id' => $oBrand['id'], 'args' => array('category' => $category))); });
+    check("ms2_option: {$label} is not a category", $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'not a miniShop2 category') !== false);
+}
+$e = throws('ms2_option: a content token cannot assign', ApiException::class, function () use ($call, $sEditor, $oBrand, $catPhones) { $call($sEditor, 'invoke', array('kind' => 'ms2_option', 'op' => 'assign_to_category', 'id' => $oBrand['id'], 'args' => array('category' => $catPhones))); });
+check('ms2_option: assigning needs develop', $e && $e->errorCode === 'forbidden_scope');
+$call($sDev, 'undo', array('changeset_id' => $assign['changeset_id'], 'confirm' => true));
+check('ms2_option: undo of an assign removes the link and the default values it gave, exactly', $sTables() == $beforeAssign);
+
+// ranks, removal
+$oWarranty = $call($sDev, 'create', array('kind' => 'ms2_option', 'fields' => array('key' => 'warranty', 'caption' => 'Гарантия, мес.', 'type' => 'numberfield')));
+$oColor2 = $call($sDev, 'create', array('kind' => 'ms2_option', 'fields' => array('key' => 'connector', 'caption' => 'Разъём')));
+foreach (array($oBrand['id'], $oWarranty['id'], $oColor2['id']) as $assignId) {
+    $call($sDev, 'invoke', array('kind' => 'ms2_option', 'op' => 'assign_to_category', 'id' => $assignId, 'args' => array('category' => $catAccessories)));
+}
+$call($sEditor, 'update', array('kind' => 'resource', 'id' => $pInCat1, 'relations' => array('ms2_options' => array('brand' => array('Север'), 'warranty' => array('12')))));
+$ranks = array();
+foreach ($sSite->getCollection('msCategoryOption', array('category_id' => $catAccessories)) as $row) { $ranks[(int) $row->get('option_id')] = (int) $row->get('rank'); }
+check('ms2_option: the processor ranks the links in the order they were made', $ranks === array($oBrand['id'] => 0, $oWarranty['id'] => 1, $oColor2['id'] => 2));
+// a product that came to the category after the links were made has no values for them: a restored link must not give it any
+$pNoRow = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Зарядка', 'class_key' => 'msProduct', 'parent' => $catAccessories)))['id'];
+check('ms2_option: such a product has no option values', $sSite->getCount('msProductOption', array('product_id' => $pNoRow)) === 0);
+$beforeRemove = $sTables();
+$remove = $call($sDev, 'invoke', array('kind' => 'ms2_option', 'op' => 'remove_from_category', 'id' => $oBrand['id'], 'args' => array('category' => $catAccessories)));
+$removeChanged = array_map(function ($change) { return $change[1]; }, $sChanges($remove['changeset_id']));
+$ranksAfter = array();
+foreach ($sSite->getCollection('msCategoryOption', array('category_id' => $catAccessories)) as $row) { $ranksAfter[(int) $row->get('option_id')] = (int) $row->get('rank'); }
+check('ms2_option: remove_from_category deletes the link and the option values of the category products, and the later links move up', $ranksAfter === array($oWarranty['id'] => 0, $oColor2['id'] => 1)
+    && $sSite->getCount('msProductOption', array('key' => 'brand', 'product_id' => $pInCat1)) === 0 && $sSite->getCount('msProductOption', array('key' => 'brand', 'product_id' => $pInCat2)) === 0
+    && $sSite->getCount('msProductOption', array('key' => 'brand', 'product_id' => $pElsewhere)) === 1 && end($sSite->ms2Calls)[0] === 'mgr/category/option/delete');
+check('ms2_option: the options whose ranks changed and the products that lost values are journaled too', $removeChanged['ms2_option:' . $oBrand['id']] === array('categories') && $removeChanged['ms2_option:' . $oWarranty['id']] === array('categories')
+    && $removeChanged['ms2_option:' . $oColor2['id']] === array('categories') && $removeChanged['resource:' . $pInCat1] === array('ms2_options') && !isset($removeChanged['resource:' . $pElsewhere]));
+$e = throws('ms2_option: removing a link that is not there', ApiException::class, function () use ($call, $sDev, $oBrand, $catAccessories) { $call($sDev, 'invoke', array('kind' => 'ms2_option', 'op' => 'remove_from_category', 'id' => $oBrand['id'], 'args' => array('category' => $catAccessories))); });
+check('ms2_option: a second remove is refused', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'not assigned') !== false);
+$call($sDev, 'undo', array('changeset_id' => $remove['changeset_id'], 'confirm' => true));
+check('ms2_option: undo of a remove puts back the link, the ranks and the values, and adds no default values', $sTables() == $beforeRemove && $sSite->getCount('msProductOption', array('product_id' => $pNoRow)) === 0);
+
+// deleting an option
+$beforeDelete = $sTables();
+$delDry = $call($sDev, 'delete', array('kind' => 'ms2_option', 'id' => $oWarranty['id'], 'dry_run' => true));
+check('ms2_option: the delete dry run counts the category links', $delDry['would_delete']['related_rows']['categories'] === 1 && $sTables() == $beforeDelete);
+$oDeleted = $call($sDev, 'delete', array('kind' => 'ms2_option', 'id' => $oWarranty['id']));
+$oDeletedChanged = array_map(function ($change) { return $change[0]; }, $sChanges($oDeleted['changeset_id']));
+check('ms2_option: deleting an option removes its category links and the values of products in those categories', $sSite->row('msOption', $oWarranty['id']) === null && $sSite->getCount('msCategoryOption', array('option_id' => $oWarranty['id'])) === 0
+    && $sSite->getCount('msProductOption', array('key' => 'warranty')) === 0 && end($sSite->ms2Calls)[0] === 'mgr/settings/option/remove');
+check('ms2_option: the option is journaled as deleted and every product of its categories that lost a value as changed', $oDeletedChanged['ms2_option:' . $oWarranty['id']] === 'delete' && $oDeletedChanged['resource:' . $pInCat1] === 'update' && $oDeletedChanged['resource:' . $pInCat2] === 'update' && $oDeletedChanged['resource:' . $pBare['id']] === 'update' && !isset($oDeletedChanged['resource:' . $pElsewhere]));
+$call($sDev, 'undo', array('changeset_id' => $oDeleted['changeset_id'], 'confirm' => true));
+check('ms2_option: undo of a delete restores the option, its links and the product values exactly (and no default values for other products)', $sTables() == $beforeDelete && $sSite->getCount('msProductOption', array('product_id' => $pNoRow)) === 0);
+$e = throws('ms2_option: a read token cannot delete', ApiException::class, function () use ($call, $sRead, $oWarranty) { $call($sRead, 'delete', array('kind' => 'ms2_option', 'id' => $oWarranty['id'])); });
+check('ms2_option: deleting needs develop', $e && $e->errorCode === 'forbidden_scope');
+check('ms2_option: the history of an option lists its changesets', count($call($sDev, 'history', array('kind' => 'ms2_option', 'id' => $oBrand['id'], 'limit' => 50))['changesets']) >= 4);
+// limits
+$sSite->store('msOption', array('id' => 900, 'key' => 'bulk', 'caption' => 'Много', 'type' => 'textfield', 'category' => '0', 'description' => null, 'measure_unit' => null, 'properties' => null));
+$catBig = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Большая категория', 'class_key' => 'msCategory')))['id'];
+for ($n = 0; $n < 1001; $n++) { $sSite->store('modResource', array('id' => 5000 + $n, 'class_key' => 'msProduct', 'parent' => $catBig, 'pagetitle' => 'P' . $n)); }
+$e = throws('ms2_option: too many products', ApiException::class, function () use ($call, $sDev, $catBig) { $call($sDev, 'invoke', array('kind' => 'ms2_option', 'op' => 'assign_to_category', 'id' => 900, 'args' => array('category' => $catBig))); });
+check('ms2_option: an assign that would change over 1000 products is refused', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), '1000') !== false && $sSite->getCount('msCategoryOption', array('option_id' => 900)) === 0);
+
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));
 check('canonical: list order is kept', Kernel::canonical(array(3, 1, 2)) === array(3, 1, 2));

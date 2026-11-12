@@ -70,6 +70,7 @@ final class DuplicateAction extends WriteAction {
         $relations = array();
         $notCopied = array();
         foreach ($kind->relationSpecs() as $name => $spec) {
+            if (!$kind->hasRelation($context->modx, $source, $name) || (!empty($spec['writable']) && $kind->relationBlockReason($context, $name) !== null)) { continue; }
             if (!empty($spec['writable'])) {
                 $relations[$name] = !empty($spec['map'])
                     ? (array) $kind->storedRelation($context->modx, $source, $name)
@@ -80,7 +81,7 @@ final class DuplicateAction extends WriteAction {
             }
         }
         if ($notCopied) { $context->warnings[] = 'Not copied: ' . implode(', ', $notCopied); }
-        Objects::assertWritableRelations($kind, $relations);
+        Objects::assertWritableRelations($kind, $relations, $context);
         Objects::lint($context, $kind, $columns);
         if ($this->isDryRun($args, $context)) {
             return $this->plan($context, array(

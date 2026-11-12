@@ -48,6 +48,13 @@ final class Capabilities {
         ));
     }
 
+    /** Core directory of an add-on with a trailing slash, placeholders resolved: where its code (and its model) lives. */
+    public function integrationPath($key) {
+        $probe = self::INTEGRATIONS[$key];
+        $path = $this->modx->getOption($probe[0], null, $this->modx->getOption('core_path') . 'components/' . $key . '/');
+        return rtrim($this->resolvePath($path), '/\\') . '/';
+    }
+
     /**
      * Cheap installation probes; add-on services are never initialised just to list tools.
      * @return array group => [installed, available, reason]
@@ -62,8 +69,7 @@ final class Capabilities {
         while ($name = $query->stmt->fetchColumn()) { $names[$name] = true; }
         $out = array();
         foreach (self::INTEGRATIONS as $key => $probe) {
-            $path = $this->modx->getOption($probe[0], null, $this->modx->getOption('core_path') . 'components/' . $key . '/');
-            $file = rtrim($this->resolvePath($path), '/\\') . '/' . $probe[1];
+            $file = $this->integrationPath($key) . $probe[1];
             clearstatcache(true, $file);
             $installed = isset($names[$key]);
             $available = $installed && is_file($file);

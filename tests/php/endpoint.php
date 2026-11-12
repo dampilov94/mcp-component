@@ -8,7 +8,25 @@
 require_once __DIR__ . '/FakeModx.php';
 require_once dirname(dirname(__DIR__)) . '/core/components/modxmcp/src/autoload.php';
 
+/** A site with miniShop2 "installed": its namespace, and the files the integration probe and the processor lookup need. */
+function installMiniShop2($modx, $dir) {
+    $core = $dir . '/core/components/minishop2/';
+    if (!is_dir($core . 'model/minishop2')) { mkdir($core . 'model/minishop2', 0700, true); }
+    touch($core . 'model/minishop2/minishop2.class.php');
+    foreach (array('mgr/settings/option/create', 'mgr/settings/option/update', 'mgr/settings/option/remove', 'mgr/settings/option/assign', 'mgr/category/option/delete') as $processor) {
+        if (!is_dir(dirname($core . 'processors/' . $processor))) { mkdir(dirname($core . 'processors/' . $processor), 0700, true); }
+        touch($core . 'processors/' . $processor . '.class.php');
+    }
+    $modx->store('modNamespace', array('name' => 'minishop2', 'path' => '{core_path}components/minishop2/', 'assets_path' => ''));
+}
+
 function testSite($dir) {
+    $modx = testSiteOptions($dir);
+    if (getenv('MODXMCP_TEST_MS2')) { installMiniShop2($modx, $dir); }
+    return $modx;
+}
+
+function testSiteOptions($dir) {
     return fakeSite($dir, array(
         'modxmcp.disabled_groups' => getenv('MODXMCP_TEST_DISABLED_GROUPS') ?: '',
         'modxmcp.allowed_ips' => getenv('MODXMCP_TEST_ALLOWED_IPS') ?: '',

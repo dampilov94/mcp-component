@@ -15,7 +15,7 @@ final class Snapshot {
         $key = $kind->normalizeKey($key);
         $object = $kind->findByKey($modx, $key);
         if (!$object) { return null; }
-        $fields = $kind->stateColumns(self::row($object));
+        $fields = $kind->stateColumns(self::row($object, $kind->objectColumns($object)));
         $state = array('kind' => $kind->name(), 'key' => (string) $key);
         if ($kind->codeField() !== null) {
             // The file is the truth for a static element; a stale database copy must not
@@ -57,10 +57,10 @@ final class Snapshot {
         return array($spec['fk'] => $id) + (isset($spec['where']) ? $spec['where'] : array());
     }
 
-    /** Raw column values as strings (or null), keys sorted. */
-    private static function row($object) {
+    /** Raw column values as strings (or null), keys sorted. $columns: the values to use instead of the object's own. */
+    private static function row($object, array $columns = null) {
         $row = array();
-        foreach ($object->toArray('', true) as $column => $value) {
+        foreach ($columns !== null ? $columns : $object->toArray('', true) as $column => $value) {
             if ($value === null) { $row[$column] = null; }
             elseif (is_bool($value)) { $row[$column] = $value ? '1' : '0'; }
             elseif (is_scalar($value)) { $row[$column] = (string) $value; }
@@ -202,6 +202,7 @@ final class Snapshot {
         $rows = $state['relations'] + $extra;
         foreach ($kind->relationSpecs() as $name => $spec) {
             if (!isset($rows[$name])) { continue; }
+            if ($kind->restoreRelation($modx, $name, $spec, $key, $rows[$name])) { continue; }
             // A one-row relation keeps the current values of the columns the state ignores.
             $kept = array();
             if (!empty($spec['ignore_columns']) && count($rows[$name]) === 1) {
