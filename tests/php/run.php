@@ -113,14 +113,14 @@ $context = function ($scope, array $denied = array(), array $options = array()) 
 $read = $context('read');
 $tools = Manifest::tools($read);
 $names = array_column($tools, 'name');
-check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_invoke', 'modx_resource_tree', 'modx_view_code', 'modx_search', 'modx_find_usages', 'modx_list_files', 'modx_read_file', 'modx_history', 'modx_history_diff', 'modx_request_status'));
+check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_invoke', 'modx_resource_tree', 'modx_view_code', 'modx_search', 'modx_find_usages', 'modx_list_files', 'modx_read_file', 'modx_history', 'modx_history_diff', 'modx_check_page', 'modx_request_status'));
 check('manifest: protocol action is not a tool', !in_array('modx_manifest', $names, true));
 check('manifest: hash is stable', Manifest::hash($tools) === Manifest::hash(Manifest::tools($context('read'))));
 foreach ($tools as $tool) {
     check("manifest: {$tool['name']} is read-only", $tool['name'] === 'modx_invoke' || ($tool['effect']['read_only'] === true && $tool['effect']['destructive'] === false));
 }
 $all = array_column(Manifest::tools($context('admin')), null, 'name');
-check('manifest: full tool count', count($all) === 30);
+check('manifest: full tool count', count($all) === 31);
 check('manifest: duplicate is a reversible write after delete', $all['modx_duplicate']['effect']['read_only'] === false
     && $all['modx_duplicate']['effect']['reversible'] === true && $all['modx_duplicate']['effect']['destructive'] === false
     && array_search('modx_duplicate', array_keys($all), true) === array_search('modx_delete', array_keys($all), true) + 1);
@@ -1255,6 +1255,80 @@ throws('auto_static: conversion failure aborts create', RuntimeException::class,
 $autoSite->failProcessor = null;
 check('auto_static: failed create leaves no object or file', $autoSite->getCount('modChunk') === $autoCount
     && glob($autoSite->getOption('core_path') . 'elements/chunks/Failure-automatic-*.tpl') === array());
+
+// Page checks never use the network: the injected fetcher controls responses and log writes.
+$pageDir = $siteDir . '/page-check';
+mkdir($pageDir . '/core/cache/logs', 0700, true);
+$pageSite = fakeSite($pageDir, array('site_url' => 'https://site.example/base/'));
+$pageSite->store('modContext', array('key' => 'web', 'name' => 'Web'));
+$pageSite->store('modContext', array('key' => 'other', 'name' => 'Other'));
+$pageSite->store('modContextSetting', array('context_key' => 'other', 'key' => 'site_url', 'value' => 'https://Other.Example:8443/sub/'));
+$pageSite->store('modContextSetting', array('context_key' => 'other', 'key' => 'http_host', 'value' => 'alias.example:8080'));
+$pageSite->store('modResource', array('id' => 1, 'pagetitle' => 'Страница', 'context_key' => 'web', 'uri' => 'page.html'));
+$pageRead = new Context($pageSite, array('scope' => 'read') + $dev->token, $dev->corePath, function () {});
+$fetcher = new class implements ModxMCP\Verify\PageFetcher {
+    public $response;
+    public $onFetch;
+    public $calls = array();
+    public function fetch($url, $timeoutSeconds, $maxBytes): array {
+        $this->calls[] = array($url, $timeoutSeconds, $maxBytes);
+        if ($this->onFetch) { call_user_func($this->onFetch); }
+        if ($this->response instanceof RuntimeException) { throw $this->response; }
+        return $this->response;
+    }
+};
+$pageRead->setPageFetcher($fetcher);
+$fetcher->response = array('status' => 200, 'headers' => array('content-type' => 'text/html; charset=UTF-8'),
+    'body' => "<title> Привет &amp; мир </title>\n[[\$missing]]\n<script>[[ignored]]</script>\n<style>[[ignored]]</style>\n[[!Сниппет]]", 'time_ms' => 17, 'truncated' => false);
+$pageLog = $pageSite->getCachePath() . 'logs/error.log';
+file_put_contents($pageLog, "[2026-01-01 10:00:00] (INFO @ old) old error\n");
+$fetcher->onFetch = function () use ($pageLog) { file_put_contents($pageLog, "[2026-01-01 10:01:00] (ERROR in Page::render @ fake) Новая ошибка\n", FILE_APPEND); };
+$checkedPage = $call($pageRead, 'check_page', array('id' => 1));
+check('check_page: id URL, HTML and precise tags', $checkedPage['url'] === 'https://site.example/base/page.html' && $checkedPage['status'] === 200
+    && $checkedPage['title'] === 'Привет & мир' && $checkedPage['time_ms'] === 17 && $checkedPage['bytes'] === strlen($fetcher->response['body'])
+    && $checkedPage['unparsed_count'] === 2 && $checkedPage['unparsed_tags'] === array(array('tag' => '[[$missing]]', 'line' => 2), array('tag' => '[[!Сниппет]]', 'line' => 5)));
+check('check_page: only new log entries', $checkedPage['log']['new_entries'] === 1 && $checkedPage['log']['entries'][0]['message'] === 'Новая ошибка');
+$fetcher->onFetch = null;
+$pathPage = $call($pageRead, 'check_page', array('url_path' => '/target?q=1', 'context' => 'other', 'max_bytes' => 1234));
+check('check_page: context origin discards base path and passes limit', $pathPage['url'] === 'https://Other.Example:8443/target?q=1'
+    && end($fetcher->calls) === array('https://Other.Example:8443/target?q=1', 15, 1234) && $pathPage['log']['new_entries'] === 0);
+foreach (array('//evil.example/x', '/\\evil', 'https://evil.example', '/../secret', '/a/../b', "/bad\npath", '/%2e%2e/secret', '/%5cevil', '/%2fevil') as $badPath) {
+    $e = throws('check_page: unsafe path', ApiException::class, function () use ($call, $pageRead, $badPath) { $call($pageRead, 'check_page', array('url_path' => $badPath)); });
+    check('check_page: path validation', $e && $e->errorCode === 'validation_failed');
+}
+foreach (array('https://evil.example/x', 'ftp://site.example/x', 'https://user:pass@site.example/x', '') as $badUrl) {
+    $pageSite->options['fake_urls'] = array(1 => $badUrl);
+    $e = throws('check_page: final URL guard', ApiException::class, function () use ($call, $pageRead) { $call($pageRead, 'check_page', array('id' => 1)); });
+    check('check_page: URL refused', $e && $e->errorCode === 'validation_failed');
+}
+$pageSite->options['fake_urls'] = array(1 => 'https://alias.example/ok');
+check('check_page: context http_host is allowed', $call($pageRead, 'check_page', array('id' => 1))['url'] === 'https://alias.example/ok');
+unset($pageSite->options['fake_urls']);
+$fetcher->response['body'] = '<title>' . str_repeat('Я', 350) . '</title>' . str_repeat("\n[[tag]]", 25);
+$longPage = $call($pageRead, 'check_page', array('id' => 1));
+check('check_page: long title and tag list caps', mb_strlen($longPage['title'], 'UTF-8') === 300 && $longPage['unparsed_count'] === 25 && count($longPage['unparsed_tags']) === 20);
+foreach (array(404, 500) as $status) {
+    $fetcher->response['status'] = $status;
+    check('check_page: HTTP error is a result', $call($pageRead, 'check_page', array('id' => 1))['status'] === $status);
+}
+$fetcher->response['status'] = 302;
+foreach (array('/local' => true, 'next' => true, 'https://other.example/page' => true, '//evil.example/page' => false, 'https://evil.example/page' => false, 'javascript:alert(1)' => false) as $location => $same) {
+    $fetcher->response['headers']['location'] = $location;
+    $redirect = $call($pageRead, 'check_page', array('id' => 1));
+    check('check_page: redirect reported without following', $redirect['location'] === $location && $redirect['redirect_same_site'] === $same);
+}
+$fetcher->response = array('status' => 200, 'headers' => array('content-type' => 'application/octet-stream'), 'body' => '<title>not HTML</title>[[tag]]', 'time_ms' => 1, 'truncated' => true);
+$binaryPage = $call($pageRead, 'check_page', array('id' => 1));
+check('check_page: binary content not scanned and truncation retained', !isset($binaryPage['title']) && $binaryPage['unparsed_count'] === 0 && $binaryPage['truncated']);
+$fetcher->response = new RuntimeException('TLS transport failure');
+$failedPage = $call($pageRead, 'check_page', array('id' => 1));
+check('check_page: transport failure remains a result', $failedPage['status'] === 0 && $failedPage['error'] === 'TLS transport failure' && $failedPage['log']['new_entries'] === 0);
+foreach (array(array(), array('id' => 1, 'url_path' => '/')) as $badSelector) {
+    $e = throws('check_page: exactly one selector', ApiException::class, function () use ($call, $pageRead, $badSelector) { $call($pageRead, 'check_page', $badSelector); });
+    check('check_page: selector error', $e && $e->errorCode === 'validation_failed');
+}
+$e = throws('check_page: unknown resource', ApiException::class, function () use ($call, $pageRead) { $call($pageRead, 'check_page', array('id' => 999)); });
+check('check_page: not_found', $e && $e->errorCode === 'not_found');
 
 // --- Files ---
 use ModxMCP\Files\FileRoot;

@@ -303,6 +303,16 @@ class modX extends xPDO {
         return true;
     }
     public function invokeEvent($name, array $params = array()) { $this->events[] = $name; }
+    public function makeUrl($id, $context = '', $args = '', $scheme = -1) {
+        $urls = $this->getOption('fake_urls', null, array());
+        if (array_key_exists($id, $urls)) { return $urls[$id]; }
+        $resource = $this->getObject('modResource', $id);
+        if (!$resource) { return ''; }
+        $key = $context !== '' ? $context : ($resource->get('context_key') ?: 'web');
+        $setting = $this->getObject('modContextSetting', array('context_key' => $key, 'key' => 'site_url'));
+        $siteUrl = $setting ? $setting->get('value') : $this->getOption('site_url');
+        return rtrim($siteUrl, '/') . '/' . ltrim($resource->get('uri') ?: $resource->get('alias'), '/');
+    }
     public function getCachePath() { return $this->getOption('core_path') . 'cache/'; }
     public function getCacheManager() { return $this->cache; }
     public function log($level, $message) { error_log($message); }

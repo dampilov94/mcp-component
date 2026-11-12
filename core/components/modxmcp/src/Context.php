@@ -6,6 +6,8 @@ use ModxMCP\Journal\BlobStore;
 use ModxMCP\Journal\Journal;
 use ModxMCP\Kind\KindRegistry;
 use ModxMCP\Request\RequestStore;
+use ModxMCP\Verify\PageFetcher;
+use ModxMCP\Verify\CurlPageFetcher;
 
 /** Everything an action may need about the current request. */
 final class Context {
@@ -29,6 +31,7 @@ final class Context {
     public $warnings = array();
 
     private $requestStoreFactory;
+    private $pageFetcher;
 
     public function __construct(\modX $modx, array $token, $corePath, callable $requestStoreFactory) {
         $this->modx = $modx;
@@ -59,4 +62,12 @@ final class Context {
     public function requestStore() {
         return call_user_func($this->requestStoreFactory);
     }
+    public function pageFetcher(): PageFetcher {
+        if ($this->pageFetcher === null) { $this->pageFetcher = new CurlPageFetcher(); }
+        return $this->pageFetcher;
+    }
+    public function setPageFetcher(PageFetcher $fetcher): void {
+        $this->pageFetcher = $fetcher;
+    }
+
 }
