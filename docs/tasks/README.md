@@ -51,6 +51,8 @@ below) or append a `## Review` section to the brief with numbered change request
 | 12 | [make_static and auto-static](12-make-static.md) | `task/12-make-static` | merged |
 | 13 | [modx_check_page](13-check-page.md) | `task/13-check-page` | merged |
 | 14 | [modx_dependency_graph](14-dependency-graph.md) | `task/14-dependency-graph` | merged |
+| 15 | [Object keys that are not numeric ids](15-object-keys.md) | `task/15-object-keys` | ready for the executor |
+| 16 | [Settings kinds](16-settings-kinds.md) | `task/16-settings-kinds` | ready for the executor |
 
 ## Doing several briefs in a row
 
@@ -76,6 +78,9 @@ Lessons from briefs 01–08 (all of the architect's corrections came from these)
   in your test data.
 - Do not add checks the brief does not ask for on return values of MODX calls: several
   MODX methods return false in normal situations (e.g. `modCacheManager::refresh()`).
+- Files MODX writes are not always the bytes you gave it: snippet and plugin files get an
+  opening PHP tag (`Kind::fileContent()` / `codeFromFile()` handle it). Anything that
+  reads or writes a static file must go through the kind.
 - When MODX's real behaviour or data format matters, read it in `modx-example-2-8-8/`
   rather than trusting the brief's summary, and say in the report where the two differ.
 
