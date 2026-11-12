@@ -148,6 +148,9 @@ After stage 3:
   journaled), `ms2_order` (admin, read-only, operation `change_status` with a plan showing
   whether e-mails go out; never undone) and `ms2_order_status`.
 - `modx_list` items of string-key kinds always carry their `key`.
+- MIGX: kind `migx_config` (form tabs and columns as JSON, shape checked; delete marks deleted),
+  MIGX TV values on pages written and read as lists with `MIGX_id`s; TV `input_properties`
+  (binds a MIGX TV to its configuration); help topic `migx`.
 
 - Offline tests (`npm test`): pure PHP logic, the real kernel behind PHP's built-in server with
   stubbed MODX classes, and the Node bridge end to end. CI runs them.

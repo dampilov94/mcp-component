@@ -63,9 +63,10 @@ configuration, MIGX reads `formtabs` and `columns` (JSON text) straight from the
 take `contextmenus`, `actionbuttons`, `columnbuttons`, `filters`, `extended` there. Inline is enough for rows
 stored in one TV; use a named configuration to share one description between TVs.
 
-`modx_create {kind: "tv", fields: {name: "gallery", caption: "Галерея", type: "migx"}, relations: {templates: [3]}}`
-creates the TV. This release's `tv` kind has no field for the input properties, so the binding (`configs`, or
-inline `formtabs` and `columns`) is set in the manager (the TV's Input Options tab) for now.
+`modx_create {kind: "tv", fields: {name: "gallery", caption: "Галерея", type: "migx", input_properties:
+{configs: "gallery"}}, relations: {templates: [3]}}` creates the TV bound to the named configuration. For an
+inline description put `formtabs` and `columns` (as JSON text) into `input_properties` instead of `configs`.
+Writing `input_properties` replaces the whole map, so send every option the TV needs.
 
 ## Fields that need more than a widget: inputTV
 

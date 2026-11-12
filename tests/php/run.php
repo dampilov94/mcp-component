@@ -5352,6 +5352,19 @@ foreach (array('modx_migx_', 'modx_update_resource_tvs', 'modx_get_resource_tvs'
 check('migx help: the index lists the topic', strpos($call($mRead, 'help')['content'], '`migx`') !== false);
 check('migx help: no legacy copy is left', !is_file(dirname(dirname(__DIR__)) . '/docs/legacy-help/migx.md'));
 
+// Review addition: TV input options, needed to bind a MIGX TV to its configuration.
+list($ipSite, $ipDev) = $retentionSite();
+$ipTv = $call($ipDev, 'create', array('kind' => 'tv', 'fields' => array('name' => 'gallery', 'type' => 'migx', 'input_properties' => array('configs' => 'gallery', 'allowBlank' => true))));
+check('tv: input_properties are written through inopt_ and read back as an object', (array) $call($ipDev, 'get', array('kind' => 'tv', 'id' => $ipTv['id']))['fields']['input_properties'] == array('configs' => 'gallery', 'allowBlank' => 'true'));
+$ipEdit = $call($ipDev, 'update', array('kind' => 'tv', 'id' => $ipTv['id'], 'fields' => array('input_properties' => array('configs' => 'фото'))));
+check('tv: writing input_properties replaces the map and is journaled', $ipEdit['changed'] === array('input_properties')
+    && (array) $call($ipDev, 'get', array('kind' => 'tv', 'id' => $ipTv['id']))['fields']['input_properties'] == array('configs' => 'фото'));
+$ipCaption = $call($ipDev, 'update', array('kind' => 'tv', 'id' => $ipTv['id'], 'fields' => array('caption' => 'Галерея')));
+check('tv: another field update keeps the input options', $ipCaption['changed'] === array('caption')
+    && (array) $call($ipDev, 'get', array('kind' => 'tv', 'id' => $ipTv['id']))['fields']['input_properties'] == array('configs' => 'фото'));
+$call($ipDev, 'undo', array('changeset_id' => $ipEdit['changeset_id'], 'force' => true, 'confirm' => true));
+check('tv: undo restores the input options', (array) $call($ipDev, 'get', array('kind' => 'tv', 'id' => $ipTv['id']))['fields']['input_properties'] == array('configs' => 'gallery', 'allowBlank' => 'true'));
+
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));
 check('canonical: list order is kept', Kernel::canonical(array(3, 1, 2)) === array(3, 1, 2));

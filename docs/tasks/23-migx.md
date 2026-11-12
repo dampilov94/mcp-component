@@ -145,3 +145,24 @@ The `modx_migx_*` / `create_element` / `modx_update_resource_tvs` examples (repl
 - Should a new config really be created published (as the MIGX form does) rather than with the column default 0?
 - `named_by` hides the two mirrored-row relations in `changed`; is it acceptable to add the flag to the generic relation specs?
 - The hard removal of a config (the manager has an "empty trash") is not offered; undo of a create removes the row and its mirrored rows.
+
+## Review
+
+Accepted and merged. Verified on the stand with `scripts/stand/check-migx.cjs`: the real
+config "HomeList" and the real MIGX TVs read with stable revisions; a test config with
+Cyrillic tabs created, a bad column shape refused, columns updated; a MIGX TV bound to the
+config through `input_properties` and attached to a template; a page value written as a list
+(MIGX_ids 1 and 2 assigned, read back as a list) and undone; the config marked deleted,
+hidden from the list and restored; everything undone to the checkpoint. All earlier checks
+pass. The source findings (formtabs mirrored into two tables, `||`-joined button columns,
+xPDO json columns) and the handling of them are accepted.
+
+Open questions answered:
+
+1. **`input_properties` on the `tv` kind:** added by the architect — without it a MIGX TV
+   cannot be bound to its configuration through the API. An object `{name: value}`, sent to
+   the TV processors as their `inopt_<name>` properties; writing replaces the map (MODX keeps
+   the old map when an empty one is sent). The fake now models the TV processors' handling.
+   The help topic was updated to use it.
+2. New configs stay published, as the MIGX form creates them.
+3. The `named_by` relation flag is accepted.

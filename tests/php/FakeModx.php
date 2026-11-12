@@ -1401,6 +1401,15 @@ class modX extends xPDO {
         if (!isset(self::$processors[$base])) { return null; }
         list($class, $nameColumn) = self::$processors[$base];
         unset($data['clearCache']);
+        // Like the TV processors: input options arrive as inopt_<name>; create always sets the map, update only when one is given.
+        if ($class === 'modTemplateVar') {
+            $options = array();
+            foreach ($data as $property => $value) {
+                if (strpos($property, 'inopt_') === 0) { $options[substr($property, 6)] = $value; unset($data[$property]); }
+            }
+            unset($data['input_properties']);
+            if ($options || $action === 'create') { $data['input_properties'] = json_encode($options); }
+        }
         if ($action === 'remove') {
             $object = $this->getObject($class, array('id' => $data['id']));
             if (!$object) { return new FakeResponse('Object not found.'); }
