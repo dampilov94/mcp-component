@@ -58,12 +58,12 @@ final class ListAction extends Action {
         $search = array();
         if (isset($args['query']) && $args['query'] !== '') {
             foreach ($kind->searchColumns() as $index => $column) {
-                $search[($index ? 'OR:' : '') . $column . ':LIKE'] = '%' . $args['query'] . '%';
+                $search[($index ? 'OR:' : '') . $column . ':LIKE'] = '%' . strtr($args['query'], array('\\' => '\\\\', '%' => '\\%', '_' => '\\_')) . '%';
             }
         }
         foreach (isset($args['where']) ? $args['where'] : array() as $name => $value) {
             if (!isset($definitions[$name]) || !empty($definitions[$name]['code']) || isset($definitions[$name]['format'])
-                || !empty($definitions[$name]['computed'])) {
+                || !empty($definitions[$name]['computed']) || !empty($definitions[$name]['no_filter'])) {
                 throw new ApiException('validation_failed', "Cannot filter {$kind->name()} by '{$name}'.");
             }
             if (!is_scalar($value)) { throw new ApiException('validation_failed', "Filter '{$name}' must be a scalar value."); }
@@ -76,14 +76,16 @@ final class ListAction extends Action {
         if ($criteria) { $query->where($criteria); }
         if ($search) { $query->where(array($search)); }
         $total = (int) $modx->getCount($kind->modelClass(), $query);
-        foreach ($kind->defaultSort() as $sort) { $query->sortby($sort[0], $sort[1]); }
+        // xPDO does not quote sort columns, and some are reserved words in MySQL (`key`).
+        foreach ($kind->defaultSort() as $sort) { $query->sortby($modx->escape($sort[0]), $sort[1]); }
         $query->limit($limit, $start);
 
         $items = array();
         foreach ($modx->getCollection($kind->modelClass(), $query) as $object) {
             $item = array();
             foreach ($names as $name) { $item[$name] = $kind->value($object, $name); }
-            $items[] = $item;
+            $redacted = $kind->redact($context, $object, $item, array());
+            $items[] = $redacted[0] + $redacted[2];
         }
         $next = $start + count($items);
         return array('kind' => $kind->name(), 'total' => $total, 'items' => $items, 'next_start' => $next < $total ? $next : null);

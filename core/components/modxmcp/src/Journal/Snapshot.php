@@ -38,7 +38,8 @@ final class Snapshot {
     private static function relations(\modX $modx, Kind $kind, $object, $deleteOnly) {
         $out = array();
         foreach ($kind->relationSpecs() as $name => $spec) {
-            if (!empty($spec['delete_only']) !== $deleteOnly) { continue; }
+            // Rows that are objects of their own kind (in_state false) are journaled as those objects.
+            if (!empty($spec['delete_only']) !== $deleteOnly || (isset($spec['in_state']) && $spec['in_state'] === false)) { continue; }
             $rows = array();
             foreach ($modx->getCollection($spec['class'], self::criteria($spec, $kind->keyOf($object))) as $row) {
                 $rows[] = self::row($row);
@@ -128,6 +129,10 @@ final class Snapshot {
         $object = $kind->findByKey($modx, $key);
         $events = $kind->eventNames();
 
+        // A kind may refuse to put an object back (or take it away) through the API.
+        if ($state !== null) { $kind->assertRestorable($state); }
+        elseif ($object) { $kind->assertRestorable(self::capture($modx, $kind, $key)); }
+
         if ($state === null) {
             if (!$object) { return; }
             $staticPath = $kind->effectiveContent($object)[2];
@@ -136,6 +141,7 @@ final class Snapshot {
             if (isset($events['delete'])) {
                 $modx->invokeEvent($events['delete'], array('id' => $key, $events['param'] => &$object, 'object' => &$object));
             }
+            $kind->afterWrite($modx);
             return;
         }
 
@@ -169,6 +175,7 @@ final class Snapshot {
                 'mode' => $isNew ? 'new' : 'upd', 'id' => $key, $events['param'] => &$object, 'object' => &$object,
             ));
         }
+        $kind->afterWrite($modx);
     }
 
     /** Replace a file atomically, creating its directory when needed. */

@@ -34,6 +34,8 @@ abstract class Kind {
      *   computed    not a database column (derived as well); cannot be filtered on
      *   format      "datetime": stored as unix time, shown and written as "YYYY-MM-DD HH:MM:SS" ("" = none)
      *   required    required on create
+     *   immutable   cannot be changed after creation
+     *   no_filter   cannot be used in the `where` of modx_list
      */
     abstract public function fields();
 
@@ -143,6 +145,64 @@ abstract class Kind {
         return $modx->getObject($this->modelClass(), $this->keyCriteria($key), false);
     }
 
+    /** Properties of the final create/update processor call, e.g. defaults a processor insists on. $op is "create" or "update". */
+    public function processorData($op, array $data) {
+        return $data;
+    }
+
+    // ---- hooks of kinds that need extra care; the defaults change nothing ----
+
+    /** Called after a successful write or delete through the processors, and after an undo has restored an object. */
+    public function afterWrite(\modX $modx) {
+    }
+
+    /**
+     * Columns whose values a diff must hide for this state, or null to use the generic column-name pattern.
+     * @return string[]|null
+     */
+    public function secretColumns(array $state) {
+        return null;
+    }
+
+    /** Rows of a relation as shown in a diff; kinds hide what must not be shown. */
+    public function maskRelationRows($name, array $rows) {
+        return $rows;
+    }
+
+    /**
+     * What this token may see of an object. Gets the API values of the fields and of the relations
+     * and returns them, possibly with values hidden, plus extra flags for the result.
+     * @return array [fields, relations, flags]
+     */
+    public function redact(Context $context, $object, array $fields, array $relations) {
+        return array($fields, $relations, array());
+    }
+
+    /**
+     * Refuse a create or update from the normalised columns (column => value) before anything is touched.
+     * @param bool $creating
+     */
+    public function assertColumns(array $columns, $creating) {
+    }
+
+    /**
+     * Refuse a change to an existing object. $op is update, delete or duplicate.
+     */
+    public function assertObjectWritable(\modX $modx, $object, $op) {
+    }
+
+    /**
+     * Refuse a write by which this token could read a value it may not see, e.g. a copy of a
+     * credential under a harmless name. $columns are the normalised columns sent (update) or
+     * the overrides (duplicate). $op is update or duplicate.
+     */
+    public function assertKeepsSecret(Context $context, $object, array $columns, $op) {
+    }
+
+    /** Refuse to restore (or remove) an object whose recorded state must not be put back through the API. */
+    public function assertRestorable(array $state) {
+    }
+
     /**
      * Columns that make up an object's state. Kinds drop columns MODX rewrites on every save
      * or derives from others, so they neither change the revision nor get restored.
@@ -159,6 +219,15 @@ abstract class Kind {
      * @param string   $op      create | update | delete | undelete
      */
     public function alsoAffected(\modX $modx, $id, array $columns, $op) {
+        return array();
+    }
+
+    /**
+     * Objects of other kinds that MODX deletes together with this one, as [kind name, key]
+     * pairs. They are touched before the delete, so each is journaled as deleted and an undo
+     * brings it back as itself.
+     */
+    public function deleteCascade(\modX $modx, $key) {
         return array();
     }
 
@@ -188,6 +257,8 @@ abstract class Kind {
      *   present      column, or list of columns, shown by the API
      *   description  meaning, for describe
      *   delete_only  captured only before a delete (data another object owns, e.g. TV values)
+     *   in_state     false: shown by modx_get but not part of the snapshot, because the rows are
+     *                objects of another kind, journaled as such (see deleteCascade())
      *   writable     can be replaced through the API
      */
     public function relationSpecs() {
@@ -383,7 +454,7 @@ abstract class Kind {
             if (isset($definition['description'])) { $field['description'] = $definition['description']; }
             if (!empty($definition['derived'])) { $definition['read_only'] = true; }
             if (isset($definition['format'])) { $field['format'] = $definition['format']; }
-            foreach (array('list', 'code', 'read_only', 'required') as $flag) {
+            foreach (array('list', 'code', 'read_only', 'required', 'immutable') as $flag) {
                 if (!empty($definition[$flag])) { $field[$flag] = true; }
             }
             $fields[] = $field;

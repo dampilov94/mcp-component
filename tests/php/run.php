@@ -133,7 +133,7 @@ check('manifest: encodes', is_string(json_encode($tools, JSON_THROW_ON_ERROR)));
 
 $describe = $read->actions->get('describe');
 $list = $describe->run(array(), $read);
-check('describe: lists element kinds', array_column($list['kinds'], 'kind') === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source', 'user_group', 'role', 'resource_group'));
+check('describe: lists element kinds', array_column($list['kinds'], 'kind') === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source', 'user_group', 'role', 'resource_group', 'system_setting', 'context', 'context_setting', 'namespace'));
 $chunk = $describe->run(array('kind' => 'chunk'), $read);
 $fields = array_column($chunk['fields'], null, 'name');
 check('describe: chunk exposes content as code', !empty($fields['content']['code']) && $fields['name']['required'] === true && $fields['id']['read_only'] === true);
@@ -1766,42 +1766,42 @@ $tagChunk = $call($tagDev, 'create', array('kind' => 'chunk', 'fields' => array(
 $tagChunkFile = str_replace('[[++core_path]]', $tagSite->getOption('core_path'), $tagSite->row('modChunk', $tagChunk['id'])['static_file']);
 check('static chunk: files are stored exactly as the content', file_get_contents($tagChunkFile) === '<?php not code');
 
-// --- Objects identified by a string key (test-only kind, see TestSettingKind.php) ---
-require_once __DIR__ . '/TestSettingKind.php';
+// --- Objects identified by a string key (the real system_setting kind; task 15 used a test-only kind for this) ---
 $keyDir = $siteDir . '/keys';
 mkdir($keyDir . '/core', 0700, true);
 $keySite = fakeSite($keyDir);
 $keyActor = function ($session = 'session-keyaaaaaaaa') use ($keySite, $dev) {
     $c = new Context($keySite, $dev->token, $dev->corePath, function () {});
     $c->sessionId = $session;
-    $c->kinds->register(new TestSettingKind());
     return $c;
 };
 $keyDev = $keyActor();
 $settingState = function ($key) use ($keySite) { $row = $keySite->row('modSystemSetting', $key); return $row ? $row['value'] : null; };
 
-$setCreated = $call($keyDev, 'create', array('kind' => 'test_setting', 'fields' => array('key' => 'site_tagline', 'value' => 'Hello', 'area' => 'site')));
+$setCreated = $call($keyDev, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'site_tagline', 'value' => 'Hello', 'area' => 'site')));
 check('keys: create carries key, not id', $setCreated['key'] === 'site_tagline' && !array_key_exists('id', $setCreated)
-    && preg_match('/^[a-f0-9]{64}$/', $setCreated['revision']) && $setCreated['changeset_id'] !== null && $setCreated['changed'] === array('key', 'value', 'area'));
-foreach (array('alpha' => 'one', '404' => 'numeric key', 'zeta' => 'last', 'Привет' => 'cyrillic') as $settingKey => $settingValue) {
-    $call($keyDev, 'create', array('kind' => 'test_setting', 'fields' => array('key' => (string) $settingKey, 'value' => $settingValue)));
+    && preg_match('/^[a-f0-9]{64}$/', $setCreated['revision']) && $setCreated['changeset_id'] !== null && $setCreated['changed'] === array('key', 'value', 'xtype', 'namespace', 'area'));
+foreach (array('alpha' => 'one', 'zeta' => 'last', 'Привет' => 'cyrillic') as $settingKey => $settingValue) {
+    $call($keyDev, 'create', array('kind' => 'system_setting', 'fields' => array('key' => (string) $settingKey, 'value' => $settingValue)));
 }
+// MODX refuses to create a setting whose key starts with a digit, so a numeric-looking key is planted as if made in the manager.
+$keySite->store('modSystemSetting', array('key' => '404', 'value' => 'numeric key', 'xtype' => 'textfield', 'namespace' => 'core', 'area' => ''));
 $keyChunk = $call($keyDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'plain chunk', 'content' => 'x')));
 check('keys: an integer kind still carries id, not key', $keyChunk['id'] === 1 && !array_key_exists('key', $keyChunk));
 
-$setGot = $call($keyDev, 'get', array('kind' => 'test_setting', 'key' => 'site_tagline'));
+$setGot = $call($keyDev, 'get', array('kind' => 'system_setting', 'key' => 'site_tagline'));
 check('keys: get by key', $setGot['key'] === 'site_tagline' && !array_key_exists('id', $setGot) && $setGot['fields']['value'] === 'Hello'
     && $setGot['revision'] === $setCreated['revision']);
-check('keys: name is an alias of key', $call($keyDev, 'get', array('kind' => 'test_setting', 'name' => 'site_tagline'))['revision'] === $setCreated['revision']);
-$e = throws('keys: unknown key', ApiException::class, function () use ($call, $keyDev) { $call($keyDev, 'get', array('kind' => 'test_setting', 'key' => 'missing')); });
+check('keys: name is an alias of key', $call($keyDev, 'get', array('kind' => 'system_setting', 'name' => 'site_tagline'))['revision'] === $setCreated['revision']);
+$e = throws('keys: unknown key', ApiException::class, function () use ($call, $keyDev) { $call($keyDev, 'get', array('kind' => 'system_setting', 'key' => 'missing')); });
 check('keys: unknown key is not_found', $e && $e->errorCode === 'not_found' && strpos($e->getMessage(), "key 'missing'") !== false);
-$e = throws('keys: id for a string-key kind', ApiException::class, function () use ($call, $keyDev) { $call($keyDev, 'get', array('kind' => 'test_setting', 'id' => 1)); });
+$e = throws('keys: id for a string-key kind', ApiException::class, function () use ($call, $keyDev) { $call($keyDev, 'get', array('kind' => 'system_setting', 'id' => 1)); });
 check('keys: id for a string-key kind names the key argument', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'addressed by key') !== false);
 $e = throws('keys: key for an integer kind', ApiException::class, function () use ($call, $keyDev) { $call($keyDev, 'get', array('kind' => 'chunk', 'key' => '1')); });
 check('keys: key for an integer kind names the id argument', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'addressed by id') !== false);
 foreach (array('update' => array('fields' => array('value' => 'x')), 'delete' => array(), 'duplicate' => array(), 'view_code' => array(), 'find_usages' => array()) as $actionName => $extraArgs) {
     $e = throws("keys: {$actionName} refuses id for a string-key kind", ApiException::class, function () use ($call, $keyDev, $actionName, $extraArgs) {
-        $call($keyDev, $actionName, array('kind' => 'test_setting', 'id' => 1) + $extraArgs);
+        $call($keyDev, $actionName, array('kind' => 'system_setting', 'id' => 1) + $extraArgs);
     });
     check("keys: {$actionName} refusal is validation_failed", $e && $e->errorCode === 'validation_failed');
 }
@@ -1811,50 +1811,45 @@ foreach (array('get', 'update', 'delete', 'duplicate', 'invoke', 'view_code', 'e
         && strpos($keyProperty['description'], 'kinds without a numeric id') !== false);
 }
 
-$list = $call($keyDev, 'list', array('kind' => 'test_setting'));
+$list = $call($keyDev, 'list', array('kind' => 'system_setting'));
 check('keys: list is sorted by key', array_column($list['items'], 'key') === array('404', 'alpha', 'site_tagline', 'zeta', 'Привет') && $list['total'] === 5 && $list['next_start'] === null);
-$page = $call($keyDev, 'list', array('kind' => 'test_setting', 'limit' => 2, 'start' => 2));
+$page = $call($keyDev, 'list', array('kind' => 'system_setting', 'limit' => 2, 'start' => 2));
 check('keys: list pages', array_column($page['items'], 'key') === array('site_tagline', 'zeta') && $page['total'] === 5 && $page['next_start'] === 4);
-check('keys: list query and where', array_column($call($keyDev, 'list', array('kind' => 'test_setting', 'query' => 'a', 'where' => array('area' => 'site')))['items'], 'key') === array('site_tagline'));
+check('keys: list query and where', array_column($call($keyDev, 'list', array('kind' => 'system_setting', 'query' => 'a', 'where' => array('area' => 'site')))['items'], 'key') === array('site_tagline'));
 
-$numeric = $call($keyDev, 'get', array('kind' => 'test_setting', 'key' => '404'));
+$numeric = $call($keyDev, 'get', array('kind' => 'system_setting', 'key' => '404'));
 check('keys: a numeric-looking key stays a string', $numeric['key'] === '404' && $numeric['fields']['key'] === '404' && $numeric['fields']['value'] === 'numeric key');
 
 // update, dry runs, revision checks
-$dryUpdate = $call($keyDev, 'update', array('kind' => 'test_setting', 'key' => 'site_tagline', 'fields' => array('value' => 'Changed'), 'dry_run' => true));
+$dryUpdate = $call($keyDev, 'update', array('kind' => 'system_setting', 'key' => 'site_tagline', 'fields' => array('value' => 'Changed'), 'dry_run' => true));
 check('keys: update dry run', $dryUpdate['dry_run'] === true && $dryUpdate['key'] === 'site_tagline' && $dryUpdate['would_change'] === array('value')
     && $settingState('site_tagline') === 'Hello');
-$updated = $call($keyDev, 'update', array('kind' => 'test_setting', 'key' => 'site_tagline', 'fields' => array('value' => 'Changed'), 'expected_revision' => $setCreated['revision']));
+$updated = $call($keyDev, 'update', array('kind' => 'system_setting', 'key' => 'site_tagline', 'fields' => array('value' => 'Changed'), 'expected_revision' => $setCreated['revision']));
 check('keys: update with expected_revision', $updated['key'] === 'site_tagline' && !array_key_exists('id', $updated) && $updated['changed'] === array('value')
     && $settingState('site_tagline') === 'Changed' && $updated['revision'] !== $setCreated['revision']
     && $keySite->row('modSystemSetting', 'site_tagline')['area'] === 'site');
 $e = throws('keys: stale expected_revision', ApiException::class, function () use ($call, $keyDev, $setCreated) {
-    $call($keyDev, 'update', array('kind' => 'test_setting', 'key' => 'site_tagline', 'fields' => array('value' => 'Lost'), 'expected_revision' => $setCreated['revision']));
+    $call($keyDev, 'update', array('kind' => 'system_setting', 'key' => 'site_tagline', 'fields' => array('value' => 'Lost'), 'expected_revision' => $setCreated['revision']));
 });
-check('keys: stale revision is a conflict that names the key', $e && $e->errorCode === 'revision_conflict' && strpos($e->getMessage(), 'test_setting site_tagline') === 0
+check('keys: stale revision is a conflict that names the key', $e && $e->errorCode === 'revision_conflict' && strpos($e->getMessage(), 'system_setting site_tagline') === 0
     && $settingState('site_tagline') === 'Changed');
-$e = throws('keys: duplicate key on create', ApiException::class, function () use ($call, $keyDev) { $call($keyDev, 'create', array('kind' => 'test_setting', 'fields' => array('key' => 'alpha'))); });
+$e = throws('keys: duplicate key on create', ApiException::class, function () use ($call, $keyDev) { $call($keyDev, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'alpha'))); });
 check('keys: duplicate key is refused by the processor', $e && $e->errorCode === 'validation_failed');
 
 // duplicate (the key is the name)
-$copy = $call($keyDev, 'duplicate', array('kind' => 'test_setting', 'key' => 'alpha', 'new_name' => 'alpha_copy'));
+$copy = $call($keyDev, 'duplicate', array('kind' => 'system_setting', 'key' => 'alpha', 'new_name' => 'alpha_copy'));
 check('keys: duplicate', $copy['key'] === 'alpha_copy' && $copy['source_key'] === 'alpha' && !array_key_exists('source_id', $copy) && $settingState('alpha_copy') === 'one');
 
 // delete
-$dryDelete = $call($keyDev, 'delete', array('kind' => 'test_setting', 'key' => 'alpha_copy', 'dry_run' => true));
+$dryDelete = $call($keyDev, 'delete', array('kind' => 'system_setting', 'key' => 'alpha_copy', 'dry_run' => true));
 check('keys: delete dry run', $dryDelete['dry_run'] === true && $dryDelete['key'] === 'alpha_copy' && $dryDelete['would_delete']['name'] === 'alpha_copy' && $settingState('alpha_copy') === 'one');
-$deleted = $call($keyDev, 'delete', array('kind' => 'test_setting', 'key' => 'alpha_copy'));
+$deleted = $call($keyDev, 'delete', array('kind' => 'system_setting', 'key' => 'alpha_copy'));
 check('keys: delete', $deleted['key'] === 'alpha_copy' && $deleted['deleted'] === true && $keySite->row('modSystemSetting', 'alpha_copy') === null);
 
 // journal: history, diff, undo
-$history = $call($keyDev, 'history', array('kind' => 'test_setting'));
+$history = $call($keyDev, 'history', array('kind' => 'system_setting'));
 $entry = $history['changesets'][0]['objects'][0];
-check('keys: history entry shows key', $entry === array('kind' => 'test_setting', 'key' => 'alpha_copy', 'name' => 'alpha_copy', 'op' => 'delete'));
-$numericHistory = null;
-foreach ($history['changesets'] as $changeset) {
-    foreach ($changeset['objects'] as $object) { if ($object['kind'] === 'test_setting' && $object['op'] === 'create' && $object['name'] === '404') { $numericHistory = $object; } }
-}
-check('keys: a numeric-looking key is a string in history', $numericHistory !== null && $numericHistory['key'] === '404' && !array_key_exists('id', $numericHistory));
+check('keys: history entry shows key', $entry === array('kind' => 'system_setting', 'key' => 'alpha_copy', 'name' => 'alpha_copy', 'op' => 'delete'));
 $chunkEntry = $call($keyDev, 'history', array('kind' => 'chunk'))['changesets'][0]['objects'][0];
 check('keys: an integer kind still shows id in history', $chunkEntry['id'] === 1 && !array_key_exists('key', $chunkEntry));
 $updateDiff = $call($keyDev, 'history_diff', array('changeset_id' => $updated['changeset_id']));
@@ -1867,12 +1862,12 @@ check('keys: undo plan names the key', $undoDeletePlan['performed'] === false &&
 $undoDelete = $call($keyDev, 'undo', array('changeset_id' => $deleted['changeset_id'], 'confirm' => true));
 check('keys: undo of a delete brings the setting back with the same key and value', $undoDelete['performed'] === true
     && $settingState('alpha_copy') === 'one' && $keySite->row('modSystemSetting', 'alpha_copy')['key'] === 'alpha_copy'
-    && $call($keyDev, 'get', array('kind' => 'test_setting', 'key' => 'alpha_copy'))['revision'] === $copy['revision']);
+    && $call($keyDev, 'get', array('kind' => 'system_setting', 'key' => 'alpha_copy'))['revision'] === $copy['revision']);
 $undoCreate = $call($keyDev, 'undo', array('changeset_id' => $copy['changeset_id'], 'confirm' => true));
 check('keys: undo of a create removes the setting', $undoCreate['objects'][0]['action'] === 'remove' && $keySite->row('modSystemSetting', 'alpha_copy') === null);
 
 // undo of the update is a conflict while a later change exists, and works without one
-$later = $call($keyDev, 'update', array('kind' => 'test_setting', 'key' => 'site_tagline', 'fields' => array('value' => 'Later')));
+$later = $call($keyDev, 'update', array('kind' => 'system_setting', 'key' => 'site_tagline', 'fields' => array('value' => 'Later')));
 $conflictPlan = $call($keyDev, 'undo', array('changeset_id' => $updated['changeset_id']));
 check('keys: undo conflict is detected', $conflictPlan['conflicts'] === 1 && $conflictPlan['objects'][0]['key'] === 'site_tagline'
     && strpos($conflictPlan['objects'][0]['conflict'], "changed later by changeset {$later['changeset_id']}") === 0);
@@ -1884,33 +1879,532 @@ $call($keyDev, 'undo', array('changeset_id' => $updated['changeset_id'], 'confir
 check('keys: and the one before it', $settingState('site_tagline') === 'Hello');
 
 // numeric-looking key through undo
-$numericDelete = $call($keyDev, 'delete', array('kind' => 'test_setting', 'key' => '404'));
+$numericDelete = $call($keyDev, 'delete', array('kind' => 'system_setting', 'key' => '404'));
 check('keys: numeric-looking key in a delete result', $numericDelete['key'] === '404' && is_string($numericDelete['key']));
+$numericHistory = null;
+foreach ($call($keyDev, 'history', array('kind' => 'system_setting'))['changesets'] as $changeset) {
+    foreach ($changeset['objects'] as $object) { if ($object['op'] === 'delete' && $object['name'] === '404') { $numericHistory = $object; } }
+}
+check('keys: a numeric-looking key is a string in history', $numericHistory !== null && $numericHistory['key'] === '404' && !array_key_exists('id', $numericHistory));
 $numericUndo = $call($keyDev, 'undo', array('changeset_id' => $numericDelete['changeset_id'], 'confirm' => true));
 check('keys: numeric-looking key through undo', $numericUndo['objects'][0]['key'] === '404' && $settingState('404') === 'numeric key'
-    && $call($keyDev, 'get', array('kind' => 'test_setting', 'key' => '404'))['key'] === '404');
+    && $call($keyDev, 'get', array('kind' => 'system_setting', 'key' => '404'))['key'] === '404');
 
 // a change made behind the journal's back is recorded as external
 $keySite->store('modSystemSetting', array('value' => 'edited in the manager') + $keySite->row('modSystemSetting', 'zeta'));
-$call($keyDev, 'update', array('kind' => 'test_setting', 'key' => 'zeta', 'fields' => array('area' => 'late')));
-$external = $call($keyDev, 'history', array('kind' => 'test_setting', 'source' => 'external'));
+$call($keyDev, 'update', array('kind' => 'system_setting', 'key' => 'zeta', 'fields' => array('area' => 'late')));
+$external = $call($keyDev, 'history', array('kind' => 'system_setting', 'source' => 'external'));
 check('keys: an outside change is journaled as external', count($external['changesets']) === 1 && $external['changesets'][0]['objects'][0]['key'] === 'zeta'
     && $external['changesets'][0]['objects'][0]['op'] === 'update');
 
 // describe
-$describeSetting = $call($keyDev, 'describe', array('kind' => 'test_setting'));
+$describeSetting = $call($keyDev, 'describe', array('kind' => 'system_setting'));
 $describeChunk = $call($keyDev, 'describe', array('kind' => 'chunk'));
 check('keys: describe shows the key type and field', $describeSetting['key_type'] === 'string' && $describeSetting['key_field'] === 'key'
     && $describeChunk['key_type'] === 'integer' && $describeChunk['key_field'] === 'id');
 
 // rollback after a failure past the save
-$stableSetting = $call($keyDev, 'get', array('kind' => 'test_setting', 'key' => 'alpha'));
+$stableSetting = $call($keyDev, 'get', array('kind' => 'system_setting', 'key' => 'alpha'));
 $historySize = count($call($keyDev, 'history', array('limit' => 100))['changesets']);
 $keySite->failProcessor = 'system/settings/update';
-throws('keys: failure after save', RuntimeException::class, function () use ($call, $keyDev) { $call($keyDev, 'update', array('kind' => 'test_setting', 'key' => 'alpha', 'fields' => array('value' => 'half done'))); });
+throws('keys: failure after save', RuntimeException::class, function () use ($call, $keyDev) { $call($keyDev, 'update', array('kind' => 'system_setting', 'key' => 'alpha', 'fields' => array('value' => 'half done'))); });
 $keySite->failProcessor = null;
-check('keys: rollback restores the setting', $call($keyDev, 'get', array('kind' => 'test_setting', 'key' => 'alpha'))['revision'] === $stableSetting['revision'] && $settingState('alpha') === 'one');
+check('keys: rollback restores the setting', $call($keyDev, 'get', array('kind' => 'system_setting', 'key' => 'alpha'))['revision'] === $stableSetting['revision'] && $settingState('alpha') === 'one');
 check('keys: nothing is journaled by a failed write', count($call($keyDev, 'history', array('limit' => 100))['changesets']) === $historySize);
+
+// --- Settings kinds: system_setting, context, context_setting, namespace (task 16) ---
+$setDir = $siteDir . '/settings';
+mkdir($setDir . '/core', 0700, true);
+$setSite = fakeSite($setDir);
+$setActor = function ($scope, array $token = array()) use ($setSite, $dev) {
+    $c = new Context($setSite, $token + array('scope' => $scope) + $dev->token, $dev->corePath, function () {});
+    $c->sessionId = 'session-settings01';
+    return $c;
+};
+$sRead = $setActor('read');
+$sContent = $setActor('content');
+$sDev = $setActor('develop');
+$sAdmin = $setActor('admin');
+foreach (array('web' => 'Web', 'mgr' => 'Manager') as $contextKey => $contextName) {
+    $setSite->store('modContext', array('key' => $contextKey, 'name' => $contextName, 'description' => '', 'rank' => 0));
+}
+$setSite->store('modNamespace', array('name' => 'modxmcp', 'path' => '', 'assets_path' => ''));
+$settingRow = function ($key) use ($setSite) { return $setSite->row('modSystemSetting', $key); };
+$contextSettingRow = function ($context, $key) use ($setSite) { return $setSite->row('modContextSetting', array($context, $key)); };
+$refreshes = function () use ($setSite) { return $setSite->getCacheManager()->refreshes; };
+
+// describe
+foreach (array('system_setting' => array('develop', 'settings'), 'context' => array('admin', 'contexts'), 'context_setting' => array('develop', 'contexts'), 'namespace' => array('admin', 'namespaces')) as $kindName => $info) {
+    $described = $call($sRead, 'describe', array('kind' => $kindName));
+    $described['fields'] = array_column($described['fields'], null, 'name');
+    check("settings: describe {$kindName}", $described['key_type'] === 'string' && $described['key_field'] === 'key' && $described['write_scope'] === $info[0]
+        && $described['read_scope'] === 'read' && $described['group'] === $info[1] && $described['name_field'] === 'key'
+        && $described['fields']['key']['required'] === true && $described['fields']['key']['immutable'] === true);
+}
+$setSite->options['modxmcp.disabled_groups'] = 'settings, contexts, namespaces';
+check('settings: the settings group cannot be switched off', $sAdmin->capabilities->groupBlockReason('settings', $sAdmin->token) === null
+    && $sAdmin->capabilities->groupBlockReason('contexts', $sAdmin->token) === 'disabled_group'
+    && $sAdmin->capabilities->groupBlockReason('namespaces', $sAdmin->token) === 'disabled_group');
+foreach (array('context', 'context_setting', 'namespace') as $kindName) {
+    foreach (array('list', 'describe') as $action) {
+        $e = throws("settings: disabled group blocks {$kindName} {$action}", ApiException::class, function () use ($call, $sAdmin, $kindName, $action) { $call($sAdmin, $action, array('kind' => $kindName)); });
+        check("settings: {$kindName} is unavailable when its group is off", $e && $e->errorCode === 'unavailable');
+    }
+}
+check('settings: system_setting stays available when groups are off', $call($sAdmin, 'list', array('kind' => 'system_setting'))['total'] === 0);
+$setSite->options['modxmcp.disabled_groups'] = '';
+
+// ---- system_setting: create, get, list, update, duplicate, delete ----
+$motto = $call($sDev, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'site_motto', 'value' => 'Привет, мир', 'area' => 'site')));
+check('settings: system_setting create', $motto['key'] === 'site_motto' && !array_key_exists('id', $motto) && $motto['changeset_id'] !== null && $motto['reversible'] === true
+    && strpos(json_encode($motto, JSON_UNESCAPED_UNICODE), 'Привет') === false);
+$mottoGot = $call($sRead, 'get', array('kind' => 'system_setting', 'key' => 'site_motto'));
+check('settings: system_setting get', $mottoGot['key'] === 'site_motto' && $mottoGot['fields']['value'] === 'Привет, мир' && $mottoGot['fields']['namespace'] === 'core'
+    && $mottoGot['fields']['xtype'] === 'textfield' && $mottoGot['fields']['area'] === 'site' && !isset($mottoGot['secret']) && $mottoGot['revision'] === $motto['revision']);
+check('settings: the in-memory configuration is current after a create', $setSite->getOption('site_motto') === 'Привет, мир');
+$before = $refreshes();
+$mottoUpdated = $call($sDev, 'update', array('kind' => 'system_setting', 'key' => 'site_motto', 'fields' => array('value' => 'Здравствуй'), 'expected_revision' => $motto['revision']));
+check('settings: system_setting update', $mottoUpdated['changed'] === array('value') && $settingRow('site_motto')['value'] === 'Здравствуй' && $settingRow('site_motto')['area'] === 'site'
+    && $setSite->getOption('site_motto') === 'Здравствуй' && $refreshes() > $before);
+$sameKey = $call($sDev, 'update', array('kind' => 'system_setting', 'key' => 'site_motto', 'fields' => array('key' => 'site_motto', 'area' => 'footer')));
+check('settings: giving the same key is not a change', $sameKey['changed'] === array('area') && $settingRow('site_motto')['area'] === 'footer');
+foreach (array('dry run' => true, 'real' => false) as $label => $dry) {
+    $e = throws("settings: system_setting key cannot change ({$label})", ApiException::class, function () use ($call, $sDev, $dry) {
+        $call($sDev, 'update', array('kind' => 'system_setting', 'key' => 'site_motto', 'fields' => array('key' => 'site_slogan')) + ($dry ? array('dry_run' => true) : array()));
+    });
+    check("settings: key immutability is validation_failed ({$label})", $e && $e->errorCode === 'validation_failed' && $settingRow('site_slogan') === null && $settingRow('site_motto') !== null);
+}
+$e = throws('settings: only the case of a key cannot change either', ApiException::class, function () use ($call, $sDev) { $call($sDev, 'update', array('kind' => 'system_setting', 'key' => 'site_motto', 'fields' => array('key' => 'Site_Motto'))); });
+check('settings: case change is refused', $e && $e->errorCode === 'validation_failed');
+$ключ = $call($sDev, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'ключ_сайта', 'value' => 'needle', 'namespace' => 'core')));
+$call($sDev, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'alpha_option', 'value' => 'haystack', 'area' => 'misc')));
+$list = $call($sRead, 'list', array('kind' => 'system_setting'));
+check('settings: system_setting list is sorted by key', array_column($list['items'], 'key') === array('alpha_option', 'site_motto', 'ключ_сайта') && $list['total'] === 3
+    && array_keys($list['items'][0]) === array('key', 'value', 'xtype', 'namespace', 'area'));
+check('settings: list where', array_column($call($sRead, 'list', array('kind' => 'system_setting', 'where' => array('area' => 'misc')))['items'], 'key') === array('alpha_option'));
+check('settings: list query finds a Cyrillic key', array_column($call($sRead, 'list', array('kind' => 'system_setting', 'query' => 'люч'))['items'], 'key') === array('ключ_сайта'));
+check('settings: list query searches the key, never the value', $call($sRead, 'list', array('kind' => 'system_setting', 'query' => 'needle'))['total'] === 0
+    && $call($sRead, 'list', array('kind' => 'system_setting', 'query' => 'haystack'))['total'] === 0);
+$e = throws('settings: list cannot filter by value', ApiException::class, function () use ($call, $sRead) { $call($sRead, 'list', array('kind' => 'system_setting', 'where' => array('value' => 'needle'))); });
+check('settings: where on value is refused', $e && $e->errorCode === 'validation_failed');
+check('settings: name is an alias of key', $call($sRead, 'get', array('kind' => 'system_setting', 'name' => 'ключ_сайта'))['fields']['value'] === 'needle');
+$copy = $call($sDev, 'duplicate', array('kind' => 'system_setting', 'key' => 'alpha_option', 'new_name' => 'alpha_option_copy'));
+check('settings: system_setting duplicate', $copy['key'] === 'alpha_option_copy' && $copy['source_key'] === 'alpha_option' && $settingRow('alpha_option_copy')['value'] === 'haystack'
+    && $settingRow('alpha_option_copy')['area'] === 'misc');
+$dryDelete = $call($sDev, 'delete', array('kind' => 'system_setting', 'key' => 'alpha_option_copy', 'dry_run' => true));
+check('settings: system_setting delete dry run', $dryDelete['dry_run'] === true && $dryDelete['key'] === 'alpha_option_copy' && $settingRow('alpha_option_copy') !== null);
+$deleted = $call($sDev, 'delete', array('kind' => 'system_setting', 'key' => 'alpha_option_copy'));
+check('settings: system_setting delete', $deleted['deleted'] === true && $settingRow('alpha_option_copy') === null);
+$e = throws('settings: a key starting with a digit is refused by MODX', ApiException::class, function () use ($call, $sDev) { $call($sDev, 'create', array('kind' => 'system_setting', 'fields' => array('key' => '1st'))); });
+check('settings: processor refusal passes through', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'number') !== false);
+$e = throws('settings: unknown namespace is refused by MODX', ApiException::class, function () use ($call, $sDev) { $call($sDev, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'orphan', 'namespace' => 'nowhere'))); });
+check('settings: namespace must exist', $e && $e->errorCode === 'validation_failed');
+
+// history, diff, undo of each operation; the configuration follows
+$history = $call($sDev, 'history', array('kind' => 'system_setting'));
+check('settings: history entries carry key', $history['changesets'][0]['objects'][0] === array('kind' => 'system_setting', 'key' => 'alpha_option_copy', 'name' => 'alpha_option_copy', 'op' => 'delete'));
+$diff = $call($sDev, 'history_diff', array('changeset_id' => $mottoUpdated['changeset_id']));
+check('settings: history_diff shows values of an ordinary setting', $diff['objects'][0]['key'] === 'site_motto'
+    && $diff['objects'][0]['changed'] === array('value' => array('old' => 'Привет, мир', 'new' => 'Здравствуй')));
+$call($sDev, 'undo', array('changeset_id' => $deleted['changeset_id'], 'confirm' => true));
+check('settings: undo of a delete', $settingRow('alpha_option_copy')['value'] === 'haystack' && $setSite->getOption('alpha_option_copy') === 'haystack');
+$call($sDev, 'undo', array('changeset_id' => $copy['changeset_id'], 'confirm' => true));
+check('settings: undo of a create (duplicate) removes it from row and configuration', $settingRow('alpha_option_copy') === null && $setSite->getOption('alpha_option_copy', null, 'gone') === 'gone');
+$later = $call($sDev, 'update', array('kind' => 'system_setting', 'key' => 'site_motto', 'fields' => array('value' => 'Ещё раз')));
+$call($sDev, 'undo', array('changeset_id' => $later['changeset_id'], 'confirm' => true));
+check('settings: undo of an update restores row and configuration', $settingRow('site_motto')['value'] === 'Здравствуй' && $setSite->getOption('site_motto') === 'Здравствуй');
+$dropped = $call($sDev, 'delete', array('kind' => 'system_setting', 'key' => 'site_motto'));
+check('settings: the configuration forgets a deleted setting', $setSite->getOption('site_motto', null, 'gone') === 'gone');
+$call($sDev, 'undo', array('changeset_id' => $dropped['changeset_id'], 'confirm' => true));
+check('settings: undo of a delete brings the configuration back', $setSite->getOption('site_motto') === 'Здравствуй');
+
+// scopes
+foreach (array('read', 'content') as $scope) {
+    $actor1 = $setActor($scope);
+    foreach (array('create' => array('fields' => array('key' => 'denied_one')), 'update' => array('key' => 'site_motto', 'fields' => array('area' => 'x')),
+        'delete' => array('key' => 'site_motto'), 'duplicate' => array('key' => 'site_motto', 'new_name' => 'denied_two')) as $action => $args) {
+        $e = throws("settings: {$scope} cannot {$action} a system setting", ApiException::class, function () use ($call, $actor1, $action, $args) { $call($actor1, $action, array('kind' => 'system_setting') + $args); });
+        check("settings: {$scope} write refusal is forbidden_scope", $e && $e->errorCode === 'forbidden_scope');
+    }
+}
+
+// ---- secrets ----
+$secretKeys = array('smtp_pass', 'mail.password', 'db_passwd', 'app_secret', 'api_token', 'service_api_key', 'apikey', 'private_key', 'password_salt', 'x.salt.y', 'Pass', 'токен_token');
+$plainKeys = array('passage_count', 'tokenizer', 'compass', 'salty_dog', 'keyboard', 'site_name_x');
+foreach (array_merge($secretKeys, $plainKeys) as $secretKey) {
+    $call($sDev, 'create', array('kind' => 'system_setting', 'fields' => array('key' => $secretKey, 'value' => 'v-' . $secretKey)));
+}
+$call($sDev, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'some_credential', 'value' => 'xtype-secret', 'xtype' => 'text-password')));
+$call($sDev, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'plain_text_field', 'value' => 'visible', 'xtype' => 'textfield')));
+$secretReader = function (Context $c, $key) use ($call) {
+    $got = $call($c, 'get', array('kind' => 'system_setting', 'key' => $key));
+    $listed = $call($c, 'list', array('kind' => 'system_setting', 'query' => $key, 'limit' => 200));
+    foreach ($listed['items'] as $item) { if ($item['key'] === $key) { return array($got, $item); } }
+    return array($got, null);
+};
+foreach (array_merge($secretKeys, array('some_credential')) as $secretKey) {
+    $expected = $secretKey === 'some_credential' ? 'xtype-secret' : 'v-' . $secretKey;
+    $ok = true;
+    foreach (array('read' => $sRead, 'content' => $sContent, 'develop' => $sDev) as $scope => $reader) {
+        list($got, $item) = $secretReader($reader, $secretKey);
+        $ok = $ok && $got['fields']['value'] === '[hidden]' && $got['secret'] === true && $item !== null && $item['value'] === '[hidden]' && $item['secret'] === true;
+    }
+    list($got, $item) = $secretReader($sAdmin, $secretKey);
+    check("settings: secret {$secretKey} is hidden below admin", $ok);
+    check("settings: secret {$secretKey} is shown to admin, flagged", $got['fields']['value'] === $expected && $got['secret'] === true && $item['value'] === $expected && $item['secret'] === true);
+}
+foreach (array_merge($plainKeys, array('plain_text_field')) as $plainKey) {
+    list($got, $item) = $secretReader($sRead, $plainKey);
+    check("settings: {$plainKey} is not secret", $got['fields']['value'] === ($plainKey === 'plain_text_field' ? 'visible' : 'v-' . $plainKey)
+        && !array_key_exists('secret', $got) && !array_key_exists('secret', $item) && $item['value'] === $got['fields']['value']);
+}
+check('settings: asking for the value field alone still hides it', $call($sRead, 'get', array('kind' => 'system_setting', 'key' => 'smtp_pass', 'fields' => array('value')))['fields'] === array('value' => '[hidden]'));
+check('settings: a list without value still flags secrets', $call($sRead, 'list', array('kind' => 'system_setting', 'query' => 'smtp_pass', 'fields' => array('key')))['items'] === array(array('key' => 'smtp_pass', 'secret' => true)));
+$secretWrite = $call($sDev, 'update', array('kind' => 'system_setting', 'key' => 'smtp_pass', 'fields' => array('value' => 'new-s3cret')));
+check('settings: a secret can be written with the write scope and the result never echoes it', $settingRow('smtp_pass')['value'] === 'new-s3cret'
+    && strpos(json_encode($secretWrite), 's3cret') === false && $secretWrite['changed'] === array('value'));
+foreach (array('read' => $sRead, 'develop' => $sDev, 'admin' => $sAdmin) as $scope => $reader) {
+    $secretDiff = $call($reader, 'history_diff', array('changeset_id' => $secretWrite['changeset_id']));
+    check("settings: history_diff hides a secret value for {$scope}", $secretDiff['objects'][0]['changed'] === array('value' => array('old' => '[hidden]', 'new' => '[hidden]'))
+        && strpos(json_encode($secretDiff), 's3cret') === false && strpos(json_encode($secretDiff), 'v-smtp_pass') === false);
+}
+$xtypeChange = $call($sDev, 'update', array('kind' => 'system_setting', 'key' => 'plain_text_field', 'fields' => array('xtype' => 'text-password', 'value' => 'now-hidden')));
+$xtypeDiff = $call($sAdmin, 'history_diff', array('changeset_id' => $xtypeChange['changeset_id']))['objects'][0]['changed'];
+check('settings: a setting that becomes a password hides its values in the diff, other columns stay visible', $xtypeDiff['value'] === array('old' => '[hidden]', 'new' => '[hidden]')
+    && $xtypeDiff['xtype'] === array('old' => 'textfield', 'new' => 'text-password'));
+$call($sDev, 'undo', array('changeset_id' => $secretWrite['changeset_id'], 'confirm' => true));
+check('settings: undo restores the real secret value (snapshots keep it)', $settingRow('smtp_pass')['value'] === 'v-smtp_pass');
+$dryNumber = $call($sDev, 'update', array('kind' => 'system_setting', 'key' => 'smtp_pass', 'fields' => array('value' => 'zzz'), 'dry_run' => true));
+check('settings: a dry run on a secret names the field only', $dryNumber['would_change'] === array('value') && strpos(json_encode($dryNumber), 'zzz') === false);
+
+// ---- modxMCP's own settings are read-only through the API ----
+$setSite->store('modSystemSetting', array('key' => 'modxmcp.api_limit', 'value' => '50', 'xtype' => 'textfield', 'namespace' => 'modxmcp', 'area' => 'modxmcp:main'));
+$setSite->store('modSystemSetting', array('key' => 'modxmcp.api_token', 'value' => 'tok-secret', 'xtype' => 'textfield', 'namespace' => 'modxmcp', 'area' => 'modxmcp:main'));
+$setSite->store('modSystemSetting', array('key' => 'legacy_gate', 'value' => '1', 'xtype' => 'combo-boolean', 'namespace' => 'modxmcp', 'area' => 'modxmcp:main'));
+$setSite->store('modSystemSetting', array('key' => 'modxmcp.in_core', 'value' => 'x', 'xtype' => 'textfield', 'namespace' => 'core', 'area' => ''));
+$ownBefore = $setSite->tableDump('modSystemSetting');
+$historyBefore = $call($sAdmin, 'history', array('limit' => 100))['changesets'];
+$ownRefused = function ($label, callable $fn) {
+    $e = throws("settings: own setting, {$label}", ApiException::class, $fn);
+    check("settings: own setting, {$label}: validation_failed with the explanation", $e && $e->errorCode === 'validation_failed'
+        && $e->getMessage() === 'modxMCP settings are changed in the MODX manager, not through the API.');
+};
+foreach (array('modxmcp.api_limit', 'legacy_gate', 'modxmcp.in_core') as $ownKey) {
+    $ownRefused("update {$ownKey}", function () use ($call, $sAdmin, $ownKey) { $call($sAdmin, 'update', array('kind' => 'system_setting', 'key' => $ownKey, 'fields' => array('value' => 'hacked'))); });
+    $ownRefused("update dry run {$ownKey}", function () use ($call, $sAdmin, $ownKey) { $call($sAdmin, 'update', array('kind' => 'system_setting', 'key' => $ownKey, 'fields' => array('value' => 'hacked'), 'dry_run' => true)); });
+    $ownRefused("delete {$ownKey}", function () use ($call, $sAdmin, $ownKey) { $call($sAdmin, 'delete', array('kind' => 'system_setting', 'key' => $ownKey)); });
+    $ownRefused("delete dry run {$ownKey}", function () use ($call, $sAdmin, $ownKey) { $call($sAdmin, 'delete', array('kind' => 'system_setting', 'key' => $ownKey, 'dry_run' => true)); });
+    $ownRefused("duplicate {$ownKey}", function () use ($call, $sAdmin, $ownKey) { $call($sAdmin, 'duplicate', array('kind' => 'system_setting', 'key' => $ownKey, 'new_name' => 'plain_copy')); });
+}
+$ownRefused('create with a modxmcp. key in core', function () use ($call, $sAdmin) { $call($sAdmin, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'modxmcp.new_gate', 'value' => '1'))); });
+$ownRefused('create with a modxmcp. key in another namespace', function () use ($call, $sAdmin, $setSite) {
+    $setSite->store('modNamespace', array('name' => 'other', 'path' => '', 'assets_path' => ''));
+    $call($sAdmin, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'MODXMCP.Upper', 'namespace' => 'other')));
+});
+$ownRefused('create in the modxmcp namespace', function () use ($call, $sAdmin) { $call($sAdmin, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'plain_key', 'namespace' => 'modxmcp'))); });
+$ownRefused('create dry run', function () use ($call, $sAdmin) { $call($sAdmin, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'modxmcp.dry'), 'dry_run' => true)); });
+$ownRefused('moving an ordinary setting into the namespace', function () use ($call, $sAdmin) { $call($sAdmin, 'update', array('kind' => 'system_setting', 'key' => 'site_motto', 'fields' => array('namespace' => 'modxmcp'))); });
+$ownRefused('duplicate of an ordinary setting into the namespace', function () use ($call, $sAdmin) { $call($sAdmin, 'duplicate', array('kind' => 'system_setting', 'key' => 'site_motto', 'new_name' => 'site_motto_copy', 'fields' => array('namespace' => 'modxmcp'))); });
+check('settings: own settings are untouched and nothing is journaled by the refusals', $setSite->tableDump('modSystemSetting') === $ownBefore
+    && count($call($sAdmin, 'history', array('limit' => 100))['changesets']) === count($historyBefore));
+$ownGot = $call($sRead, 'get', array('kind' => 'system_setting', 'key' => 'modxmcp.api_token'));
+check('settings: own settings can be read, and follow the secret rule', $ownGot['fields']['value'] === '[hidden]' && $ownGot['secret'] === true
+    && $call($sAdmin, 'get', array('kind' => 'system_setting', 'key' => 'modxmcp.api_token'))['fields']['value'] === 'tok-secret'
+    && $call($sRead, 'get', array('kind' => 'system_setting', 'key' => 'modxmcp.api_limit'))['fields']['value'] === '50');
+// undo must refuse to restore one: plant journal rows as an earlier allowed state could have left them
+$ownKind = $sAdmin->kinds->get('system_setting');
+$plant = function ($key, $beforeState, $afterState, $op) use ($sAdmin) {
+    $blobs = $sAdmin->blobs();
+    foreach (array($beforeState, $afterState) as $state) { if ($state !== null) { $blobs->put(ModxMCP\Journal\Snapshot::encode($state)); } }
+    return $sAdmin->journal()->commit(array('source' => 'mcp', 'token_id' => 1, 'session_id' => 'planted', 'request_id' => null, 'tool' => 'update', 'summary' => 'planted ' . $key), array(array(
+        'kind' => 'system_setting', 'object_key' => $key, 'label' => $key, 'op' => $op, 'before_revision' => ModxMCP\Journal\Snapshot::revision($beforeState),
+        'after_revision' => ModxMCP\Journal\Snapshot::revision($afterState), 'extra_blob' => null, 'reversible' => true, 'note' => '',
+    )));
+};
+$ownNow = ModxMCP\Journal\Snapshot::capture($setSite, $ownKind, 'modxmcp.api_limit');
+$ownOlder = $ownNow;
+$ownOlder['fields']['value'] = '10';
+$updateChangeset = $plant('modxmcp.api_limit', $ownOlder, $ownNow, 'update');
+$createChangeset = $plant('modxmcp.api_limit', null, $ownNow, 'create');
+foreach (array('update' => $updateChangeset, 'create' => $createChangeset) as $label => $changesetId) {
+    foreach (array(false, true) as $confirm) {
+        $e = throws("settings: undo of a recorded {$label} of an own setting" . ($confirm ? ' (confirmed)' : ' (plan)'), ApiException::class, function () use ($call, $sAdmin, $changesetId, $confirm) {
+            $call($sAdmin, 'undo', array('changeset_id' => $changesetId, 'force' => true) + ($confirm ? array('confirm' => true) : array()));
+        });
+        check("settings: undo of own {$label} is not_reversible with the explanation", $e && $e->errorCode === 'not_reversible' && strpos($e->getMessage(), 'MODX manager') !== false);
+    }
+}
+check('settings: the refused undo changed nothing', $setSite->tableDump('modSystemSetting') === $ownBefore);
+foreach (array('a state' => $ownOlder, 'removal' => null) as $label => $state) {
+    $e = throws("settings: Snapshot::restore refuses own settings ({$label})", ApiException::class, function () use ($setSite, $ownKind, $state) { ModxMCP\Journal\Snapshot::restore($setSite, $ownKind, 'modxmcp.api_limit', $state); });
+    check("settings: restore guard ({$label}) is not_reversible", $e && $e->errorCode === 'not_reversible');
+}
+// a change recorded while the setting was still an ordinary one, then moved into the namespace outside the API
+$call($sDev, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'moved_later', 'value' => 'a')));
+$movedUpdate = $call($sDev, 'update', array('kind' => 'system_setting', 'key' => 'moved_later', 'fields' => array('value' => 'b')));
+$setSite->store('modSystemSetting', array('namespace' => 'modxmcp') + $settingRow('moved_later'));
+$e = throws('settings: undo over a setting that has since become an own one', ApiException::class, function () use ($call, $sAdmin, $movedUpdate) {
+    $call($sAdmin, 'undo', array('changeset_id' => $movedUpdate['changeset_id'], 'confirm' => true, 'force' => true));
+});
+check('settings: refused although the recorded state was ordinary', $e && $e->errorCode === 'not_reversible' && $settingRow('moved_later')['value'] === 'b');
+
+// ---- context ----
+$shop = $call($sAdmin, 'create', array('kind' => 'context', 'fields' => array('key' => 'shop', 'name' => 'Магазин', 'description' => 'Интернет-магазин', 'rank' => 3)));
+check('settings: context create', $shop['key'] === 'shop' && !array_key_exists('id', $shop) && $shop['changeset_id'] !== null);
+$shopGot = $call($sRead, 'get', array('kind' => 'context', 'key' => 'shop'));
+check('settings: context get', $shopGot['fields'] === array('key' => 'shop', 'name' => 'Магазин', 'description' => 'Интернет-магазин', 'rank' => 3) && $shopGot['relations'] === array('settings' => array()));
+check('settings: context list, query and where', array_column($call($sRead, 'list', array('kind' => 'context'))['items'], 'key') === array('mgr', 'shop', 'web')
+    && array_column($call($sRead, 'list', array('kind' => 'context', 'query' => 'hop'))['items'], 'key') === array('shop')
+    && array_column($call($sRead, 'list', array('kind' => 'context', 'where' => array('rank' => 3)))['items'], 'key') === array('shop')
+    && $call($sRead, 'list', array('kind' => 'context', 'query' => 'Магазин'))['total'] === 0);
+$before = $refreshes();
+$shopUpdated = $call($sAdmin, 'update', array('kind' => 'context', 'key' => 'shop', 'fields' => array('name' => 'Лавка'), 'expected_revision' => $shop['revision']));
+check('settings: context update', $shopUpdated['changed'] === array('name') && $setSite->row('modContext', 'shop')['name'] === 'Лавка' && $setSite->row('modContext', 'shop')['rank'] === '3' && $refreshes() > $before);
+$e = throws('settings: context key cannot change', ApiException::class, function () use ($call, $sAdmin) { $call($sAdmin, 'update', array('kind' => 'context', 'key' => 'shop', 'fields' => array('key' => 'store'))); });
+check('settings: context key immutability', $e && $e->errorCode === 'validation_failed' && $setSite->row('modContext', 'store') === null);
+$shopCopy = $call($sAdmin, 'duplicate', array('kind' => 'context', 'key' => 'shop', 'new_name' => 'shop2'));
+check('settings: context duplicate', $shopCopy['key'] === 'shop2' && $setSite->row('modContext', 'shop2')['name'] === 'Лавка' && $shopCopy['source_key'] === 'shop');
+$call($sAdmin, 'delete', array('kind' => 'context', 'key' => 'shop2'));
+check('settings: context delete', $setSite->row('modContext', 'shop2') === null);
+$call($sAdmin, 'undo', array('last' => 1, 'confirm' => true));
+check('settings: undo of a context delete', $setSite->row('modContext', 'shop2')['name'] === 'Лавка');
+$call($sAdmin, 'undo', array('changeset_id' => $shopCopy['changeset_id'], 'confirm' => true));
+check('settings: undo of a context create', $setSite->row('modContext', 'shop2') === null);
+$call($sAdmin, 'undo', array('changeset_id' => $shopUpdated['changeset_id'], 'confirm' => true));
+check('settings: undo of a context update', $setSite->row('modContext', 'shop')['name'] === 'Магазин');
+foreach (array('web', 'mgr') as $core) {
+    $e = throws("settings: MODX refuses to remove {$core}", ApiException::class, function () use ($call, $sAdmin, $core) { $call($sAdmin, 'delete', array('kind' => 'context', 'key' => $core)); });
+    check("settings: {$core} refusal is passed through", $e && $e->errorCode === 'validation_failed' && $setSite->row('modContext', $core) !== null);
+}
+foreach (array('create' => array('fields' => array('key' => 'denied'))) + array('update' => array('key' => 'shop', 'fields' => array('name' => 'x')), 'delete' => array('key' => 'shop')) as $action => $args) {
+    $e = throws("settings: develop cannot {$action} a context", ApiException::class, function () use ($call, $sDev, $action, $args) { $call($sDev, $action, array('kind' => 'context') + $args); });
+    check("settings: context {$action} needs admin", $e && $e->errorCode === 'forbidden_scope');
+}
+
+// ---- context_setting ----
+$url = $call($sDev, 'create', array('kind' => 'context_setting', 'fields' => array('context_key' => 'shop', 'key' => 'site_url', 'value' => 'https://магазин.example/', 'area' => 'site')));
+check('settings: context_setting create carries the composite key', $url['key'] === 'shop:site_url' && !array_key_exists('id', $url) && $contextSettingRow('shop', 'site_url')['value'] === 'https://магазин.example/'
+    && $contextSettingRow('shop', 'site_url')['namespace'] === 'core');
+$urlGot = $call($sRead, 'get', array('kind' => 'context_setting', 'key' => 'shop:site_url'));
+check('settings: context_setting get', $urlGot['key'] === 'shop:site_url' && $urlGot['fields']['context_key'] === 'shop' && $urlGot['fields']['key'] === 'site_url'
+    && $urlGot['fields']['value'] === 'https://магазин.example/' && $urlGot['revision'] === $url['revision']
+    && $call($sRead, 'get', array('kind' => 'context_setting', 'name' => 'shop:site_url'))['revision'] === $url['revision']);
+$colons = $call($sDev, 'create', array('kind' => 'context_setting', 'fields' => array('context_key' => 'web', 'key' => 'a:b:c', 'value' => 'colons')));
+check('settings: a setting key that contains colons splits on the first colon only', $colons['key'] === 'web:a:b:c' && $contextSettingRow('web', 'a:b:c')['value'] === 'colons'
+    && $call($sRead, 'get', array('kind' => 'context_setting', 'key' => 'web:a:b:c'))['fields']['key'] === 'a:b:c');
+$dotted = $call($sDev, 'create', array('kind' => 'context_setting', 'fields' => array('context_key' => 'web', 'key' => 'some.key', 'value' => 'dot')));
+check('settings: web:some.key', $dotted['key'] === 'web:some.key' && $call($sRead, 'get', array('kind' => 'context_setting', 'key' => 'web:some.key'))['fields']['value'] === 'dot');
+foreach (array('webnocolon', ':nocontext', 'web:') as $badKey) {
+    foreach (array('get', 'update', 'delete', 'duplicate') as $action) {
+        $e = throws("settings: malformed composite key {$badKey} ({$action})", ApiException::class, function () use ($call, $sDev, $badKey, $action) {
+            $call($sDev, $action, array('kind' => 'context_setting', 'key' => $badKey) + ($action === 'update' ? array('fields' => array('value' => 'x')) : array()));
+        });
+        check("settings: malformed key {$badKey} is validation_failed for {$action}", $e && $e->errorCode === 'validation_failed');
+    }
+}
+$e = throws('settings: unknown context', ApiException::class, function () use ($call, $sDev) { $call($sDev, 'create', array('kind' => 'context_setting', 'fields' => array('context_key' => 'nope', 'key' => 'x'))); });
+check('settings: a missing context is refused by MODX', $e && $e->errorCode === 'validation_failed');
+$e = throws('settings: duplicate context setting', ApiException::class, function () use ($call, $sDev) { $call($sDev, 'create', array('kind' => 'context_setting', 'fields' => array('context_key' => 'shop', 'key' => 'site_url'))); });
+check('settings: an existing key is refused by MODX', $e && $e->errorCode === 'validation_failed');
+$e = throws('settings: id for a context setting', ApiException::class, function () use ($call, $sDev) { $call($sDev, 'get', array('kind' => 'context_setting', 'id' => 1)); });
+check('settings: id is refused for string-key kinds', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'addressed by key') !== false);
+$listed = $call($sRead, 'list', array('kind' => 'context_setting'));
+check('settings: context_setting list is sorted by context and key', array_column($listed['items'], 'context_key') === array('shop', 'web', 'web')
+    && array_column($listed['items'], 'key') === array('site_url', 'a:b:c', 'some.key') && $listed['total'] === 3);
+check('settings: context_setting list where context_key', array_column($call($sRead, 'list', array('kind' => 'context_setting', 'where' => array('context_key' => 'web')))['items'], 'key') === array('a:b:c', 'some.key'));
+check('settings: context_setting query searches the key, not the value', array_column($call($sRead, 'list', array('kind' => 'context_setting', 'query' => 'some'))['items'], 'key') === array('some.key')
+    && $call($sRead, 'list', array('kind' => 'context_setting', 'query' => 'colons'))['total'] === 0);
+$e = throws('settings: context_setting where value', ApiException::class, function () use ($call, $sRead) { $call($sRead, 'list', array('kind' => 'context_setting', 'where' => array('value' => 'dot'))); });
+check('settings: where on a context setting value is refused', $e && $e->errorCode === 'validation_failed');
+$before = $refreshes();
+$urlUpdated = $call($sDev, 'update', array('kind' => 'context_setting', 'key' => 'shop:site_url', 'fields' => array('value' => 'https://shop.example/'), 'expected_revision' => $url['revision']));
+check('settings: context_setting update', $urlUpdated['changed'] === array('value') && $contextSettingRow('shop', 'site_url')['value'] === 'https://shop.example/' && $refreshes() > $before);
+foreach (array('context_key' => 'web', 'key' => 'other') as $field => $value) {
+    $e = throws("settings: context_setting {$field} cannot change", ApiException::class, function () use ($call, $sDev, $field, $value) { $call($sDev, 'update', array('kind' => 'context_setting', 'key' => 'shop:site_url', 'fields' => array($field => $value))); });
+    check("settings: context_setting {$field} immutability", $e && $e->errorCode === 'validation_failed' && $contextSettingRow('shop', 'site_url')['value'] === 'https://shop.example/');
+}
+$urlCopy = $call($sDev, 'duplicate', array('kind' => 'context_setting', 'key' => 'shop:site_url', 'new_name' => 'site_url2'));
+check('settings: context_setting duplicate stays in the context', $urlCopy['key'] === 'shop:site_url2' && $urlCopy['source_key'] === 'shop:site_url' && $contextSettingRow('shop', 'site_url2')['value'] === 'https://shop.example/');
+$urlDeleted = $call($sDev, 'delete', array('kind' => 'context_setting', 'key' => 'shop:site_url2'));
+check('settings: context_setting delete', $urlDeleted['key'] === 'shop:site_url2' && $contextSettingRow('shop', 'site_url2') === null);
+$undoDeleted = $call($sDev, 'undo', array('changeset_id' => $urlDeleted['changeset_id'], 'confirm' => true));
+check('settings: undo of a context_setting delete', $undoDeleted['objects'][0]['key'] === 'shop:site_url2' && $contextSettingRow('shop', 'site_url2')['value'] === 'https://shop.example/');
+$call($sDev, 'undo', array('changeset_id' => $urlCopy['changeset_id'], 'confirm' => true));
+check('settings: undo of a context_setting create', $contextSettingRow('shop', 'site_url2') === null);
+$call($sDev, 'undo', array('changeset_id' => $urlUpdated['changeset_id'], 'confirm' => true));
+check('settings: undo of a context_setting update', $contextSettingRow('shop', 'site_url')['value'] === 'https://магазин.example/');
+$contextHistory = $call($sDev, 'history', array('kind' => 'context_setting'))['changesets'][0]['objects'][0];
+check('settings: history of a context_setting shows the composite key', $contextHistory['key'] === 'shop:site_url' && $contextHistory['name'] === 'site_url');
+$e = throws('settings: read cannot write a context setting', ApiException::class, function () use ($call, $sContent) { $call($sContent, 'update', array('kind' => 'context_setting', 'key' => 'shop:site_url', 'fields' => array('value' => 'x'))); });
+check('settings: context_setting write scope is develop', $e && $e->errorCode === 'forbidden_scope');
+// secrets among context settings
+$call($sDev, 'create', array('kind' => 'context_setting', 'fields' => array('context_key' => 'shop', 'key' => 'payment_secret', 'value' => 'ctx-s3cret')));
+$call($sDev, 'create', array('kind' => 'context_setting', 'fields' => array('context_key' => 'shop', 'key' => 'gate_pw', 'value' => 'pw-s3cret', 'xtype' => 'text-password')));
+$call($sDev, 'create', array('kind' => 'context_setting', 'fields' => array('context_key' => 'shop', 'key' => 'passage_count', 'value' => '7')));
+foreach (array('read' => $sRead, 'develop' => $sDev) as $scope => $reader) {
+    $ctxSecret = $call($reader, 'get', array('kind' => 'context_setting', 'key' => 'shop:payment_secret'));
+    $ctxList = array_column($call($reader, 'list', array('kind' => 'context_setting', 'where' => array('context_key' => 'shop')))['items'], null, 'key');
+    check("settings: context_setting secrets are hidden for {$scope}", $ctxSecret['fields']['value'] === '[hidden]' && $ctxSecret['secret'] === true
+        && $ctxList['payment_secret']['value'] === '[hidden]' && $ctxList['gate_pw']['value'] === '[hidden]' && $ctxList['gate_pw']['secret'] === true
+        && $ctxList['passage_count']['value'] === '7' && !array_key_exists('secret', $ctxList['passage_count']) && $ctxList['site_url']['value'] === 'https://магазин.example/');
+}
+$ctxAdmin = array_column($call($sAdmin, 'list', array('kind' => 'context_setting', 'where' => array('context_key' => 'shop')))['items'], null, 'key');
+check('settings: context_setting secrets are shown to admin', $ctxAdmin['payment_secret']['value'] === 'ctx-s3cret' && $ctxAdmin['gate_pw']['value'] === 'pw-s3cret'
+    && $call($sAdmin, 'get', array('kind' => 'context_setting', 'key' => 'shop:gate_pw'))['fields']['value'] === 'pw-s3cret');
+$ctxSecretWrite = $call($sDev, 'update', array('kind' => 'context_setting', 'key' => 'shop:payment_secret', 'fields' => array('value' => 'ctx-new')));
+check('settings: context_setting diff hides a secret for admin', $call($sAdmin, 'history_diff', array('changeset_id' => $ctxSecretWrite['changeset_id']))['objects'][0]['changed']
+    === array('value' => array('old' => '[hidden]', 'new' => '[hidden]')));
+
+// context get shows its settings, hiding secrets; delete + undo restores them
+$shopRelations = function (Context $c) use ($call) {
+    $rows = $call($c, 'get', array('kind' => 'context', 'key' => 'shop'))['relations']['settings'];
+    return array_column($rows, 'value', 'key');
+};
+check('settings: the settings relation of a context hides secrets below admin', $shopRelations($sRead) === array('gate_pw' => '[hidden]', 'passage_count' => 7, 'payment_secret' => '[hidden]', 'site_url' => 'https://магазин.example/')
+    && $shopRelations($sDev)['payment_secret'] === '[hidden]');
+check('settings: admin sees them', $shopRelations($sAdmin)['payment_secret'] === 'ctx-new' && $shopRelations($sAdmin)['gate_pw'] === 'pw-s3cret');
+$shopSettingsBefore = array(
+    $contextSettingRow('shop', 'site_url'), $contextSettingRow('shop', 'payment_secret'), $contextSettingRow('shop', 'gate_pw'), $contextSettingRow('shop', 'passage_count'),
+);
+$shopDeleted = $call($sAdmin, 'delete', array('kind' => 'context', 'key' => 'shop'));
+check('settings: deleting a context removes its settings', $setSite->row('modContext', 'shop') === null && $contextSettingRow('shop', 'site_url') === null && $contextSettingRow('shop', 'gate_pw') === null
+    && $contextSettingRow('web', 'a:b:c') !== null);
+// The settings are journaled as context_setting objects of the same changeset (architect's review).
+$byKey = array();
+foreach ($call($sRead, 'history_diff', array('changeset_id' => $shopDeleted['changeset_id']))['objects'] as $object) {
+    if ($object['kind'] === 'context_setting') { $byKey[substr($object['key'], strlen('shop:'))] = $object['changed']['value']['old']; }
+}
+check('settings: the diff of a context delete hides secret settings for every scope that may see it', $byKey['payment_secret'] === '[hidden]' && $byKey['gate_pw'] === '[hidden]' && $byKey['passage_count'] === '7'
+    && strpos(json_encode($call($sAdmin, 'history_diff', array('changeset_id' => $shopDeleted['changeset_id']))), 's3cret') === false);
+$call($sAdmin, 'undo', array('changeset_id' => $shopDeleted['changeset_id'], 'confirm' => true));
+check('settings: undo of a context delete restores its settings', $setSite->row('modContext', 'shop')['name'] === 'Магазин'
+    && array($contextSettingRow('shop', 'site_url'), $contextSettingRow('shop', 'payment_secret'), $contextSettingRow('shop', 'gate_pw'), $contextSettingRow('shop', 'passage_count')) == $shopSettingsBefore);
+// a context with resources is not deleted (MODX would remove them for good)
+$setSite->store('modResource', array('id' => 501, 'context_key' => 'shop', 'pagetitle' => 'Каталог'));
+foreach (array(true, false) as $dry) {
+    $e = throws('settings: a context with resources cannot be deleted', ApiException::class, function () use ($call, $sAdmin, $dry) { $call($sAdmin, 'delete', array('kind' => 'context', 'key' => 'shop') + ($dry ? array('dry_run' => true) : array())); });
+    check('settings: context with resources is refused, nothing lost', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), '1 resource') !== false
+        && $setSite->row('modContext', 'shop') !== null && $setSite->row('modResource', 501) !== null);
+}
+// a context that carries a modxMCP setting cannot be deleted through the API
+$setSite->store('modContext', array('key' => 'ownctx', 'name' => 'Own', 'description' => '', 'rank' => 0));
+$setSite->store('modContextSetting', array('context_key' => 'ownctx', 'key' => 'modxmcp.api_limit', 'value' => '5', 'xtype' => 'textfield', 'namespace' => 'modxmcp', 'area' => ''));
+$ownRefused('delete of a context that holds one of its settings', function () use ($call, $sAdmin) { $call($sAdmin, 'delete', array('kind' => 'context', 'key' => 'ownctx')); });
+check('settings: that context and its setting are still there', $setSite->row('modContext', 'ownctx') !== null && $contextSettingRow('ownctx', 'modxmcp.api_limit') !== null);
+// context settings in the modxMCP namespace or with a modxmcp. key
+$ownRefused('context_setting update', function () use ($call, $sAdmin) { $call($sAdmin, 'update', array('kind' => 'context_setting', 'key' => 'ownctx:modxmcp.api_limit', 'fields' => array('value' => '9'))); });
+$ownRefused('context_setting delete', function () use ($call, $sAdmin) { $call($sAdmin, 'delete', array('kind' => 'context_setting', 'key' => 'ownctx:modxmcp.api_limit')); });
+$ownRefused('context_setting duplicate', function () use ($call, $sAdmin) { $call($sAdmin, 'duplicate', array('kind' => 'context_setting', 'key' => 'ownctx:modxmcp.api_limit', 'new_name' => 'plain_copy')); });
+$ownRefused('context_setting create with a modxmcp. key', function () use ($call, $sAdmin) { $call($sAdmin, 'create', array('kind' => 'context_setting', 'fields' => array('context_key' => 'web', 'key' => 'modxmcp.x'))); });
+$ownRefused('context_setting create in the namespace', function () use ($call, $sAdmin) { $call($sAdmin, 'create', array('kind' => 'context_setting', 'fields' => array('context_key' => 'web', 'key' => 'plain', 'namespace' => 'modxmcp'))); });
+$ownRefused('context_setting moved into the namespace', function () use ($call, $sAdmin) { $call($sAdmin, 'update', array('kind' => 'context_setting', 'key' => 'web:some.key', 'fields' => array('namespace' => 'modxmcp'))); });
+$ownCtxState = ModxMCP\Journal\Snapshot::capture($setSite, $sAdmin->kinds->get('context_setting'), 'ownctx:modxmcp.api_limit');
+$e = throws('settings: restore guard for a context setting', ApiException::class, function () use ($setSite, $sAdmin, $ownCtxState) { ModxMCP\Journal\Snapshot::restore($setSite, $sAdmin->kinds->get('context_setting'), 'ownctx:modxmcp.api_limit', $ownCtxState); });
+check('settings: context_setting restore of an own setting is not_reversible', $e && $e->errorCode === 'not_reversible');
+check('settings: own context settings can be read', $call($sRead, 'get', array('kind' => 'context_setting', 'key' => 'ownctx:modxmcp.api_limit'))['fields']['value'] === '5');
+
+// ---- namespace ----
+$ns = $call($sAdmin, 'create', array('kind' => 'namespace', 'fields' => array('key' => 'mynamespace', 'path' => '{core_path}components/my/', 'assets_path' => '{assets_path}components/my/')));
+check('settings: namespace create', $ns['key'] === 'mynamespace' && !array_key_exists('id', $ns) && $setSite->row('modNamespace', 'mynamespace')['path'] === '{core_path}components/my/');
+$nsGot = $call($sRead, 'get', array('kind' => 'namespace', 'key' => 'mynamespace'));
+check('settings: namespace get', $nsGot['fields'] === array('key' => 'mynamespace', 'path' => '{core_path}components/my/', 'assets_path' => '{assets_path}components/my/') && $nsGot['revision'] === $ns['revision']
+    && $call($sRead, 'get', array('kind' => 'namespace', 'name' => 'mynamespace'))['revision'] === $ns['revision']);
+check('settings: namespace list, query and where', array_column($call($sRead, 'list', array('kind' => 'namespace'))['items'], 'key') === array('core', 'modxmcp', 'mynamespace', 'other')
+    && array_column($call($sRead, 'list', array('kind' => 'namespace', 'query' => 'space'))['items'], 'key') === array('mynamespace')
+    && array_column($call($sRead, 'list', array('kind' => 'namespace', 'where' => array('key' => 'core')))['items'], 'key') === array('core'));
+$nsUpdated = $call($sAdmin, 'update', array('kind' => 'namespace', 'key' => 'mynamespace', 'fields' => array('path' => '{core_path}components/changed/'), 'expected_revision' => $ns['revision']));
+check('settings: namespace update', $nsUpdated['changed'] === array('path') && $setSite->row('modNamespace', 'mynamespace')['path'] === '{core_path}components/changed/'
+    && $setSite->row('modNamespace', 'mynamespace')['assets_path'] === '{assets_path}components/my/');
+$e = throws('settings: namespace key cannot change', ApiException::class, function () use ($call, $sAdmin) { $call($sAdmin, 'update', array('kind' => 'namespace', 'key' => 'mynamespace', 'fields' => array('key' => 'renamed'))); });
+check('settings: namespace key immutability', $e && $e->errorCode === 'validation_failed' && $setSite->row('modNamespace', 'renamed') === null);
+$nsCopy = $call($sAdmin, 'duplicate', array('kind' => 'namespace', 'key' => 'mynamespace', 'new_name' => 'ns2'));
+check('settings: namespace duplicate', $nsCopy['key'] === 'ns2' && $setSite->row('modNamespace', 'ns2')['path'] === '{core_path}components/changed/' && $nsCopy['source_key'] === 'mynamespace');
+$nsDeleted = $call($sAdmin, 'delete', array('kind' => 'namespace', 'key' => 'ns2'));
+check('settings: namespace delete', $nsDeleted['deleted'] === true && $setSite->row('modNamespace', 'ns2') === null);
+$call($sAdmin, 'undo', array('changeset_id' => $nsDeleted['changeset_id'], 'confirm' => true));
+check('settings: undo of a namespace delete', $setSite->row('modNamespace', 'ns2')['path'] === '{core_path}components/changed/');
+$call($sAdmin, 'undo', array('changeset_id' => $nsCopy['changeset_id'], 'confirm' => true));
+check('settings: undo of a namespace create', $setSite->row('modNamespace', 'ns2') === null);
+$call($sAdmin, 'undo', array('changeset_id' => $nsUpdated['changeset_id'], 'confirm' => true));
+check('settings: undo of a namespace update', $setSite->row('modNamespace', 'mynamespace')['path'] === '{core_path}components/my/');
+$e = throws('settings: MODX refuses to remove the core namespace', ApiException::class, function () use ($call, $sAdmin) { $call($sAdmin, 'delete', array('kind' => 'namespace', 'key' => 'core')); });
+check('settings: core namespace refusal is passed through', $e && $e->errorCode === 'validation_failed' && $setSite->row('modNamespace', 'core') !== null);
+foreach (array('create' => array('fields' => array('key' => 'denied')), 'update' => array('key' => 'mynamespace', 'fields' => array('path' => 'x')), 'delete' => array('key' => 'mynamespace')) as $action => $args) {
+    $e = throws("settings: develop cannot {$action} a namespace", ApiException::class, function () use ($call, $sDev, $action, $args) { $call($sDev, $action, array('kind' => 'namespace') + $args); });
+    check("settings: namespace {$action} needs admin", $e && $e->errorCode === 'forbidden_scope');
+}
+// removing a namespace removes its settings and lexicon entries with it; undo brings them back
+$call($sAdmin, 'create', array('kind' => 'namespace', 'fields' => array('key' => 'withdata')));
+$call($sDev, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'wd_option', 'value' => 'Значение', 'namespace' => 'withdata')));
+$call($sDev, 'create', array('kind' => 'context_setting', 'fields' => array('context_key' => 'web', 'key' => 'wd_ctx', 'value' => 'c', 'namespace' => 'withdata')));
+$setSite->store('modLexiconEntry', array('id' => 7, 'name' => 'setting_wd_option', 'value' => 'Название', 'topic' => 'default', 'namespace' => 'withdata', 'language' => 'ru'));
+$nsData = $call($sAdmin, 'delete', array('kind' => 'namespace', 'key' => 'withdata'));
+check('settings: deleting a namespace removes what belongs to it', $settingRow('wd_option') === null && $contextSettingRow('web', 'wd_ctx') === null && $setSite->row('modLexiconEntry', 7) === null
+    && $setSite->row('modNamespace', 'withdata') === null);
+$call($sAdmin, 'undo', array('changeset_id' => $nsData['changeset_id'], 'confirm' => true));
+check('settings: undo of a namespace delete restores its settings and entries', $settingRow('wd_option')['value'] === 'Значение' && $contextSettingRow('web', 'wd_ctx')['value'] === 'c'
+    && $setSite->row('modLexiconEntry', 7)['value'] === 'Название' && $setSite->row('modNamespace', 'withdata') !== null);
+// the namespace of modxMCP itself
+$ownRefused('namespace update', function () use ($call, $sAdmin) { $call($sAdmin, 'update', array('kind' => 'namespace', 'key' => 'modxmcp', 'fields' => array('path' => 'x'))); });
+$ownRefused('namespace delete', function () use ($call, $sAdmin) { $call($sAdmin, 'delete', array('kind' => 'namespace', 'key' => 'modxmcp')); });
+$ownRefused('namespace duplicate', function () use ($call, $sAdmin) { $call($sAdmin, 'duplicate', array('kind' => 'namespace', 'key' => 'modxmcp', 'new_name' => 'modxmcp2')); });
+$ownRefused('namespace create', function () use ($call, $sAdmin) { $call($sAdmin, 'create', array('kind' => 'namespace', 'fields' => array('key' => 'ModxMCP'))); });
+$setSite->store('modSystemSetting', array('key' => 'modxmcp.stray', 'value' => '1', 'xtype' => 'textfield', 'namespace' => 'withdata', 'area' => ''));
+$ownRefused('delete of a namespace that holds one of its settings', function () use ($call, $sAdmin) { $call($sAdmin, 'delete', array('kind' => 'namespace', 'key' => 'withdata')); });
+check('settings: that namespace and its settings are intact', $setSite->row('modNamespace', 'withdata') !== null && $settingRow('modxmcp.stray') !== null && $settingRow('wd_option') !== null);
+$e = throws('settings: Snapshot::restore refuses the modxmcp namespace', ApiException::class, function () use ($setSite, $sAdmin) {
+    ModxMCP\Journal\Snapshot::restore($setSite, $sAdmin->kinds->get('namespace'), 'modxmcp', array('fields' => array('name' => 'modxmcp', 'path' => '', 'assets_path' => ''), 'relations' => array()));
+});
+check('settings: namespace restore guard', $e && $e->errorCode === 'not_reversible');
+
+// Review additions: a token that may not read a credential cannot make it readable.
+list($leakSite, $leakDev) = $retentionSite();
+$leakAdmin = new Context($leakSite, array('scope' => 'admin') + $leakDev->token, $leakDev->corePath, function () {});
+$call($leakAdmin, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'smtp_password', 'value' => 'секрет-1', 'xtype' => 'textfield')));
+$call($leakAdmin, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'mail_box', 'value' => 'секрет-2', 'xtype' => 'text-password')));
+$call($leakAdmin, 'create', array('kind' => 'system_setting', 'fields' => array('key' => 'site_slogan', 'value' => 'открыто', 'xtype' => 'textfield')));
+foreach (array(
+    'copy under a harmless key' => array('duplicate', array('kind' => 'system_setting', 'key' => 'smtp_password', 'new_name' => 'harmless')),
+    'copy of a password-typed setting' => array('duplicate', array('kind' => 'system_setting', 'key' => 'mail_box', 'new_name' => 'harmless2', 'fields' => array('xtype' => 'textfield'))),
+    'xtype changed to plain text' => array('update', array('kind' => 'system_setting', 'key' => 'mail_box', 'fields' => array('xtype' => 'textfield'))),
+) as $label => $attempt) {
+    $e = throws('secrets: develop cannot ' . $label, ApiException::class, function () use ($call, $leakDev, $attempt) { $call($leakDev, $attempt[0], $attempt[1]); });
+    check('secrets: refusal for ' . $label . ' is forbidden_scope', $e && $e->errorCode === 'forbidden_scope');
+}
+check('secrets: nothing was copied', $leakSite->getCount('modSystemSetting', array('key' => 'harmless')) === 0 && $leakSite->getCount('modSystemSetting', array('key' => 'harmless2')) === 0);
+check('secrets: develop may still change the value of a credential', $call($leakDev, 'update', array('kind' => 'system_setting', 'key' => 'smtp_password', 'fields' => array('value' => 'новый')))['changeset_id'] !== null
+    && $call($leakDev, 'get', array('kind' => 'system_setting', 'key' => 'smtp_password'))['fields']['value'] === '[hidden]');
+check('secrets: develop may copy an ordinary setting', $call($leakDev, 'duplicate', array('kind' => 'system_setting', 'key' => 'site_slogan', 'new_name' => 'site_slogan_2'))['changeset_id'] !== null);
+check('secrets: admin may copy a credential', $call($leakAdmin, 'duplicate', array('kind' => 'system_setting', 'key' => 'smtp_password', 'new_name' => 'smtp_password_old'))['changeset_id'] !== null);
+
+// Review additions: a context's settings are their own objects in the journal.
+list($relSite, $relDev) = $retentionSite();
+$relAdmin = new Context($relSite, array('scope' => 'admin') + $relDev->token, $relDev->corePath, function () {});
+$relAdmin->sessionId = 'related-session-0001';
+$relCheckpoint = $call($relAdmin, 'checkpoint', array('label' => 'related'));
+$call($relAdmin, 'create', array('kind' => 'context', 'fields' => array('key' => 'shop', 'name' => 'Магазин')));
+$relContext = $call($relAdmin, 'get', array('kind' => 'context', 'key' => 'shop'));
+$call($relAdmin, 'create', array('kind' => 'context_setting', 'fields' => array('context_key' => 'shop', 'key' => 'site_url', 'value' => 'https://shop.example/')));
+$relWithSetting = $call($relAdmin, 'get', array('kind' => 'context', 'key' => 'shop'));
+check('related: a context shows its settings, but they do not change its revision', $relWithSetting['revision'] === $relContext['revision']
+    && $relWithSetting['relations']['settings'] == array(array('key' => 'site_url', 'value' => 'https://shop.example/')));
+$call($relAdmin, 'update', array('kind' => 'context_setting', 'key' => 'shop:site_url', 'fields' => array('value' => 'https://shop2.example/')));
+$relDelete = $call($relAdmin, 'delete', array('kind' => 'context', 'key' => 'shop'));
+check('related: a context delete journals its settings as deleted objects', array_column($call($relAdmin, 'history_diff', array('changeset_id' => $relDelete['changeset_id']))['objects'], 'kind') === array('context', 'context_setting'));
+$call($relAdmin, 'undo', array('changeset_id' => $relDelete['changeset_id'], 'confirm' => true));
+check('related: undo brings the setting back with its last value', $relSite->row('modContextSetting', array('context_key' => 'shop', 'key' => 'site_url')) !== null
+    && $call($relAdmin, 'get', array('kind' => 'context_setting', 'key' => 'shop:site_url'))['fields']['value'] === 'https://shop2.example/');
+$relBack = $call($relAdmin, 'undo', array('to_checkpoint' => $relCheckpoint['checkpoint_id'], 'confirm' => true));
+check('related: undo to the checkpoint has no conflict and removes both', $relBack['performed'] === true && $relBack['conflicts'] === 0
+    && $relSite->getCount('modContext', array('key' => 'shop')) === 0 && $relSite->getCount('modContextSetting', array('context_key' => 'shop')) === 0);
+check('related: nothing was recorded as an outside change', $call($relAdmin, 'history', array('source' => 'external'))['changesets'] === array());
+
+// Review additions: list search is literal.
+list($qSite, $qDev) = $retentionSite();
+$qAdmin = new Context($qSite, array('scope' => 'admin') + $qDev->token, $qDev->corePath, function () {});
+foreach (array('site_name', 'siteXname', 'site%name') as $qKey) { $call($qAdmin, 'create', array('kind' => 'system_setting', 'fields' => array('key' => $qKey, 'value' => 'v'))); }
+check('list: query treats _ and % literally', array_column($call($qAdmin, 'list', array('kind' => 'system_setting', 'query' => 'site_'))['items'], 'key') === array('site_name')
+    && array_column($call($qAdmin, 'list', array('kind' => 'system_setting', 'query' => 'site%'))['items'], 'key') === array('site%name'));
 
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));

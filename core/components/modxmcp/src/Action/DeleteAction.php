@@ -34,6 +34,7 @@ final class DeleteAction extends WriteAction {
         $kind = Objects::kind($context, $args['kind'], true);
         $object = Objects::resolve($context, $kind, $args);
         $id = $kind->keyOf($object);
+        $kind->assertObjectWritable($context->modx, $object, 'delete');
         $label = (string) $kind->value($object, $kind->nameField());
         $dry = $this->isDryRun($args, $context);
 
@@ -42,6 +43,10 @@ final class DeleteAction extends WriteAction {
             if ($before === null) { throw new ApiException('not_found', "No {$kind->name()} with " . Objects::keyText($kind, $id) . '.'); }
             Objects::assertRevision($context, $kind, $id, $before, $args);
             $tx->keepDeleteExtra($kind, $id);
+            foreach ($kind->deleteCascade($context->modx, $id) as $cascade) {
+                $other = $context->kinds->get($cascade[0]);
+                if ($other) { $tx->touch($other, $cascade[1]); }
+            }
             if ($dry) {
                 $related = array();
                 foreach ($before['relations'] + Snapshot::captureDeleteExtra($context->modx, $kind, $id) as $name => $rows) {
@@ -57,6 +62,7 @@ final class DeleteAction extends WriteAction {
             $staticPath = $kind->effectiveContent(Objects::resolveKey($context, $kind, $id))[2];
             Objects::process($context->modx, $kind->processorPath() . $kind->deleteProcessor(), $kind->processorKey($id));
             StaticFiles::removeManaged($context->modx, $staticPath);
+            $kind->afterWrite($context->modx);
             return array('result' => array(), 'summary' => "delete {$kind->name()} {$id} ({$label})");
         });
         if ($dry) { return $this->plan($context, $result); }

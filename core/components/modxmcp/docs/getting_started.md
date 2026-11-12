@@ -22,6 +22,16 @@ same tools work for every kind:
 - `modx_get {kind, id|name, fields?, full?}` — fields, relations and `revision`.
 - `modx_view_code {kind, id|name, start_line?, end_line?}` — code as numbered lines.
 
+Kinds without a numeric id are addressed by `key` instead (`modx_describe` shows `key_type`
+and `key_field`): `system_setting` (the setting key), `context` (the context key),
+`context_setting` (`"<context_key>:<key>"`, split on the first colon, e.g. `web:site_url`) and
+`namespace` (its name). `name` works as an alias of `key`, results carry `key` instead of
+`id`, and the key cannot be changed after creation. Values of credentials (an xtype
+`text-password`, or a key such as `smtp_pass`, `*_secret`, `*_token`, `api_key`) read as
+`"[hidden]"` unless the token has the `admin` scope, and are never shown in a history diff.
+Settings of modxMCP itself (namespace `modxmcp`, keys `modxmcp.*`) are read-only through the
+API; change them in the MODX manager.
+
 Field names are the same across element kinds: the code of a chunk, snippet, template or
 plugin is always `content`, and the name is always `name`. For a static element `content`
 is the file. Snippet and plugin code is PHP **without** an opening `<?php` tag; MODX removes

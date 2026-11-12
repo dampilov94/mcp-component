@@ -18,6 +18,10 @@ final class KindRegistry {
         UserGroupKind::class,
         RoleKind::class,
         ResourceGroupKind::class,
+        SystemSettingKind::class,
+        ContextKind::class,
+        ContextSettingKind::class,
+        NamespaceKind::class,
     );
 
     private $kinds = null;

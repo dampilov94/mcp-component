@@ -39,6 +39,7 @@ final class GetAction extends Action {
             'fields'    => Schema::obj(array(), array(), true),
             'relations' => Schema::obj(array(), array(), true),
             'truncated' => Schema::obj(array(), array(), true),
+            'secret'    => Schema::bool('The object holds a credential; its value is hidden unless the token has the admin scope.'),
         ), array('kind', 'revision', 'fields', 'relations'), true);
     }
 
@@ -63,6 +64,8 @@ final class GetAction extends Action {
         foreach ($kind->relationSpecs() as $name => $spec) {
             if (empty($spec['delete_only'])) { $relations[$name] = $kind->presentRelation($context->modx, $object, $name); }
         }
+        // Values this token must not see are replaced (credentials of settings); flags such as "secret" are added.
+        list($fields, $relations, $flags) = $kind->redact($context, $object, $fields, $relations);
         $id = $kind->keyOf($object);
         $result = array(
             'kind'      => $kind->name(),
@@ -72,6 +75,6 @@ final class GetAction extends Action {
             'relations' => $relations ? $relations : new \stdClass(),
         );
         if ($truncated) { $result['truncated'] = $truncated; }
-        return $result;
+        return $result + $flags;
     }
 }

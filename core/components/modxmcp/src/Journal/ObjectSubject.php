@@ -45,18 +45,24 @@ final class ObjectSubject implements Subject {
         $definitions = $kind->fields();
         $codeColumn = $kind->codeField() !== null ? $kind->column($kind->codeField()) : null;
         $out = array();
+        // A kind that answers decides which columns are secret; otherwise the column name does.
+        $secretColumns = null;
+        foreach (array($before, $after) as $state) {
+            $answer = $state === null ? null : $kind->secretColumns($state);
+            if ($answer !== null) { $secretColumns = array_merge($secretColumns === null ? array() : $secretColumns, $answer); }
+        }
         foreach (Snapshot::changed($kind, $before, $after) as $name) {
             $column = isset($definitions[$name]) ? $kind->column($name) : $name;
             $old = $before !== null && array_key_exists($column, $before['fields']) ? $before['fields'][$column] : null;
             $new = $after !== null && array_key_exists($column, $after['fields']) ? $after['fields'][$column] : null;
             if (($before !== null && isset($before['relations'][$name])) || ($after !== null && isset($after['relations'][$name]))) {
                 $out[$name] = array(
-                    'old' => $before !== null && isset($before['relations'][$name]) ? $before['relations'][$name] : array(),
-                    'new' => $after !== null && isset($after['relations'][$name]) ? $after['relations'][$name] : array(),
+                    'old' => $kind->maskRelationRows($name, $before !== null && isset($before['relations'][$name]) ? $before['relations'][$name] : array()),
+                    'new' => $kind->maskRelationRows($name, $after !== null && isset($after['relations'][$name]) ? $after['relations'][$name] : array()),
                 );
             } elseif ($column === $codeColumn) {
                 $out[$name] = array('diff' => Diff::lines((string) $old, (string) $new));
-            } elseif (preg_match(self::SECRET, $column)) {
+            } elseif ($secretColumns !== null ? in_array($column, $secretColumns, true) : preg_match(self::SECRET, $column)) {
                 $out[$name] = array('old' => '[hidden]', 'new' => '[hidden]');
             } else {
                 $out[$name] = array('old' => $old, 'new' => $new);

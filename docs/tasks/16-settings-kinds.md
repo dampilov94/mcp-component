@@ -116,3 +116,77 @@ Update expected kind lists/counts in both test files.
 `src/Kind/Kind.php` and `src/Kind/Objects.php` / `src/Journal/*` only for the hooks named
 above, `src/Capabilities.php` only if a group constant is missing, tests,
 `tests/php/FakeModx.php`.
+
+## Report
+
+Based on: main at 9bec25d
+
+Counts: before, `npm run check` OK (130 PHP files, 15 JS files), PHP 1022 checks, Node 25 tests. After: check OK (135 PHP files), PHP 1327 checks, Node 25 tests (all pass). No existing assertion was weakened or deleted.
+
+Implemented, file by file:
+
+- New kinds in `src/Kind/`: `SystemSettingKind` (group `settings`, develop), `ContextKind` (`contexts`, admin; relation `settings`, delete-only `acl` and `source_elements`), `ContextSettingKind` (`contexts`, develop; composite key split on the first colon, `fk` added for the create processor), `NamespaceKind` (`namespaces`, admin; key = column `name`; delete-only relations `system_settings`, `context_settings`, `user_settings`, `lexicon_entries`, `extension_packages`, `acl`). Registered in `KindRegistry`. Shared parts: `AbstractSettingKind` (string key, `afterWrite` = `reloadConfig()`, secrets, own-settings guard, `namespace` defaulted to `core` on create because the processors require one) and `Secrets` (secret rule, own-settings rule, messages).
+- `Kind.php`: hooks with no-op defaults: `processorData()`, `afterWrite()`, `secretColumns()`, `maskRelationRows()`, `redact()`, `assertColumns()`, `assertObjectWritable()`, `assertRestorable()`; field flags `immutable` (shown by describe) and `no_filter`.
+- `Objects.php`: `normalize()` calls `assertColumns()`; new `assertImmutable()`; `save()` applies `processorData()` and calls `afterWrite()`.
+- `Snapshot::restore()`: `assertRestorable()` on the target state, and on the current state when the target is "removed"; `afterWrite()` after a restore. `Undo::plan()` also asks for target and current state, so a refusal happens at plan time, before anything is touched. `ObjectSubject::describeChange()` asks `secretColumns()` (kind answers replace the name pattern; other kinds unchanged) and `maskRelationRows()`.
+- Actions: `GetAction` and `ListAction` call `redact()` (value `[hidden]`, `secret: true`); `ListAction` honours `no_filter`; `UpdateAction` checks immutability and `assertObjectWritable`; `DeleteAction` calls `assertObjectWritable` (also for the dry run) and `afterWrite`; `DuplicateAction` calls `assertObjectWritable($source, 'duplicate')`.
+- Tests: `tests/php/TestSettingKind.php` removed. The task-15 "keys" section now runs on the real `system_setting` kind. Moved or changed in it: (1) `test_setting` renamed to `system_setting` everywhere; (2) the key `404` can no longer be created, because the MODX create processor refuses keys starting with a digit (source, `verifySettingKey`), so it is planted with `store()` as if made in the manager, and the check "a numeric-looking key is a string in history" now reads the delete entry of `404` (after the existing numeric delete) instead of its create entry; (3) the create result's `changed` list is now `key, value, xtype, namespace, area` (the real kind has more fields). Every other check is unchanged. New "Settings kinds" section: 305 checks (describe, groups, all CRUD/duplicate/history/diff/undo paths of the four kinds, immutability, composite keys, context delete + undo, secrets by xtype and each key pattern with look-alikes, scopes, own-settings guard on every path incl. planted-journal undo, configuration currency). `FakeModx.php`: composite primary keys, `reloadConfig()` re-reading settings, `getContext()`, processors `system/settings/`, `context/`, `context/setting/`, `workspace/namespace/` with the source's refusals (digit-leading keys, namespace must exist, `web`/`mgr`, `core` namespace, cascades), `core` namespace seeded in `fakeSite()`, `tableDump()`. `tests/endpoint.test.js`: kind count 11 to 15; the kind list in `run.php` extended.
+- `docs/getting_started.md`: short paragraph on key-addressed kinds, hidden credentials and read-only modxMCP settings.
+
+Deviations and conservative readings:
+
+- MODX's `modContextRemoveProcessor::afterRemove` deletes every resource of the context and their TV values; that cannot be undone. `ContextKind` refuses to delete a context that still has resources (`validation_failed`, also in the dry run). Not in the brief.
+- Removing a namespace removes (xPDO composites) its system settings, context settings, user settings, lexicon entries, extension packages and ACLs. These are kept as delete-only relations so undo is complete (the brief did not list them). `modAction` is also a composite but has no class file in 2.8.8, so it is not captured.
+- The modxMCP guard goes beyond settings: the namespace `modxmcp` itself cannot be created, updated, deleted, duplicated or restored; a context that holds a `modxmcp.*` or namespace-`modxmcp` setting, and a namespace that holds a `modxmcp.*` setting, cannot be deleted (the cascade would bypass read-only). An update that moves a setting into the `modxmcp` namespace is refused. Key comparison for the rule is case-insensitive.
+- `modx_list` `where` on `value` of settings is refused (new field flag `no_filter`), otherwise a non-admin could probe a hidden value by filtering. Not in the brief.
+- `context_setting` has `uniqueNames() === false`: `duplicate` takes `new_name` as the new setting key inside the same context and leaves the duplicate check to the processor (the generic name lookup would need a composite key).
+- Key immutability treats an update that sends the identical value as no change; any other value, including a case change, is `validation_failed`.
+- The brief names `Objects::save()`/`Snapshot` for hooks; I also edited `UpdateAction`, `DeleteAction`, `DuplicateAction`, `GetAction`, `ListAction`, `Undo.php` (not in the brief's file list) because the guards must also cover dry runs and the redaction needs the token's scope. An extra base class `AbstractSettingKind` and helper `Secrets` were added to the "four classes".
+- No guard inside `Objects::save()`: a throw there would make the transaction roll back a protected setting through `restore()`, which refuses.
+
+MODX source vs brief:
+
+- The create processors require a non-empty `namespace` (no model default is applied), hence the `core` default in `processorData()`.
+- `context/setting/create` identifies the context by `fk` (not `context_key`); update and remove use `context_key`.
+- Keys starting with a digit are refused by both setting create processors.
+- `modNamespaceRemoveProcessor::beforeRemove` returns `false` for `core`, so the passed-through message is the generic "Processor ... failed."
+- Real `editedon` is `ON UPDATE CURRENT_TIMESTAMP`; it is a derived, read-only field and dropped from the state (like the resource's).
+- Creating a context also makes ACL rows (administrator and anonymous access); they are not journaled. Undoing the create removes the context through xPDO, which removes its ACLs too. Not covered by a check.
+
+Verified only against the fake MODX (please check on the stand): all processor property names and refusals; that `reloadConfig()` after a write makes `$modx->getOption()` current and refreshes the cache (the fake processors deliberately do not reload on their own, so the tests exercise the kind hook, including after undo); xPDO `getObject`/`remove` with string and composite primary keys (`modContextSetting`, `modContext`, `modNamespace`) and the composite cascades on delete; restoring `modLexiconEntry`, `modUserSetting`, `modAccessContext`, `sources.modMediaSourceElement` rows through `fromArray`/`save`; the response objects of the create processors carrying `key`/`name`/`context_key`; that the context update processor does not touch settings when `settings` is not sent.
+
+Open questions:
+
+- Should deleting a context with resources be possible with an explicit flag instead of refused? Left refused.
+- `modx_history` has no `key` filter (task 15 open point); a setting's history can only be filtered by `kind` and `name` today.
+- The "secret" key pattern is the brief's; a key like `forgotten_password_tpl` counts as secret (hidden), which may surprise.
+
+## Review
+
+Accepted and merged. Verified on the stand with `scripts/stand/check-settings.cjs`; the
+earlier stand checks pass too. The conservative deviations in the report are accepted
+(refusing to delete a context that still has resources, journaling a namespace's cascade,
+the wider modxMCP guard, refusing `where` on `value`).
+
+Changes the architect made on the branch:
+
+1. **Credential leak for non-admin tokens.** A `develop` token could copy a credential
+   under a harmless key (`modx_duplicate … new_name`) or change its `xtype` from
+   `text-password` to `textfield`, and then read the value. New hook
+   `Kind::assertKeepsSecret()`; for settings, a non-admin token may change a credential's
+   value but not copy it or make it visible (`forbidden_scope`). The brief missed this.
+2. **A context's settings were part of the context's revision**, so creating a context
+   setting changed the context behind the journal's back; on the stand the undo to the
+   checkpoint then stopped with a conflict. The `settings` relation is now shown by
+   `modx_get` but not part of the snapshot (`in_state => false`); a context delete journals
+   each of its settings as a deleted `context_setting` (new hook `Kind::deleteCascade()`),
+   so an undo brings them back as themselves. One existing test was rewritten accordingly.
+3. **`modx_list` sorted by an unquoted `key` column**, a reserved word in MySQL: every
+   list of settings and contexts failed with an SQL error and silently returned nothing
+   (the stand check's leftover detection was blind). Sort columns are now quoted, and the
+   fake fails like MySQL on unquoted reserved words.
+4. **`modx_list` `query` treated `_` and `%` as wildcards**; they are now literal.
+
+Open questions answered: deleting a context that still has resources stays refused (no
+flag); a `key` filter for `modx_history` is recorded for later; hiding keys like
+`forgotten_password_tpl` is accepted as the price of a simple rule.
