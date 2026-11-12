@@ -77,6 +77,35 @@ final class Snapshot {
     }
 
     /**
+     * Raw stored value of an API field in a state: a column of the object, or for a `via` field a
+     * column of the first row of the relation it names. Null when the state or the value is absent.
+     */
+    public static function stateValue(Kind $kind, $state, $name) {
+        if ($state === null) { return null; }
+        $definitions = $kind->fields();
+        $column = $kind->column($name);
+        if (!empty($definitions[$name]['via'])) {
+            $rows = isset($state['relations'][$definitions[$name]['via']]) ? $state['relations'][$definitions[$name]['via']] : array();
+            return $rows && array_key_exists($column, $rows[0]) ? $rows[0][$column] : null;
+        }
+        return array_key_exists($column, $state['fields']) ? $state['fields'][$column] : null;
+    }
+
+    /** relation name => columns of its rows that are `via` fields. */
+    private static function viaColumns(Kind $kind) {
+        $out = array();
+        foreach ($kind->fields() as $name => $definition) {
+            if (!empty($definition['via'])) { $out[$definition['via']][] = $kind->column($name); }
+        }
+        return $out;
+    }
+
+    private static function withoutColumns(array $rows, array $columns) {
+        foreach ($rows as $index => $row) { $rows[$index] = array_diff_key($row, array_flip($columns)); }
+        return $rows;
+    }
+
+    /**
      * API-level names of what differs between two states: fields and relations.
      * Either state may be null (object absent).
      */
@@ -85,11 +114,12 @@ final class Snapshot {
             // A new object: name what it was created with, not every column default.
             $created = array();
             foreach ($kind->fields() as $name => $definition) {
-                $value = isset($after['fields'][$kind->column($name)]) ? $after['fields'][$kind->column($name)] : null;
+                $value = self::stateValue($kind, $after, $name);
                 if (empty($definition['read_only']) && $value !== null && $value !== '' && $value !== '0') { $created[] = $name; }
             }
             foreach ($after['relations'] as $name => $rows) {
-                if ($rows) { $created[] = $name; }
+                // Rows that back `via` fields are named by those fields.
+                if ($rows && !in_array($name, $kind->viaRelations(), true)) { $created[] = $name; }
             }
             return $created;
         }
@@ -97,15 +127,20 @@ final class Snapshot {
         $a = $before === null ? array() : $before['fields'];
         $b = $after === null ? array() : $after['fields'];
         foreach ($kind->fields() as $name => $definition) {
-            $column = $kind->column($name);
-            $left = array_key_exists($column, $a) ? $a[$column] : null;
-            $right = array_key_exists($column, $b) ? $b[$column] : null;
-            if ($left !== $right) { $changed[] = $name; }
+            if (self::stateValue($kind, $before, $name) !== self::stateValue($kind, $after, $name)) { $changed[] = $name; }
         }
         $ra = $before === null ? array() : $before['relations'];
         $rb = $after === null ? array() : $after['relations'];
+        $viaColumns = self::viaColumns($kind);
         foreach (array_unique(array_merge(array_keys($ra), array_keys($rb))) as $name) {
-            if ((isset($ra[$name]) ? $ra[$name] : array()) !== (isset($rb[$name]) ? $rb[$name] : array())) { $changed[] = $name; }
+            $left = isset($ra[$name]) ? $ra[$name] : array();
+            $right = isset($rb[$name]) ? $rb[$name] : array();
+            if (isset($viaColumns[$name])) {
+                // The `via` fields were compared above; any other column of the row is a change of the relation itself.
+                $left = self::withoutColumns($left, $viaColumns[$name]);
+                $right = self::withoutColumns($right, $viaColumns[$name]);
+            }
+            if ($left !== $right) { $changed[] = $name; }
         }
         // Columns the API does not expose (e.g. properties) still count as a change.
         $hidden = array_diff_key($a + $b, array_flip(array_map(array($kind, 'column'), array_keys($kind->fields()))));

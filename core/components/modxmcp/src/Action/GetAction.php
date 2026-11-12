@@ -47,12 +47,13 @@ final class GetAction extends Action {
         $kind = Objects::kind($context, $args['kind']);
         $object = Objects::resolve($context, $kind, $args);
         $definitions = $kind->fields();
-        $names = isset($args['fields']) ? array_values(array_unique($args['fields'])) : array_keys($definitions);
+        $names = isset($args['fields']) ? array_values(array_unique($args['fields'])) : array_keys(array_filter($definitions, function ($definition) { return empty($definition['write_only']); }));
 
         $fields = array();
         $truncated = array();
         foreach ($names as $name) {
             if (!isset($definitions[$name])) { throw new ApiException('validation_failed', "Unknown field '{$name}' for {$kind->name()}."); }
+            if (!empty($definitions[$name]['write_only'])) { throw new ApiException('validation_failed', "Field '{$name}' is write-only and is never returned."); }
             $value = $kind->value($object, $name);
             if (!empty($definitions[$name]['code']) && empty($args['full']) && strlen($value) > self::CODE_LIMIT) {
                 $truncated[$name] = strlen($value);
@@ -62,7 +63,7 @@ final class GetAction extends Action {
         }
         $relations = array();
         foreach ($kind->relationSpecs() as $name => $spec) {
-            if (empty($spec['delete_only'])) { $relations[$name] = $kind->presentRelation($context->modx, $object, $name); }
+            if (empty($spec['delete_only']) && empty($spec['hidden'])) { $relations[$name] = $kind->presentRelation($context->modx, $object, $name); }
         }
         // Values this token must not see are replaced (credentials of settings); flags such as "secret" are added.
         list($fields, $relations, $flags) = $kind->redact($context, $object, $fields, $relations);

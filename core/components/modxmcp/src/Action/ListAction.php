@@ -45,6 +45,7 @@ final class ListAction extends Action {
             $names = array_values(array_unique($args['fields']));
             foreach ($names as $name) {
                 if (!isset($definitions[$name])) { throw new ApiException('validation_failed', "Unknown field '{$name}' for {$kind->name()}."); }
+                if (!empty($definitions[$name]['write_only'])) { throw new ApiException('validation_failed', "Field '{$name}' is write-only and is never returned."); }
                 if (!empty($definitions[$name]['code'])) { throw new ApiException('validation_failed', "Field '{$name}' holds code and cannot be listed; use modx_get or modx_view_code."); }
             }
         } else {
@@ -63,7 +64,8 @@ final class ListAction extends Action {
         }
         foreach (isset($args['where']) ? $args['where'] : array() as $name => $value) {
             if (!isset($definitions[$name]) || !empty($definitions[$name]['code']) || isset($definitions[$name]['format'])
-                || !empty($definitions[$name]['computed']) || !empty($definitions[$name]['no_filter'])) {
+                || !empty($definitions[$name]['computed']) || !empty($definitions[$name]['no_filter'])
+                || !empty($definitions[$name]['via']) || !empty($definitions[$name]['write_only'])) {
                 throw new ApiException('validation_failed', "Cannot filter {$kind->name()} by '{$name}'.");
             }
             if (!is_scalar($value)) { throw new ApiException('validation_failed', "Filter '{$name}' must be a scalar value."); }

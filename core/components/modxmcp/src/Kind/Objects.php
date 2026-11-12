@@ -169,7 +169,8 @@ final class Objects {
             // The update processors expect the complete record; omitted fields would be reset.
             $data = $kind->processorKey($id);
             foreach ($kind->fields() as $name => $definition) {
-                if (empty($definition['derived'])) { $data[$kind->column($name)] = $kind->processorValue($object, $name); }
+                // A write-only field (a password) is never sent back; its stored value is a hash.
+                if (empty($definition['derived']) && empty($definition['write_only'])) { $data[$kind->column($name)] = $kind->processorValue($object, $name); }
             }
             self::process($modx, $kind->processorPath() . 'update', $kind->processorData('update', $columns + $data + $kind->processorExtras('update')));
         }
