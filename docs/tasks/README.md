@@ -53,6 +53,8 @@ below) or append a `## Review` section to the brief with numbered change request
 | 14 | [modx_dependency_graph](14-dependency-graph.md) | `task/14-dependency-graph` | merged |
 | 15 | [Object keys that are not numeric ids](15-object-keys.md) | `task/15-object-keys` | merged |
 | 16 | [Settings kinds](16-settings-kinds.md) | `task/16-settings-kinds` | merged |
+| 17 | [Kind user](17-users.md) | `task/17-users` | ready for the executor |
+| 18 | [Access rules](18-access-rules.md) | `task/18-access-rules` | ready for the executor |
 
 ## Doing several briefs in a row
 
@@ -81,6 +83,10 @@ Lessons from briefs 01–08 (all of the architect's corrections came from these)
 - Files MODX writes are not always the bytes you gave it: snippet and plugin files get an
   opening PHP tag (`Kind::fileContent()` / `codeFromFile()` handle it). Anything that
   reads or writes a static file must go through the kind.
+- MySQL reserved words (`key`, `order`, `group`, `rank`) must be quoted where xPDO does not
+  quote them (sort columns: `$modx->escape()`); the fake now fails on them like MySQL.
+- Think about how a token could read or change through a side door what a rule forbids
+  (copying, changing a type, undo). Test those doors.
 - When MODX's real behaviour or data format matters, read it in `modx-example-2-8-8/`
   rather than trusting the brief's summary, and say in the report where the two differ.
 
