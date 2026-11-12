@@ -46,6 +46,9 @@ final class Objects {
         if (isset($args['key'])) {
             throw new ApiException('validation_failed', "Kind '{$kind->name()}' is addressed by id (or name), not key: use the id argument.");
         }
+        if (isset($args['name']) && !$kind->hasNames()) {
+            throw new ApiException('validation_failed', "Kind '{$kind->name()}' has no names: use the id argument.");
+        }
         if (!isset($args['id']) && (!isset($args['name']) || $args['name'] === '')) {
             throw new ApiException('validation_failed', 'Provide id or name.');
         }
@@ -81,6 +84,10 @@ final class Objects {
                 throw new ApiException('validation_failed', "Field '{$name}' is read-only.");
             }
             $type = $fields[$name]['type'];
+            if ($type === 'object') {
+                $out[$kind->column($name)] = self::normalizeObject($kind, $name, $value);
+                continue;
+            }
             $ok = ($type === 'integer' && is_int($value)) || ($type === 'boolean' && is_bool($value)) || ($type === 'string' && is_string($value));
             if (!$ok) { throw new ApiException('validation_failed', "Field '{$name}' must be {$type}."); }
             $out[$kind->column($name)] = $type === 'boolean' ? ($value ? 1 : 0) : $value;
@@ -94,6 +101,37 @@ final class Objects {
         }
         $kind->assertColumns($out, $creating);
         return $out;
+    }
+
+    /**
+     * A field of type object: a JSON object whose values are all booleans. After json_decode(…, true) an empty
+     * object and an empty list look alike, so an empty array is the empty object. Returns name => bool, keys sorted.
+     */
+    public static function normalizeObject(Kind $kind, $name, $value) {
+        if ($value instanceof \stdClass) { $value = (array) $value; }
+        if (!is_array($value) || ($value && array_keys($value) === range(0, count($value) - 1))) {
+            throw new ApiException('validation_failed', "Field '{$name}' must be an object of name => true|false.");
+        }
+        $out = array();
+        foreach ($value as $key => $flag) {
+            if ((string) $key === '' || !is_bool($flag)) {
+                throw new ApiException('validation_failed', "Field '{$name}': every value must be true or false and every name must be non-empty (check '{$key}').");
+            }
+            $out[(string) $key] = $flag;
+        }
+        ksort($out, SORT_STRING);
+        return $out;
+    }
+
+    /** True when a stored value of a field equals the value a caller sent for it (maps compare as maps). */
+    public static function sameValue(Kind $kind, $name, $stored, $value) {
+        $fields = $kind->fields();
+        if ($fields[$name]['type'] === 'object') {
+            $a = (array) Kind::objectValue($stored);
+            $b = $value instanceof \stdClass || is_array($value) ? (array) Kind::objectValue((array) $value) : null;
+            return $b !== null && $a === $b;
+        }
+        return (string) $stored === (string) (is_bool($value) ? (int) $value : $value);
     }
 
     /** Refuse an update that tries to change a field fixed at creation (e.g. a setting key). */
@@ -161,9 +199,11 @@ final class Objects {
             $tx->touch($kind, $other);
         }
         if ($id === null) {
+            $after = $kind->beforeCreate($context, $columns);
             $created = self::process($modx, $kind->processorPath() . 'create', $kind->processorData('create', $columns + $kind->processorExtras('create')));
             $id = $kind->createdKey($created, $columns);
             $tx->created($kind, $id);
+            if ($after) { $after($tx, $id); }
         } elseif ($columns) {
             $object = $kind->findByKey($modx, $id);
             // The update processors expect the complete record; omitted fields would be reset.

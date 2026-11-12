@@ -24,7 +24,7 @@ abstract class Kind {
 
     /**
      * Exposed fields: api name => definition.
-     *   type        JSON type: string | integer | boolean
+     *   type        JSON type: string | integer | boolean | object (a JSON object of name => boolean, stored as JSON text)
      *   column      database column when it differs from the api name
      *   description short meaning (optional)
      *   list        included in list results by default
@@ -49,6 +49,11 @@ abstract class Kind {
     }
 
     public function uniqueNames() {
+        return true;
+    }
+
+    /** False for objects that have no name of their own (access rules): they are addressed by id only. */
+    public function hasNames() {
         return true;
     }
 
@@ -159,6 +164,25 @@ abstract class Kind {
     /** The one related row that holds the `via` fields of this relation, or null when there is none. */
     public function viaRow($object, $relation) {
         return null;
+    }
+
+    /**
+     * Called before a create processor runs, after the arguments were validated. A kind may refuse here, and may
+     * return a function ($tx, $id) that runs once the object exists and is registered with the transaction (for
+     * work the create processor cannot do, or side effects MODX adds that must be journaled). Null for none.
+     * @param array $columns normalised column => value of the new object
+     * @return callable|null
+     */
+    public function beforeCreate(Context $context, array $columns) {
+        return null;
+    }
+
+    /**
+     * Refuse to put the object with this key into the recorded state $target (null: remove it), judged on the
+     * site as it is now. Runs before an undo touches anything and again where the state is restored.
+     * @param array|null $target
+     */
+    public function assertUndoable(\modX $modx, $key, $target) {
     }
 
     /** Called after a successful write or delete through the processors, and after an undo has restored an object. */
@@ -430,6 +454,7 @@ abstract class Kind {
         }
         if (!empty($fields[$field]['write_only'])) { return ''; }
         $raw = $this->rawValue($object, $field);
+        if ($fields[$field]['type'] === 'object') { return self::objectValue($raw); }
         if (isset($fields[$field]['format']) && $fields[$field]['format'] === 'datetime') {
             return self::datetime($raw);
         }
@@ -438,6 +463,15 @@ abstract class Kind {
             case 'boolean': return (bool) $raw;
             default:        return $raw === null ? '' : (string) $raw;
         }
+    }
+
+    /** A stored JSON object (text or an already decoded map) as the API shows it: keys sorted, always an object. */
+    public static function objectValue($raw) {
+        $map = is_string($raw) ? json_decode($raw, true) : $raw;
+        if (!is_array($map)) { $map = array(); }
+        $map = array_map(function ($flag) { return (bool) $flag; }, $map);
+        ksort($map, SORT_STRING);
+        return (object) $map;
     }
 
     /** Unix time (or a date string xPDO already formatted) as "YYYY-MM-DD HH:MM:SS"; "" for none. */

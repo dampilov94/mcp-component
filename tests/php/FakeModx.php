@@ -7,10 +7,12 @@ class FakeObject {
     public $class;
     public $fields;
     public $isNew;
+    public $xpdo;
     private $modx;
 
     public function __construct(modX $modx, $class, array $fields, $isNew) {
         $this->modx = $modx;
+        $this->xpdo = $modx;
         $this->class = $class;
         $this->fields = $fields;
         $this->isNew = $isNew;
@@ -20,6 +22,11 @@ class FakeObject {
         if (in_array($key, array('properties', 'input_properties'), true) && is_string($value)) {
             $decoded = json_decode($value, true);
             if (is_array($decoded)) { return $decoded; }
+        }
+        // Like an xPDO json field: get() decodes the stored text.
+        if ($key === 'data' && $this->class === 'modAccessPolicy') {
+            $decoded = is_string($value) ? json_decode($value, true) : $value;
+            return is_array($decoded) ? $decoded : array();
         }
         return $value;
     }
@@ -81,7 +88,9 @@ class FakeObject {
     public function remove() {
         $this->modx->drop($this->class, $this->fields);
         foreach (modX::$cascades as $spec) {
-            if ($spec[0] === $this->class) { $this->modx->removeCollection($spec[1], array($spec[2] => $this->fields[isset($spec[4]) ? $spec[4] : 'id']) + $spec[3]); }
+            if ($spec[0] !== $this->class) { continue; }
+            // Like xPDO: each composite row is removed as an object, so its own composites go too (child policies).
+            foreach ($this->modx->getCollection($spec[1], array($spec[2] => $this->fields[isset($spec[4]) ? $spec[4] : 'id']) + $spec[3]) as $child) { $child->remove(); }
         }
         return true;
     }
@@ -119,7 +128,12 @@ class FakeResponse {
     public function getAllErrors() { return array(); }
     public function getObject() { return $this->object; }
 }
-class FakeCache { public $refreshes = 0; public function refresh() { $this->refreshes++; return true; } }
+class FakeCache {
+    public $refreshes = 0;
+    public $flushes = 0;
+    public function refresh() { $this->refreshes++; return true; }
+    public function flushPermissions() { $this->flushes++; return true; }
+}
 
 class xPDO {
     public $pdo;
@@ -227,6 +241,10 @@ class modX extends xPDO {
         array('modNamespace', 'modSystemSetting', 'namespace', array(), 'name'),
         array('modNamespace', 'modContextSetting', 'namespace', array(), 'name'),
         array('modNamespace', 'modLexiconEntry', 'namespace', array(), 'name'),
+        // Access control: a policy removes its child policies; a template its permissions and policies (which remove theirs).
+        array('modAccessPolicy', 'modAccessPolicy', 'parent', array()),
+        array('modAccessPolicyTemplate', 'modAccessPermission', 'template', array()),
+        array('modAccessPolicyTemplate', 'modAccessPolicy', 'template', array()),
     );
     private static $processors = array(
         'element/chunk/' => array('modChunk', 'name'), 'element/snippet/' => array('modSnippet', 'name'),
@@ -624,6 +642,116 @@ class modX extends xPDO {
         return new FakeResponse(null, $object->toArray());
     }
 
+
+    /**
+     * security/access/policy/{create,update,remove} (MODX 2.8.8): create takes the permissions from the template
+     * (all on); update takes `permissions` as a list of {name, enabled} (array or JSON) and replaces `data`.
+     * Like the kind hook test needs, the fake processors do not flush the permission cache on their own.
+     */
+    private function policyProcessor($action, array $data) {
+        if ($action === 'remove') {
+            $object = $this->getObject('modAccessPolicy', array('id' => $data['id']));
+            if (!$object) { return new FakeResponse('Policy not found.'); }
+            $object->remove();
+            return new FakeResponse(null, array('id' => $data['id']));
+        }
+        $creating = $action === 'create';
+        $object = $creating ? $this->newObject('modAccessPolicy') : $this->getObject('modAccessPolicy', array('id' => $data['id']));
+        if (!$object) { return new FakeResponse('Policy not found.'); }
+        if ($creating) {
+            if (empty($data['name'])) { return new FakeResponse('Please specify a name.'); }
+            if ($this->getCount('modAccessPolicy', array('name' => $data['name']))) { return new FakeResponse('A policy with that name already exists.'); }
+            $template = $this->getObject('modAccessPolicyTemplate', array('id' => isset($data['template']) ? $data['template'] : 0));
+            if (!$template) { return new FakeResponse('The policy template could not be found.'); }
+            $permissions = array();
+            foreach ($this->getCollection('modAccessPermission', array('template' => $template->get('id'))) as $permission) { $permissions[$permission->get('name')] = true; }
+            $object->fromArray(array('description' => null, 'parent' => 0, 'template' => 0, 'class' => '', 'lexicon' => 'permissions'), '', true, true);
+            $object->set('data', $permissions);
+        }
+        $permissions = array_key_exists('permissions', $data) ? $data['permissions'] : null;
+        unset($data['permissions'], $data['data']);
+        $object->fromArray($data, '', false, true);
+        if ($permissions !== null) {
+            $map = array();
+            foreach (is_array($permissions) ? $permissions : json_decode($permissions, true) as $item) { $map[$item['name']] = $item['enabled'] ? true : false; }
+            $object->set('data', $map);
+        }
+        $object->save();
+        return new FakeResponse(null, array('id' => $object->get('id')));
+    }
+
+    /** security/access/policy/template/{create,update,remove}: a name is required and unique on create; remove cascades. */
+    private function policyTemplateProcessor($action, array $data) {
+        if ($action === 'remove') {
+            $object = $this->getObject('modAccessPolicyTemplate', array('id' => $data['id']));
+            if (!$object) { return new FakeResponse('Policy template not found.'); }
+            $object->remove();
+            return new FakeResponse(null, array('id' => $data['id']));
+        }
+        $creating = $action === 'create';
+        $object = $creating ? $this->newObject('modAccessPolicyTemplate') : $this->getObject('modAccessPolicyTemplate', array('id' => $data['id']));
+        if (!$object) { return new FakeResponse('Policy template not found.'); }
+        if ($creating) {
+            if (empty($data['name'])) { return new FakeResponse('Please specify a name.'); }
+            if ($this->getCount('modAccessPolicyTemplate', array('name' => $data['name']))) { return new FakeResponse('A policy template with that name already exists.'); }
+            $object->fromArray(array('template_group' => 0, 'description' => null, 'lexicon' => 'permissions'), '', true, true);
+        }
+        unset($data['permissions']);
+        $object->fromArray($data, '', false, true);
+        $object->save();
+        return new FakeResponse(null, array('id' => $object->get('id')));
+    }
+
+    /**
+     * security/access/usergroup/{context,resourcegroup}/*: the checks of beforeSet()/beforeSave(); a created context
+     * rule also gives the Administrator group a rule on that context (policy "Context") when it has none.
+     */
+    private function aclProcessor($class, $action, array $data) {
+        $isContext = $class === 'modAccessContext';
+        if ($action === 'remove') {
+            $object = $this->getObject($class, array('id' => $data['id']));
+            if (!$object) { return new FakeResponse('Access rule not found.'); }
+            $object->remove();
+            return new FakeResponse(null, array('id' => $data['id']));
+        }
+        $creating = $action === 'create';
+        $object = $creating ? $this->newObject($class) : $this->getObject($class, array('id' => $data['id']));
+        if (!$object) { return new FakeResponse('Access rule not found.'); }
+        if (empty($data['principal'])) { return new FakeResponse('Please specify a user group.'); }
+        if (empty($data['target'])) { return new FakeResponse($isContext ? 'Please specify a context.' : 'Please specify a resource group.'); }
+        if (empty($data['policy'])) { return new FakeResponse('Please specify a policy.'); }
+        if (!isset($data['authority'])) { return new FakeResponse('Please specify an authority.'); }
+        if ($creating) {
+            $object->fromArray(array('target' => '', 'principal_class' => 'modPrincipal', 'principal' => 0, 'authority' => 9999, 'policy' => 0) + ($isContext ? array() : array('context_key' => '')), '', true, true);
+        }
+        $object->fromArray($data, '', false, true);
+        $errors = array();
+        if (!($isContext ? $this->getObject('modContext', array('key' => $object->get('target'))) : $this->getObject('modResourceGroup', array('id' => $object->get('target'))))) {
+            $errors[] = $isContext ? 'The context could not be found.' : 'The resource group could not be found.';
+        }
+        if (!$this->getObject('modAccessPolicy', array('id' => $object->get('policy')))) { $errors[] = 'The policy could not be found.'; }
+        $same = array('principal' => $object->get('principal'), 'principal_class' => 'modUserGroup', 'target' => $object->get('target'), 'policy' => $object->get('policy'))
+            + ($isContext ? array() : array('context_key' => $object->get('context_key')));
+        foreach ($this->getCollection($class, $same) as $other) {
+            if ($creating || (string) $other->get('id') !== (string) $data['id']) { $errors[] = 'An access rule with that user group, target and policy already exists.'; }
+        }
+        if ($errors) { return new FakeResponse(implode(' ', $errors)); }
+        if ($creating) { $object->set('principal_class', 'modUserGroup'); }
+        $object->save();
+        if ($creating && $isContext) {
+            $admin = $this->getObject('modUserGroup', array('name' => 'Administrator'));
+            $contextPolicy = $this->getObject('modAccessPolicy', array('name' => 'Context'));
+            if ($admin && $contextPolicy && (int) $object->get('principal') !== (int) $admin->get('id')
+                && !$this->getObject($class, array('principal' => $admin->get('id'), 'principal_class' => 'modUserGroup', 'target' => $object->get('target')))) {
+                $rule = $this->newObject($class);
+                $rule->fromArray(array('principal' => $admin->get('id'), 'principal_class' => 'modUserGroup', 'target' => $object->get('target'),
+                    'policy' => $contextPolicy->get('id'), 'authority' => 9999), '', true, true);
+                $rule->save();
+            }
+        }
+        return new FakeResponse(null, $object->toArray());
+    }
+
     /** Minimal create / update / remove processors with the validation the real ones have. */
     public function runProcessor($path, array $data = array()) {
         if ($path === 'security/group/user/create' || $path === 'security/group/user/remove') {
@@ -665,6 +793,10 @@ class modX extends xPDO {
         $action = basename($path);
         $base = substr($path, 0, -strlen($action));
         if ($base === 'security/user/') { return $this->userProcessor($action, $data); }
+        if ($base === 'security/access/policy/') { return $this->policyProcessor($action, $data); }
+        if ($base === 'security/access/policy/template/') { return $this->policyTemplateProcessor($action, $data); }
+        if ($base === 'security/access/usergroup/context/') { return $this->aclProcessor('modAccessContext', $action, $data); }
+        if ($base === 'security/access/usergroup/resourcegroup/') { return $this->aclProcessor('modAccessResourceGroup', $action, $data); }
         if ($base === 'system/settings/') { return $this->settingProcessor($action, $data, $path); }
         if ($base === 'context/setting/') { return $this->settingProcessor($action, $data, $path, 'modContextSetting'); }
         if ($base === 'context/') { return $this->contextProcessor($action, $data); }

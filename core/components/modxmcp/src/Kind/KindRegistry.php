@@ -23,6 +23,10 @@ final class KindRegistry {
         ContextSettingKind::class,
         NamespaceKind::class,
         UserKind::class,
+        AccessPolicyKind::class,
+        PolicyTemplateKind::class,
+        ContextAccessKind::class,
+        ResourceGroupAccessKind::class,
     );
 
     private $kinds = null;

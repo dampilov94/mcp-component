@@ -44,16 +44,23 @@ final class DuplicateAction extends WriteAction {
         }
         $nameField = $kind->nameField();
         $explicitName = isset($args['new_name']);
-        $baseName = $values[$nameField] . ' copy';
-        $newName = $explicitName ? $args['new_name'] : $baseName;
-        if ($kind->uniqueNames() && !$explicitName) {
-            for ($number = 2; $number <= 20 && $kind->find($context->modx, array('name' => $newName)); $number++) {
-                $newName = $baseName . ' ' . $number;
+        if (!$kind->hasNames()) {
+            // Objects without a name (access rules) are copied as they are; `fields` changes what must differ.
+            if ($explicitName) { throw new ApiException('validation_failed', "Kind '{$kind->name()}' has no names: leave new_name out and give the fields that must differ."); }
+            $newName = '';
+            $values = array_replace($values, $kind->duplicateOverrides($source), $overrides);
+        } else {
+            $baseName = $values[$nameField] . ' copy';
+            $newName = $explicitName ? $args['new_name'] : $baseName;
+            if ($kind->uniqueNames() && !$explicitName) {
+                for ($number = 2; $number <= 20 && $kind->find($context->modx, array('name' => $newName)); $number++) {
+                    $newName = $baseName . ' ' . $number;
+                }
             }
+            $values[$nameField] = $newName;
+            $values = array_replace($values, $kind->duplicateOverrides($source), $overrides);
+            $newName = $values[$nameField];
         }
-        $values[$nameField] = $newName;
-        $values = array_replace($values, $kind->duplicateOverrides($source), $overrides);
-        $newName = $values[$nameField];
         $columns = Objects::normalize($kind, $values, true);
         if ($kind->uniqueNames() && $kind->find($context->modx, array('name' => $newName))) {
             throw new ApiException('validation_failed', "A {$kind->name()} named '{$newName}' already exists.");
@@ -76,7 +83,7 @@ final class DuplicateAction extends WriteAction {
         Objects::lint($context, $kind, $columns);
         if ($this->isDryRun($args, $context)) {
             return $this->plan($context, array(
-                'kind' => $kind->name(), 'source_' . $kind->keyField() => $sourceId, 'would_create' => array('name' => $newName),
+                'kind' => $kind->name(), 'source_' . $kind->keyField() => $sourceId, 'would_create' => $kind->hasNames() ? array('name' => $newName) : new \stdClass(),
                 'relations' => array_keys($relations), 'reversible' => true,
             ));
         }
@@ -85,6 +92,6 @@ final class DuplicateAction extends WriteAction {
             $id = Objects::save($context, $tx, $kind, null, $columns, $relations);
             return array('result' => array(), 'summary' => "duplicate {$kind->name()} {$sourceId} as {$id}");
         });
-        return $this->written($kind, $id, $info, array('source_' . $kind->keyField() => $sourceId, 'name' => $newName));
+        return $this->written($kind, $id, $info, array('source_' . $kind->keyField() => $sourceId) + ($kind->hasNames() ? array('name' => $newName) : array()));
     }
 }

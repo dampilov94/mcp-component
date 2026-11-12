@@ -75,6 +75,7 @@ final class Undo {
                 foreach (array($target, $currentState) as $state) {
                     if ($state !== null) { $subject->kind()->assertRestorable($state); }
                 }
+                $subject->kind()->assertUndoable($context->modx, $key, $target);
             }
             $extra = array();
             if ($oldest['extra_blob'] !== null) {
