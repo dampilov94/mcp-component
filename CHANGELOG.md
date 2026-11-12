@@ -132,6 +132,10 @@ After stage 3:
   `resourcegroup_access` (admin only). The API never changes the Administrator group's
   rules, the policies they use, or the policies and templates MODX installs, and refuses to
   delete a policy that rules still use. Permissions are flushed after every write.
+- Packages: kind `package` (read-only list of the workspace), kind `provider` (API key hidden),
+  provider catalogue search through `modx_invoke`, `modx_install_package` and
+  `modx_uninstall_package` (plan without `confirm`, error-log entries of the install returned,
+  recorded in the history but never undone; modxMCP cannot replace or remove itself).
 
 - Offline tests (`npm test`): pure PHP logic, the real kernel behind PHP's built-in server with
   stubbed MODX classes, and the Node bridge end to end. CI runs them.

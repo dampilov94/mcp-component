@@ -161,3 +161,17 @@ Open questions:
 - Should a failed install really leave a changeset (see above), or only the success case?
 - Upgrade/downgrade policy: installing an older version over a newer one only adds a warning to the plan. Refuse instead?
 - `docs/getting_started.md` (built-in help) does not mention the two tools and kinds yet; left for the documentation pass.
+
+## Review
+
+Accepted and merged without changes. Verified on the stand, with the owner's permission to
+install third-party code there: the provider search (live modx.com catalogue), the install
+plan, then a real install of `translit-1.0.0-beta` (downloaded, installed, its files visible
+through `modx_list_files {component: "translit"}`, one change-less changeset), its
+uninstall with `remove: true` (package, namespace and files gone, one more changeset), and
+`modx_undo {last: 1}` skipping both. The refusal for modxMCP itself works on install and
+uninstall. All earlier stand checks pass.
+
+Open questions answered: a failed install keeps its changeset (it may have partly run);
+installing an older version over a newer one stays a warning in the plan, because it needs
+`confirm: true` anyway; the guide gets the new tools with the release documentation pass.

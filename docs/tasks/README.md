@@ -55,7 +55,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 16 | [Settings kinds](16-settings-kinds.md) | `task/16-settings-kinds` | merged |
 | 17 | [Kind user](17-users.md) | `task/17-users` | merged |
 | 18 | [Access rules](18-access-rules.md) | `task/18-access-rules` | merged |
-| 19 | [Packages](19-packages.md) | `task/19-packages` | ready for the executor |
+| 19 | [Packages](19-packages.md) | `task/19-packages` | merged |
 | 20 | [run_processor and query_db](20-escape-hatches.md) | `task/20-escape-hatches` | ready for the executor |
 
 ## Doing several briefs in a row
