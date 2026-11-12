@@ -36,6 +36,9 @@ $_lang['setting_modxmcp.auto_static_desc'] = 'When enabled, MCP create/update co
 $_lang['setting_modxmcp.allow_run_processor'] = 'Allow run_processor';
 $_lang['setting_modxmcp.allow_run_processor_desc'] = 'When enabled, the run_processor MCP action may execute ANY MODX processor directly. Powerful escape hatch — off by default. Prefer dedicated actions when they exist.';
 
+$_lang['setting_modxmcp.allow_query_db'] = 'Allow query_db';
+$_lang['setting_modxmcp.allow_query_db_desc'] = 'When enabled, tokens with the develop scope may run read-only SELECT queries against the site database with the modx_query_db tool. Credential tables are refused. Off by default.';
+
 $_lang['setting_modxmcp.max_response_bytes'] = 'Maximum response size';
 $_lang['setting_modxmcp.max_response_bytes_desc'] = 'JSON response limit in bytes (default 4194304, minimum 1024). An oversized response returns an error even if its action has completed; inspect request status before retrying.';
 

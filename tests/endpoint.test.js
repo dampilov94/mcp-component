@@ -127,6 +127,15 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
     assert.ok(result.error_codes.includes("revision_conflict"));
   });
 
+  await t.test("run_processor and query_db are off by default", async () => {
+    for (const [action, args] of [["run_processor", { processor: "resource/getlist", confirm: true }], ["query_db", { sql: "SELECT 1" }]]) {
+      const response = await call(admin, action, args);
+      assert.equal(response.status, 403, action);
+      assert.equal(response.body.error.code, "unavailable", action);
+      assert.equal(response.body.error.details.reason, "disabled_by_setting", action);
+    }
+  });
+
   await t.test("actions", async () => {
     const info = await call(read, "site_info");
     assert.equal(info.body.result.site_name, "Test site");
@@ -273,4 +282,28 @@ test("bridge + kernel end to end", { skip: available ? false : "PHP with pdo_sql
   assert.match(failed.content[0].text, /MODX not_found \(HTTP 404\)/);
   const { resources } = await client.listResources();
   assert.ok(resources.some((item) => item.uri === "modx-help://index"));
+});
+
+test("escape hatches: tools appear with the settings on", { skip: available ? false : "PHP with pdo_sqlite is not available" }, async (t) => {
+  const site = await startSite({ MODXMCP_TEST_ALLOW_ESCAPE: "1" });
+  t.after(site.stop);
+  const { admin, read } = site.info.tokens;
+  const call = (token, action, args = {}) => site.post(token, { v: 2, action, args });
+  const names = async (token) => (await call(token, "manifest")).body.result.tools.map((item) => item.name);
+  const adminTools = await names(admin);
+  assert.equal(adminTools.length, 36);
+  assert.deepEqual(adminTools.slice(adminTools.indexOf("modx_uninstall_package") + 1, adminTools.indexOf("modx_uninstall_package") + 4), ["modx_run_processor", "modx_query_db", "modx_request_status"]);
+  const readTools = await names(read);
+  assert.equal(readTools.length, 18);
+  assert.ok(!readTools.includes("modx_query_db") && !readTools.includes("modx_run_processor"));
+  assert.equal((await call(read, "query_db", { sql: "SELECT 1" })).body.error.code, "forbidden_scope");
+  const query = (await call(admin, "query_db", { sql: "SELECT ? AS a, 'x;y' AS b", params: [7] })).body.result;
+  assert.deepEqual(query.columns, ["a", "b"]);
+  assert.equal(query.rows[0][1], "x;y");
+  assert.equal(query.returned, 1);
+  assert.equal((await call(admin, "query_db", { sql: "SELECT 1; SELECT 2" })).body.error.code, "validation_failed");
+  assert.equal((await call(admin, "query_db", { sql: "SELECT hash FROM modx_modxmcp_tokens" })).body.error.code, "forbidden_scope");
+  assert.equal((await call(admin, "run_processor", { processor: "security/user/update", confirm: true })).body.error.code, "validation_failed");
+  assert.equal((await call(admin, "run_processor", { processor: "Resource/GetList" })).body.error.code, "validation_failed");
+  assert.equal((await call(admin, "run_processor", { processor: "resource/getlist" })).body.error.code, "not_found");
 });
