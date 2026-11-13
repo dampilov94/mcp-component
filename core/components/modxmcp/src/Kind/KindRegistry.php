@@ -35,6 +35,9 @@ final class KindRegistry {
         Ms2OrderKind::class,
         Ms2OrderStatusKind::class,
         MigxConfigKind::class,
+        VpEventKind::class,
+        VpHandlerKind::class,
+        VpRouteKind::class,
     );
 
     private $kinds = null;

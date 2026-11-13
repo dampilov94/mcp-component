@@ -29,10 +29,20 @@ function installMigx($modx, $dir) {
     $modx->store('modNamespace', array('name' => 'migx', 'path' => '{core_path}components/migx/', 'assets_path' => ''));
 }
 
+/** A site with VirtualPage "installed": its namespace and the file the integration probe looks for. */
+function installVirtualPage($modx, $dir) {
+    $core = $dir . '/core/components/virtualpage/';
+    if (!is_dir($core . 'model/virtualpage')) { mkdir($core . 'model/virtualpage', 0700, true); }
+    touch($core . 'model/virtualpage/virtualpage.class.php');
+    touch($core . 'model/virtualpage/vproute.class.php');
+    $modx->store('modNamespace', array('name' => 'virtualpage', 'path' => '{core_path}components/virtualpage/', 'assets_path' => ''));
+}
+
 function testSite($dir) {
     $modx = testSiteOptions($dir);
     if (getenv('MODXMCP_TEST_MS2')) { installMiniShop2($modx, $dir); }
     if (getenv('MODXMCP_TEST_MIGX')) { installMigx($modx, $dir); }
+    if (getenv('MODXMCP_TEST_VIRTUALPAGE')) { installVirtualPage($modx, $dir); }
     return $modx;
 }
 

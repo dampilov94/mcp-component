@@ -85,3 +85,78 @@ Update kind lists/counts in both test files.
 `npm run check`, `npm test`. Files: `src/Integration/VirtualPage.php`, three kind classes,
 `src/Kind/KindRegistry.php`, the help topic and `docs/index.md`, tests,
 `tests/php/FakeModx.php`; generic code only for a hook the source forces (say which).
+
+## Report
+
+Based on: main at 584a92f
+
+Counts: before, `npm run check` OK (157 PHP files, 22 JS files), PHP 4437 checks, Node 29 tests. After: check OK (162 PHP files), PHP 4628 checks, Node 30 tests (all pass). No existing assertion was changed, weakened or deleted: VirtualPage is not installed on the sites the existing tests use, so the existing kind lists and counts are unchanged; the new kinds are asserted in the new sections.
+
+### Implemented, file by file
+
+- `src/Integration/VirtualPage.php` (new): group, `load()` (registers the package; probe `model/virtualpage/vproute.class.php`), `clearCache()`, the handler type map (0 resource, 1 snippet, 2 chunk, 3 dynamic_resource; alias `template` = 3), the entry classes, method normalisation, and a port of the FastRoute copy VirtualPage ships (Std route parser with optional `[...]`, the capturing-group refusal, static before variable routes, registration order, HEAD falling back to GET, `*` fallback). Used by `assertRoute()` (refuse what FastRoute would), `registrationProblems()` (warnings) and `dispatch()` (the tester).
+- `src/Kind/AbstractVirtualPageKind.php` (new): shared base like `AbstractMs2Kind`: direct writes inside the transaction, `rank` default = number of rows (as the manager's create processors set it), `afterWrite()` = `VirtualPage::clearCache()`, package registered in `prepare()`.
+- `src/Kind/VpEventKind.php`, `VpHandlerKind.php`, `VpRouteKind.php` (new): fields as in the brief (route `method` is column `metod`, `properties` a `json` field, route `label` computed). Name uniqueness (event, handler), entry must exist for the type (checked on create and when type/entry change), route and method unique, handler and event must exist, route pattern validated with the FastRoute port. Deletes of an event or handler journal their routes through `deleteCascade()` (`vp_route` objects). `assertUndoable()` refuses an undo onto a name / route+method another object took. `vp_handler` `type` is shown by name and accepted by name in `where` (via `listCriteria()`). `vp_route` has the read-only operation `resolve` (`modx_invoke`).
+- `src/Kind/KindRegistry.php`: the three kinds added after `migx_config`.
+- `core/components/modxmcp/docs/virtualpage.md` (new) and `docs/index.md`: the help topic (2.0 calls only).
+- `tests/php/FakeModx.php`: `FakeVirtualPageService` (counts `clearAllCache()`), `getService('virtualpage')` while the package is registered, `FakeCache::clean()`, the composites `vpEvent`/`vpHandler` -> `vpRoute`. `tests/php/run.php`: a section of 191 checks. `tests/php/endpoint.php` + `tests/endpoint.test.js`: `MODXMCP_TEST_VIRTUALPAGE` and one end-to-end test (25 kinds for an admin, 20 for a read token with it; the 22 / 17 counts without it are unchanged).
+
+No generic code (Kind, Objects, actions, Snapshot) was changed.
+
+### Deviations and source-vs-brief differences
+
+1. **No plugin wiring.** The brief says to wire VirtualPage's plugin to a new event name and journal it (from 1.x `ensureVirtualPagePluginEvent()`). The 2.0.6 source does not: its manager processors (`mgr/event/*`) only clear the cache, and the service class has no `doEvent()` (the 1.x fallback looks for a plugin named `vpEvent`, which this version does not ship). Following the source, saving an event changes nothing outside its row, and a warning says when no enabled plugin listens to the event. Consequently the brief's test "a new event name wires the plugin and it is journaled and undone" is replaced by tests that the plugin events are never touched and that the warning appears and disappears. If the stand shows that creating an event in the manager does wire the plugin (some other code path I could not see), this needs a follow-up.
+2. **Dispatching events.** The 2.0.6 plugin classes (`systems/`) exist only for `OnHandleRequest`, `OnPageNotFound` (both call `dispatch()`) and `OnBeforeCacheUpdate` (clears the cache). Routes of any other event are never tried; a write to such an event or a route on it gives a warning (no refusal).
+3. **Handler types.** The source has four types (the manager lists resource, dynamic_resource, snippet, chunk). The brief's `template` is not a fifth type: 1.x mapped it to 3 and the entry of type 3 is a template, so `template` is accepted as an alias and read back as `dynamic_resource`.
+4. **Methods.** The manager offers GET, POST, GET,POST; 1.x accepted only those. The brief lists seven; FastRoute accepts any, so the seven are accepted, stored upper case in the order GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS. Default GET when omitted on create.
+5. **Uniqueness is stricter than the manager's.** The manager refuses an equal route and an equal method string. FastRoute throws (for every request of the event) when two routes of one event have the same text and a method in common, so a route is refused when another route with the same text shares any method (`GET` vs `GET,POST` is refused). The comparison is the database's (case-insensitive on MySQL), like the manager's.
+6. **Static route shadowing** (a static route registered after a variable route that matches it makes FastRoute throw for the whole event) is a warning, not a refusal, computed from the active routes of the event in rank order.
+7. **Entry check only on change.** The entry is checked when a handler is created or its type or entry change, not on unrelated edits (1.x checked on every update). Entry 0 is allowed (warning for types that need one).
+8. **Writes are direct, not through the manager processors**: they check the permission `vpsetting_save` (an API user need not hold it), overwrite `rank` on create, the event and handler remove processors do not clear the cache, and they have no headless advantage; the only side effect they have is the cache. Same as 1.x and as task 23.
+9. **Router.** The tester uses my port of FastRoute's parser/dispatch (the reference copy is PHP 8 only and must not be executed). Ordering across events is an approximation: `OnHandleRequest` routes before `OnPageNotFound` routes (their firing order), other events after, then FastRoute's order inside an event (method itself, then HEAD->GET, then `*`; static before variable; then rank, id). `resolve` returns `path`, `method`, `matches` (each with `answers`), `answered_by` and `notes` besides `matches`.
+10. **Dry run imprecision.** `modx_update` dry run compares raw stored values, so resending the same `type` (stored 2, sent `chunk`) or a differently spelled `method` is reported under `would_change`; the real write's `changed` list is exact. Fixing it would need a generic hook; not done.
+11. The route `properties` empty object / null is stored as NULL (the map default), a non-empty object as JSON text.
+
+### Side effects not journaled
+
+VirtualPage's cache (`default/virtualpage` and the rebuilt route lists) is cleared after every write and every undo; it is derived data, not journaled. Nothing else is touched (no events fired: the manager processors fire none; no plugin rows).
+
+### Verified only against the fake MODX (check on the stand)
+
+- That `virtualpage::clearAllCache()` can run from the API request (`getService('virtualpage', 'virtualpage', <core>/model/virtualpage/)`, its constructor loads a lexicon topic and the `fastroute` bootstrap include) and does not throw; the fallback cleans `default/virtualpage` directly.
+- Raw `fromArray(…, false, true)` and `toArray('', true)` on the json column `properties` of `vpRoute` (same approach as `migxConfig`), stable revisions for it, and `get()` returning an array for it.
+- xPDO cascade: removing an event or handler removes its `Routes` (composites in the maps), and that restoring routes after their parent with the recorded ids works.
+- That the real FastRoute accepts what `assertRoute()` accepts (and the stand's PHP version works with the shipped FastRoute v2), the handler `type` numbers, and the `resolve` order against a real request through `modx_check_page`.
+- The event warning's "no enabled plugin listens" check against the plugin and event rows of a real site; which plugin runs VirtualPage on the stand.
+
+### Open questions
+
+- Should creating an event attach VirtualPage's plugin after all (the brief's design)? The source says no; which plugin would it be on 2.0.6?
+- Should a delete of an event or handler that routes use be refused instead of cascading? xPDO cascades and the manager does not refuse, so it cascades (journaled).
+- Case-insensitive route comparison (MySQL collation) vs the router's case-sensitive matching: `/Catalog` and `/catalog` are treated as the same route for the uniqueness rule.
+
+## Review
+
+Accepted and merged. The stand runs VirtualPage **1.0.9** (2.0.6 needs PHP 8 for its router
+and broke on the stand's PHP 7.4; the owner reinstalled 1.0.9). The model of the three
+classes is identical in both versions, so the kinds work unchanged. Verified on the stand with
+`scripts/stand/check-virtualpage.cjs`: an event, a handler on a test chunk and the route
+`/mcp2test-catalog/{id:\d+}`; `resolve` finds it; a real request to `/mcp2test-catalog/5` is
+answered by VirtualPage (200, the chunk rendered with the parameter); after the undo the URL is
+404 again and the error log is clean.
+
+Changes by the architect, both found only with 1.0.9 on the stand:
+
+1. **VirtualPage 1.x answers through its plugin `vpEvent`,** which its route processors attach
+   to an event when the first route uses it and detach when the last is gone
+   (`virtualpage::doEvent()`). The executor correctly found that 2.0.6 has no such wiring.
+   `AbstractVirtualPageKind::syncPluginEvents()` now keeps the plugin's events in step when the
+   plugin exists (1.x) and does nothing otherwise (2.x). The plugin is touched first, so the
+   change is in the same changeset and an undo of the route unwires it. To touch another object
+   from inside `writeObject()`, `Context` now carries the transaction in progress
+   (`$context->transaction`, set by `Writer::run`).
+2. **MODX keeps the event → plugin map in the context cache:** without a refresh the site kept
+   ignoring the new route (404). A changed plugin wiring now refreshes the MODX cache.
+
+Open questions answered: deleting an event or handler cascades to its routes (journaled), as
+VirtualPage does; route uniqueness by database collation is accepted.

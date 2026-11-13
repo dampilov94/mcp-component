@@ -27,6 +27,9 @@ final class Context {
     public $kinds;
     /** @var string Component core path with a trailing slash. */
     public $corePath;
+    /** @var \ModxMCP\Write\Transaction|null The write transaction in progress, for kinds whose writes change other objects. */
+    public $transaction = null;
+
     /** @var string[] Warnings returned in meta.warnings. */
     public $warnings = array();
 

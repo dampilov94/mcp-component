@@ -5365,6 +5365,412 @@ check('tv: another field update keeps the input options', $ipCaption['changed'] 
 $call($ipDev, 'undo', array('changeset_id' => $ipEdit['changeset_id'], 'force' => true, 'confirm' => true));
 check('tv: undo restores the input options', (array) $call($ipDev, 'get', array('kind' => 'tv', 'id' => $ipTv['id']))['fields']['input_properties'] == array('configs' => 'gallery', 'allowBlank' => 'true'));
 
+// --- VirtualPage: kinds vp_event, vp_handler, vp_route, the route tester, help topic (task 24) ---
+$vpDir = $siteDir . '/vp24';
+$vpCore = $vpDir . '/core/components/virtualpage/';
+mkdir($vpCore . 'model/virtualpage', 0700, true);
+touch($vpCore . 'model/virtualpage/virtualpage.class.php');
+touch($vpCore . 'model/virtualpage/vproute.class.php');
+$vSite = fakeSite($vpDir);
+$vSite->store('modNamespace', array('name' => 'virtualpage', 'path' => '{core_path}components/virtualpage/', 'assets_path' => ''));
+$vSite->store('modEvent', array('id' => 1, 'name' => 'OnPageNotFound', 'groupname' => 'System'));
+$vSite->store('modEvent', array('id' => 2, 'name' => 'OnHandleRequest', 'groupname' => 'System'));
+$vSite->store('modEvent', array('id' => 3, 'name' => 'OnWebPageInit', 'groupname' => 'System'));
+$vSite->store('modChunk', array('id' => 3, 'name' => 'товар', 'snippet' => '<h1>[[+vp.id]]</h1>', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => ''));
+$vSite->store('modSnippet', array('id' => 4, 'name' => 'поиск', 'snippet' => 'return 1;', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => ''));
+$vSite->store('modTemplate', array('id' => 5, 'templatename' => 'Страница каталога', 'content' => '[[*content]]', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => '', 'icon' => ''));
+$vSite->store('modResource', array('id' => 6, 'pagetitle' => 'Каталог', 'alias' => 'catalog', 'class_key' => 'modDocument', 'context_key' => 'web', 'parent' => 0));
+$vActor = function ($scope, array $token = array()) use ($vSite, $dev) {
+    $c = new Context($vSite, $token + array('scope' => $scope) + $dev->token, $dev->corePath, function () {});
+    $c->sessionId = 'session-vp24-001';
+    return $c;
+};
+$vAdmin = $vActor('admin');
+$vDev = $vActor('develop');
+$vRead = $vActor('read');
+$vPlain = new Context($site, array('scope' => 'admin') + $dev->token, $dev->corePath, function () {});
+$vClears = function () use ($vSite) { return isset($vSite->services['virtualpage']) ? $vSite->services['virtualpage']->clears : 0; };
+
+// ---- availability and description ----
+$vPlainKinds = array_column($call($vPlain, 'describe')['kinds'], 'kind');
+$vKinds = array_column($call($vAdmin, 'describe')['kinds'], 'kind');
+check('vp: the three kinds are listed when VirtualPage is installed and not without it', array_slice($vKinds, -3) === array('vp_event', 'vp_handler', 'vp_route')
+    && count($vKinds) === count($vPlainKinds) + 3 && !array_intersect(array('vp_event', 'vp_handler', 'vp_route'), $vPlainKinds));
+foreach (array('vp_event', 'vp_handler', 'vp_route') as $vKind) {
+    $e = throws("vp: {$vKind} is unavailable without VirtualPage", ApiException::class, function () use ($call, $vPlain, $vKind) { $call($vPlain, 'list', array('kind' => $vKind)); });
+    check("vp: {$vKind} reports not_installed", $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'not_installed');
+}
+$vEventDesc = $call($vAdmin, 'describe', array('kind' => 'vp_event'));
+$vHandlerDesc = $call($vAdmin, 'describe', array('kind' => 'vp_handler'));
+$vRouteDesc = $call($vAdmin, 'describe', array('kind' => 'vp_route'));
+check('vp: describe vp_event', $vEventDesc['group'] === 'virtualpage' && $vEventDesc['read_scope'] === 'read' && $vEventDesc['write_scope'] === 'develop' && $vEventDesc['key_type'] === 'integer'
+    && array_column($vEventDesc['fields'], 'name') === array('id', 'name', 'description', 'rank', 'active') && $vEventDesc['operations'] === array());
+check('vp: describe vp_handler', array_column($vHandlerDesc['fields'], 'name') === array('id', 'name', 'type', 'entry', 'content', 'description', 'cache', 'rank', 'active')
+    && array_column($vHandlerDesc['fields'], null, 'name')['content']['code'] === true && $vHandlerDesc['name_field'] === 'name');
+$vRouteFields = array_column($vRouteDesc['fields'], null, 'name');
+check('vp: describe vp_route', array_column($vRouteDesc['fields'], 'name') === array('id', 'route', 'method', 'handler', 'event', 'description', 'rank', 'active', 'properties', 'label')
+    && $vRouteFields['properties']['type'] === 'json' && $vRouteFields['label']['read_only'] === true && $vRouteFields['handler']['required'] === true && $vRouteDesc['name_field'] === 'route'
+    && array_column($vRouteDesc['operations'], 'op') === array('resolve') && $vRouteDesc['operations'][0]['read_only'] === true && $vRouteDesc['operations'][0]['needs_object'] === false);
+
+// ---- events ----
+$vEv1 = $call($vDev, 'create', array('kind' => 'vp_event', 'fields' => array('name' => 'OnPageNotFound', 'description' => 'Страница не найдена')));
+check('vp: the VirtualPage package was registered through addPackage', in_array('virtualpage', $vSite->addedPackages, true));
+$vRow = $vSite->row('vpEvent', $vEv1['id']);
+check('vp_event: create stores the row with the defaults of the map and rank = the number of events', $vEv1['id'] === 1 && $vEv1['changeset_id'] > 0 && $vRow['name'] === 'OnPageNotFound' && $vRow['description'] === 'Страница не найдена'
+    && $vRow['rank'] === '0' && $vRow['active'] === '1');
+$vWarnCtx = $vActor('develop');
+$vEv2 = $call($vWarnCtx, 'create', array('kind' => 'vp_event', 'fields' => array('name' => 'OnHandleRequest')));
+check('vp_event: the second event gets rank 1', $vSite->row('vpEvent', $vEv2['id'])['rank'] === '1');
+check('vp_event: a warning says no plugin listens to the event (nothing is attached by the API)', count($vWarnCtx->warnings) === 1 && strpos($vWarnCtx->warnings[0], "No enabled plugin listens to 'OnHandleRequest'") !== false
+    && count($vSite->tableDump('modPluginEvent')) === 0);
+$vSite->store('modPlugin', array('id' => 70, 'name' => 'VirtualPage', 'plugincode' => '', 'disabled' => 0, 'static' => 0, 'static_file' => '', 'category' => 0, 'source' => 0, 'locked' => 0, 'description' => ''));
+$vSite->store('modPluginEvent', array('pluginid' => 70, 'event' => 'OnPageNotFound', 'priority' => 0, 'propertyset' => 0));
+$vSite->store('modPluginEvent', array('pluginid' => 70, 'event' => 'OnHandleRequest', 'priority' => 0, 'propertyset' => 0));
+$vPluginRows = $vSite->tableDump('modPluginEvent');
+$vNoWarn = $vActor('develop');
+$vEv3 = $call($vNoWarn, 'create', array('kind' => 'vp_event', 'fields' => array('name' => 'OnWebPageInit', 'active' => false, 'rank' => 9)));
+check('vp_event: an event VirtualPage does not dispatch gets a note (and the plugin warning, as no plugin listens to it)', count($vNoWarn->warnings) === 2 && strpos($vNoWarn->warnings[0], 'dispatches routes only on OnHandleRequest and OnPageNotFound') !== false
+    && strpos($vNoWarn->warnings[1], "No enabled plugin listens to 'OnWebPageInit'") !== false
+    && $vSite->row('vpEvent', $vEv3['id'])['rank'] === '9' && $vSite->row('vpEvent', $vEv3['id'])['active'] === '0');
+check('vp_event: the plugin events are never changed by a write (VirtualPage\'s processors attach nothing)', $vSite->tableDump('modPluginEvent') == $vPluginRows);
+$vEvGot = $call($vRead, 'get', array('kind' => 'vp_event', 'name' => 'OnPageNotFound'));
+check('vp_event: get by name and by id, with a revision', $vEvGot['id'] === 1 && $vEvGot['fields']['active'] === true && $vEvGot['fields']['description'] === 'Страница не найдена' && preg_match('/^[a-f0-9]{64}$/', $vEvGot['revision']));
+check('vp_event: list is ordered by rank and filters by active', array_column($call($vRead, 'list', array('kind' => 'vp_event'))['items'], 'name') === array('OnPageNotFound', 'OnHandleRequest', 'OnWebPageInit')
+    && array_column($call($vRead, 'list', array('kind' => 'vp_event', 'where' => array('active' => false)))['items'], 'name') === array('OnWebPageInit')
+    && array_column($call($vRead, 'list', array('kind' => 'vp_event', 'query' => 'страница'))['items'], 'name') === array() && $call($vRead, 'list', array('kind' => 'vp_event', 'query' => 'handle'))['total'] === 1);
+foreach (array('an empty name' => array('name' => ''), 'a blank name' => array('name' => '   '), 'a rank above the tinyint' => array('name' => 'OnX', 'rank' => 300), 'a negative rank' => array('name' => 'OnX', 'rank' => -1)) as $label => $fields) {
+    $e = throws("vp_event: create with {$label}", ApiException::class, function () use ($call, $vDev, $fields) { $call($vDev, 'create', array('kind' => 'vp_event', 'fields' => $fields)); });
+    check("vp_event: {$label} is refused", $e && $e->errorCode === 'validation_failed' && count($vSite->tableDump('vpEvent')) === 3);
+}
+$e = throws('vp_event: a name that exists', ApiException::class, function () use ($call, $vDev) { $call($vDev, 'create', array('kind' => 'vp_event', 'fields' => array('name' => 'OnPageNotFound'))); });
+check('vp_event: a duplicate name is refused', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'already exists') !== false && count($vSite->tableDump('vpEvent')) === 3);
+$e = throws('vp_event: rename to a name that exists', ApiException::class, function () use ($call, $vDev) { $call($vDev, 'update', array('kind' => 'vp_event', 'id' => 2, 'fields' => array('name' => 'OnPageNotFound'))); });
+check('vp_event: renaming onto another event is refused', $e && $e->errorCode === 'validation_failed' && $vSite->row('vpEvent', 2)['name'] === 'OnHandleRequest');
+$vClearsBefore = $vClears();
+$vEvUpd = $call($vDev, 'update', array('kind' => 'vp_event', 'id' => 1, 'expected_revision' => $vEvGot['revision'], 'fields' => array('description' => 'Нет такой страницы', 'rank' => 3)));
+check('vp_event: update changes only what was sent and clears VirtualPage\'s cache', $vEvUpd['changed'] === array('description', 'rank') && $vSite->row('vpEvent', 1)['description'] === 'Нет такой страницы' && $vSite->row('vpEvent', 1)['name'] === 'OnPageNotFound'
+    && $vClears() === $vClearsBefore + 1);
+$vEvDry = $call($vDev, 'update', array('kind' => 'vp_event', 'id' => 1, 'fields' => array('active' => false), 'dry_run' => true));
+check('vp_event: a dry run changes nothing and does not touch the cache', $vEvDry['would_change'] === array('active') && $vSite->row('vpEvent', 1)['active'] === '1' && $vClears() === $vClearsBefore + 1);
+$call($vDev, 'undo', array('changeset_id' => $vEvUpd['changeset_id'], 'confirm' => true));
+check('vp_event: undo restores the row and clears the cache again', $vSite->row('vpEvent', 1)['description'] === 'Страница не найдена' && $vSite->row('vpEvent', 1)['rank'] === '0' && $vClears() === $vClearsBefore + 2);
+$vEvDup = $call($vDev, 'duplicate', array('kind' => 'vp_event', 'id' => 1, 'new_name' => 'OnPageNotFoundCopy'));
+check('vp_event: duplicate copies the fields under a new name', $vSite->row('vpEvent', $vEvDup['id'])['description'] === 'Страница не найдена' && $vSite->row('vpEvent', $vEvDup['id'])['name'] === 'OnPageNotFoundCopy');
+$call($vDev, 'undo', array('changeset_id' => $vEvDup['changeset_id'], 'confirm' => true));
+check('vp_event: undo of a duplicate removes the copy', $vSite->row('vpEvent', $vEvDup['id']) === null);
+$vEvTmp = $call($vDev, 'create', array('kind' => 'vp_event', 'fields' => array('name' => 'OnTmpEvent')));
+$vEvSpacer = $call($vDev, 'create', array('kind' => 'vp_event', 'fields' => array('name' => 'OnSpacer')));
+$vEvDel = $call($vDev, 'delete', array('kind' => 'vp_event', 'id' => $vEvTmp['id']));
+check('vp_event: delete removes the row', $vSite->row('vpEvent', $vEvTmp['id']) === null);
+$vEvTaken = $call($vDev, 'create', array('kind' => 'vp_event', 'fields' => array('name' => 'OnTmpEvent')));
+$e = throws('vp_event: undo onto a name another event took', ApiException::class, function () use ($call, $vDev, $vEvDel) { $call($vDev, 'undo', array('changeset_id' => $vEvDel['changeset_id'], 'confirm' => true)); });
+check('vp_event: such an undo is not_reversible', $e && $e->errorCode === 'not_reversible' && strpos($e->getMessage(), "named 'OnTmpEvent'") !== false);
+$call($vDev, 'delete', array('kind' => 'vp_event', 'id' => $vEvTaken['id']));
+$call($vDev, 'undo', array('changeset_id' => $vEvDel['changeset_id'], 'confirm' => true));
+check('vp_event: undo of a delete restores the row with its id', $vSite->row('vpEvent', $vEvTmp['id'])['name'] === 'OnTmpEvent');
+$call($vDev, 'delete', array('kind' => 'vp_event', 'id' => $vEvTmp['id']));
+$call($vDev, 'delete', array('kind' => 'vp_event', 'id' => $vEvSpacer['id']));
+
+// ---- handlers ----
+$vHandlerBase = $vSite->tableDump('vpHandler');
+foreach (array('an unknown type' => array(array('name' => 'x', 'type' => 'page'), "Unknown handler type 'page'"),
+    'a chunk that does not exist' => array(array('name' => 'x', 'type' => 'chunk', 'entry' => 99), 'no chunk with id 99'),
+    'a snippet that does not exist' => array(array('name' => 'x', 'type' => 'snippet', 'entry' => 3), 'no snippet with id 3'),
+    'a resource that does not exist' => array(array('name' => 'x', 'type' => 'resource', 'entry' => 5), 'no resource with id 5'),
+    'a template that does not exist' => array(array('name' => 'x', 'type' => 'dynamic_resource', 'entry' => 3), 'no template with id 3'),
+    'a negative entry' => array(array('name' => 'x', 'type' => 'chunk', 'entry' => -1), 'cannot be negative'),
+    'an empty name' => array(array('name' => '', 'type' => 'chunk'), "'name' is required")) as $label => $case) {
+    $e = throws("vp_handler: create with {$label}", ApiException::class, function () use ($call, $vDev, $case) { $call($vDev, 'create', array('kind' => 'vp_handler', 'fields' => $case[0])); });
+    check("vp_handler: {$label} is refused and leaves nothing behind", $e && $e->errorCode === 'validation_failed' && stripos($e->getMessage(), $case[1]) !== false && $vSite->tableDump('vpHandler') == $vHandlerBase);
+}
+$vH1 = $call($vDev, 'create', array('kind' => 'vp_handler', 'fields' => array('name' => 'Карточка товара', 'type' => 'chunk', 'entry' => 3, 'description' => 'Чанк товара', 'cache' => true)));
+check('vp_handler: a chunk handler is stored with the number of its type', $vSite->row('vpHandler', $vH1['id'])['type'] === '2' && $vSite->row('vpHandler', $vH1['id'])['entry'] === '3' && $vSite->row('vpHandler', $vH1['id'])['cache'] === '1'
+    && $vSite->row('vpHandler', $vH1['id'])['active'] === '1' && $vSite->row('vpHandler', $vH1['id'])['rank'] === '0');
+$vBody = "<h1>[[+vp.id]] — Страница «Каталог»</h1>\n[[!поиск? &q=`ёлка`]]";
+$vH2 = $call($vDev, 'create', array('kind' => 'vp_handler', 'fields' => array('name' => 'Динамическая страница', 'type' => 'template', 'entry' => 5, 'content' => $vBody)));
+check('vp_handler: the alias template is the dynamic resource (3), content keeps Cyrillic', $vSite->row('vpHandler', $vH2['id'])['type'] === '3' && $vSite->row('vpHandler', $vH2['id'])['content'] === $vBody && $vSite->row('vpHandler', $vH2['id'])['rank'] === '1');
+$vH3 = $call($vDev, 'create', array('kind' => 'vp_handler', 'fields' => array('name' => 'Поиск', 'type' => 'snippet', 'entry' => 4)));
+$vH4 = $call($vDev, 'create', array('kind' => 'vp_handler', 'fields' => array('name' => 'Перенаправление', 'type' => 'resource', 'entry' => 6)));
+$vH5 = $call($vDev, 'create', array('kind' => 'vp_handler', 'fields' => array('name' => 'Без записи')));
+check('vp_handler: resource and snippet types, and the default type resource', $vSite->row('vpHandler', $vH3['id'])['type'] === '1' && $vSite->row('vpHandler', $vH4['id'])['type'] === '0' && $vSite->row('vpHandler', $vH5['id'])['type'] === '0'
+    && $vSite->row('vpHandler', $vH5['id'])['entry'] === '0');
+$vHGot = $call($vRead, 'get', array('kind' => 'vp_handler', 'id' => $vH2['id']));
+check('vp_handler: get shows the type by name and the content', $vHGot['fields']['type'] === 'dynamic_resource' && $vHGot['fields']['entry'] === 5 && $vHGot['fields']['content'] === $vBody && $vHGot['fields']['cache'] === false && $vHGot['fields']['active'] === true);
+$vView = $call($vRead, 'view_code', array('kind' => 'vp_handler', 'id' => $vH2['id']));
+check('vp_handler: the content is code (modx_view_code)', strpos($vView['numbered'], 'Страница «Каталог»') !== false && $vView['total_lines'] === 2);
+$vEdit = $call($vDev, 'edit_code', array('kind' => 'vp_handler', 'id' => $vH2['id'], 'expected_revision' => $vView['revision'], 'edits' => array(array('start_line' => 2, 'replacement' => '[[!поиск? &q=`снег`]]', 'expect' => '[[!поиск? &q=`ёлка`]]'))));
+check('vp_handler: modx_edit_code changes the content', $vEdit['changed'] === array('content') && $vSite->row('vpHandler', $vH2['id'])['content'] === "<h1>[[+vp.id]] — Страница «Каталог»</h1>\n[[!поиск? &q=`снег`]]");
+check('vp_handler: list shows names of types and filters by the name of a type', array_column($call($vRead, 'list', array('kind' => 'vp_handler'))['items'], 'type') === array('chunk', 'dynamic_resource', 'snippet', 'resource', 'resource')
+    && array_column($call($vRead, 'list', array('kind' => 'vp_handler', 'where' => array('type' => 'chunk')))['items'], 'id') === array($vH1['id'])
+    && array_column($call($vRead, 'list', array('kind' => 'vp_handler', 'where' => array('type' => 'template')))['items'], 'id') === array($vH2['id'])
+    && array_column($call($vRead, 'list', array('kind' => 'vp_handler', 'query' => 'оиск'))['items'], 'name') === array('Поиск'));
+$e = throws('vp_handler: filter by an unknown type', ApiException::class, function () use ($call, $vRead) { $call($vRead, 'list', array('kind' => 'vp_handler', 'where' => array('type' => 'page'))); });
+check('vp_handler: an unknown type in a filter is refused', $e && $e->errorCode === 'validation_failed');
+$e = throws('vp_handler: duplicate name', ApiException::class, function () use ($call, $vDev) { $call($vDev, 'create', array('kind' => 'vp_handler', 'fields' => array('name' => 'Поиск', 'type' => 'snippet', 'entry' => 4))); });
+check('vp_handler: a duplicate name is refused', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'already exists') !== false);
+$vHWarn = $vActor('develop');
+$call($vHWarn, 'update', array('kind' => 'vp_handler', 'id' => $vH5['id'], 'fields' => array('type' => 'chunk')));
+check('vp_handler: a warning for a type that needs an entry when it is 0', count($vHWarn->warnings) === 1 && strpos($vHWarn->warnings[0], 'needs an entry') !== false);
+$e = throws('vp_handler: change the type to one the entry does not fit', ApiException::class, function () use ($call, $vDev, $vH1) { $call($vDev, 'update', array('kind' => 'vp_handler', 'id' => $vH1['id'], 'fields' => array('type' => 'snippet'))); });
+check('vp_handler: a type change is checked against the stored entry (chunk 3 is no snippet)', $e && $e->errorCode === 'validation_failed' && stripos($e->getMessage(), 'no snippet with id 3') !== false && $vSite->row('vpHandler', $vH1['id'])['type'] === '2');
+$vHUpd = $call($vDev, 'update', array('kind' => 'vp_handler', 'id' => $vH1['id'], 'fields' => array('type' => 'snippet', 'entry' => 4, 'name' => 'Карточка (сниппет)')));
+check('vp_handler: type and entry change together', $vHUpd['changed'] === array('name', 'type', 'entry') && $vSite->row('vpHandler', $vH1['id'])['type'] === '1');
+$call($vDev, 'undo', array('changeset_id' => $vHUpd['changeset_id'], 'confirm' => true));
+check('vp_handler: undo restores type, entry and name', $vSite->row('vpHandler', $vH1['id'])['type'] === '2' && $vSite->row('vpHandler', $vH1['id'])['entry'] === '3' && $vSite->row('vpHandler', $vH1['id'])['name'] === 'Карточка товара');
+$vSite->store('modChunk', array('id' => 3, 'name' => 'товар', 'snippet' => '', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => ''));
+$vHRename = $call($vDev, 'update', array('kind' => 'vp_handler', 'id' => $vH1['id'], 'fields' => array('description' => 'Другое описание')));
+check('vp_handler: an unrelated edit works', $vHRename['changed'] === array('description'));
+$vHDup = $call($vDev, 'duplicate', array('kind' => 'vp_handler', 'id' => $vH2['id']));
+check('vp_handler: duplicate names the copy "<name> copy" and copies type, entry and content', $vSite->row('vpHandler', $vHDup['id'])['name'] === 'Динамическая страница copy' && $vSite->row('vpHandler', $vHDup['id'])['type'] === '3'
+    && $vSite->row('vpHandler', $vHDup['id'])['entry'] === '5' && $vSite->row('vpHandler', $vHDup['id'])['content'] === $vSite->row('vpHandler', $vH2['id'])['content']);
+$call($vDev, 'undo', array('changeset_id' => $vHDup['changeset_id'], 'confirm' => true));
+check('vp_handler: undo of a duplicate removes it', $vSite->row('vpHandler', $vHDup['id']) === null);
+
+// ---- routes ----
+$vRouteBase = $vSite->tableDump('vpRoute');
+$vR1Fields = array('route' => '/catalog/{id:\d+}', 'handler' => $vH1['id'], 'event' => $vEv1['id'], 'description' => 'Карточка по номеру');
+foreach (array('a route without a leading slash' => array(array('route' => 'catalog') + $vR1Fields, "starts with '/'"),
+    'a placeholder with a capturing group' => array(array('route' => '/c/{id:(\d+)}') + $vR1Fields, 'capturing group'),
+    'the same placeholder twice' => array(array('route' => '/c/{id}/{id}') + $vR1Fields, 'same placeholder'),
+    'a broken optional part' => array(array('route' => '/c[/{id}]/x') + $vR1Fields, 'Optional segments can only occur at the end'),
+    'unbalanced brackets' => array(array('route' => '/c[/{id}') + $vR1Fields, "does not match"),
+    'a regex that does not compile' => array(array('route' => '/c/{id:[}') + $vR1Fields, 'not a valid regular expression'),
+    'a method that is not one' => array(array('method' => 'TRACE') + $vR1Fields, 'one or more of GET'),
+    'an empty method' => array(array('method' => ' , ') + $vR1Fields, 'one or more of GET'),
+    'a handler that does not exist' => array(array('handler' => 999) + $vR1Fields, 'no vp_handler with id 999'),
+    'an event that does not exist' => array(array('event' => 999) + $vR1Fields, 'no vp_event with id 999'),
+    'a zero handler' => array(array('handler' => 0) + $vR1Fields, "'handler' must be an id"),
+    'properties that are a list' => array(array('properties' => array(1, 2)) + $vR1Fields, 'must be an object'),
+    'a rank above the tinyint' => array(array('rank' => 256) + $vR1Fields, 'between 0 and 255')) as $label => $case) {
+    $e = throws("vp_route: create with {$label}", ApiException::class, function () use ($call, $vDev, $case) { $call($vDev, 'create', array('kind' => 'vp_route', 'fields' => $case[0])); });
+    check("vp_route: {$label} is refused and leaves nothing behind", $e && $e->errorCode === 'validation_failed' && stripos($e->getMessage(), $case[1]) !== false && $vSite->tableDump('vpRoute') == $vRouteBase);
+}
+$vR1 = $call($vDev, 'create', array('kind' => 'vp_route', 'fields' => $vR1Fields + array('properties' => array('layout' => 'карточка', 'depth' => 2))));
+$vR1Row = $vSite->row('vpRoute', $vR1['id']);
+check('vp_route: create stores the route as given, the method GET by default, rank = number of routes, the properties as JSON text',
+    $vR1['id'] === 1 && $vR1Row['route'] === '/catalog/{id:\d+}' && $vR1Row['metod'] === 'GET' && $vR1Row['handler'] === (string) $vH1['id'] && $vR1Row['event'] === '1' && $vR1Row['rank'] === '0' && $vR1Row['active'] === '1'
+    && $vR1Row['properties'] === '{"layout":"карточка","depth":2}' && $vR1Row['description'] === 'Карточка по номеру');
+$vR1Got = $call($vRead, 'get', array('kind' => 'vp_route', 'id' => $vR1['id']));
+check('vp_route: get decodes the properties and computes the label', $vR1Got['fields']['method'] === 'GET' && $vR1Got['fields']['properties'] == (object) array('layout' => 'карточка', 'depth' => 2)
+    && $vR1Got['fields']['label'] === 'GET /catalog/{id:\d+} → Карточка товара (OnPageNotFound)');
+$vR2 = $call($vDev, 'create', array('kind' => 'vp_route', 'fields' => array('route' => '/catalog/special', 'method' => 'get', 'handler' => $vH2['id'], 'event' => $vEv1['id'])));
+$vR3 = $call($vDev, 'create', array('kind' => 'vp_route', 'fields' => array('route' => '/catalog/{slug}', 'handler' => $vH3['id'], 'event' => $vEv1['id'])));
+$vR4 = $call($vDev, 'create', array('kind' => 'vp_route', 'fields' => array('route' => '/заказ', 'method' => 'post, get', 'handler' => $vH4['id'], 'event' => $vEv1['id'])));
+check('vp_route: methods are normalised (upper case, in the order GET POST …, once each)', $vSite->row('vpRoute', $vR2['id'])['metod'] === 'GET' && $vSite->row('vpRoute', $vR4['id'])['metod'] === 'GET,POST'
+    && $vSite->row('vpRoute', $vR4['id'])['route'] === '/заказ' && $vSite->row('vpRoute', $vR3['id'])['rank'] === '2');
+check('vp_route: the empty properties are stored as NULL', $vSite->row('vpRoute', $vR2['id'])['properties'] === null);
+check('vp_route: list shows the label and filters by handler, event and active', array_column($call($vRead, 'list', array('kind' => 'vp_route'))['items'], 'id') === array($vR1['id'], $vR2['id'], $vR3['id'], $vR4['id'])
+    && array_column($call($vRead, 'list', array('kind' => 'vp_route', 'where' => array('handler' => $vH2['id'])))['items'], 'label') === array('GET /catalog/special → Динамическая страница (OnPageNotFound)')
+    && array_column($call($vRead, 'list', array('kind' => 'vp_route', 'query' => 'заказ'))['items'], 'method') === array('GET,POST'));
+$e = throws('vp_route: filter by the label', ApiException::class, function () use ($call, $vRead) { $call($vRead, 'list', array('kind' => 'vp_route', 'where' => array('label' => 'x'))); });
+check('vp_route: the computed label cannot be filtered on', $e && $e->errorCode === 'validation_failed');
+$e = throws('vp_route: route and method that exist', ApiException::class, function () use ($call, $vDev, $vH1, $vEv2) { $call($vDev, 'create', array('kind' => 'vp_route', 'fields' => array('route' => '/catalog/{id:\d+}', 'handler' => $vH1['id'], 'event' => $vEv2['id']))); });
+check('vp_route: the same route and method is refused (even for another event)', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'already answers GET') !== false && count($vSite->tableDump('vpRoute')) === 4);
+$e = throws('vp_route: overlapping methods', ApiException::class, function () use ($call, $vDev, $vH1, $vEv1) { $call($vDev, 'create', array('kind' => 'vp_route', 'fields' => array('route' => '/заказ', 'method' => 'GET', 'handler' => $vH1['id'], 'event' => $vEv1['id']))); });
+check('vp_route: a route that shares a method with another of the same text is refused (FastRoute would refuse the pair)', $e && $e->errorCode === 'validation_failed' && count($vSite->tableDump('vpRoute')) === 4);
+$vR5 = $call($vDev, 'create', array('kind' => 'vp_route', 'fields' => array('route' => '/заказ', 'method' => 'DELETE', 'handler' => $vH1['id'], 'event' => $vEv1['id'])));
+check('vp_route: the same route for another method is allowed', $vSite->row('vpRoute', $vR5['id'])['metod'] === 'DELETE');
+$e = throws('vp_route: update onto an existing pair', ApiException::class, function () use ($call, $vDev, $vR5) { $call($vDev, 'update', array('kind' => 'vp_route', 'id' => $vR5['id'], 'fields' => array('method' => 'POST'))); });
+check('vp_route: an update that would duplicate a route and method is refused', $e && $e->errorCode === 'validation_failed' && $vSite->row('vpRoute', $vR5['id'])['metod'] === 'DELETE');
+$e = throws('vp_route: update to an unknown handler', ApiException::class, function () use ($call, $vDev, $vR5) { $call($vDev, 'update', array('kind' => 'vp_route', 'id' => $vR5['id'], 'fields' => array('handler' => 777))); });
+check('vp_route: an update to a handler that does not exist is refused', $e && $e->errorCode === 'validation_failed' && $vSite->row('vpRoute', $vR5['id'])['handler'] === (string) $vH1['id']);
+$vClearsBefore = $vClears();
+$vRUpd = $call($vDev, 'update', array('kind' => 'vp_route', 'id' => $vR5['id'], 'fields' => array('active' => false, 'properties' => array('a' => 'б'), 'description' => 'Отмена')));
+check('vp_route: update changes the fields and the cache is cleared', $vRUpd['changed'] === array('description', 'active', 'properties') && $vSite->row('vpRoute', $vR5['id'])['active'] === '0'
+    && $vSite->row('vpRoute', $vR5['id'])['properties'] === '{"a":"б"}' && $vClears() === $vClearsBefore + 1);
+$vRNull = $call($vDev, 'update', array('kind' => 'vp_route', 'id' => $vR5['id'], 'fields' => array('properties' => null)));
+check('vp_route: null clears the properties', $vRNull['changed'] === array('properties') && $vSite->row('vpRoute', $vR5['id'])['properties'] === null);
+$call($vDev, 'undo', array('changeset_id' => $vRNull['changeset_id'], 'confirm' => true));
+$call($vDev, 'undo', array('changeset_id' => $vRUpd['changeset_id'], 'confirm' => true));
+check('vp_route: undo restores the fields and the properties text', $vSite->row('vpRoute', $vR5['id'])['active'] === '1' && $vSite->row('vpRoute', $vR5['id'])['properties'] === null && $vSite->row('vpRoute', $vR5['id'])['description'] === null);
+$e = throws('vp_route: a copy without a change', ApiException::class, function () use ($call, $vDev, $vR1) { $call($vDev, 'duplicate', array('kind' => 'vp_route', 'id' => $vR1['id'])); });
+check('vp_route: a plain duplicate would repeat route and method and is refused', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'already answers') !== false);
+$e = throws('vp_route: duplicate with a name', ApiException::class, function () use ($call, $vDev, $vR1) { $call($vDev, 'duplicate', array('kind' => 'vp_route', 'id' => $vR1['id'], 'new_name' => 'x')); });
+check('vp_route: a route has no name for the copy', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'has no names') !== false);
+$vRDup = $call($vDev, 'duplicate', array('kind' => 'vp_route', 'id' => $vR1['id'], 'fields' => array('route' => '/каталог/{id:\d+}', 'method' => 'POST')));
+check('vp_route: a copy with another route and method works and keeps the properties and handler', $vSite->row('vpRoute', $vRDup['id'])['route'] === '/каталог/{id:\d+}' && $vSite->row('vpRoute', $vRDup['id'])['metod'] === 'POST'
+    && $vSite->row('vpRoute', $vRDup['id'])['properties'] === '{"layout":"карточка","depth":2}' && $vSite->row('vpRoute', $vRDup['id'])['handler'] === (string) $vH1['id']);
+$call($vDev, 'undo', array('changeset_id' => $vRDup['changeset_id'], 'confirm' => true));
+check('vp_route: undo of a duplicate removes it', $vSite->row('vpRoute', $vRDup['id']) === null);
+// warnings
+$vRWarn = $vActor('develop');
+$vR6 = $call($vRWarn, 'create', array('kind' => 'vp_route', 'fields' => array('route' => '/catalog/7', 'handler' => $vH1['id'], 'event' => $vEv1['id'])));
+check('vp_route: a static route that earlier variable routes match gets a warning for each (FastRoute would refuse the event\'s routes)', count($vRWarn->warnings) === 2
+    && strpos($vRWarn->warnings[0], "Static route '/catalog/7' is shadowed by the earlier route 1") !== false && strpos($vRWarn->warnings[1], 'earlier route 3') !== false && strpos($vRWarn->warnings[0], 'every request of the event') !== false);
+$call($vDev, 'delete', array('kind' => 'vp_route', 'id' => $vR6['id']));
+$vRWarn2 = $vActor('develop');
+$vR7 = $call($vRWarn2, 'create', array('kind' => 'vp_route', 'fields' => array('route' => '/склад', 'handler' => $vH1['id'], 'event' => $vEv3['id'], 'active' => true)));
+check('vp_route: warnings for an inactive event and for an event VirtualPage does not dispatch', count($vRWarn2->warnings) >= 2 && strpos(implode(' ', $vRWarn2->warnings), "Event 'OnWebPageInit' is inactive") !== false
+    && strpos(implode(' ', $vRWarn2->warnings), 'never tried') !== false);
+$call($vDev, 'delete', array('kind' => 'vp_route', 'id' => $vR7['id']));
+$vRWarn3 = $vActor('develop');
+$vR8 = $call($vRWarn3, 'create', array('kind' => 'vp_route', 'fields' => array('route' => '/ok', 'handler' => $vH1['id'], 'event' => $vEv1['id'], 'active' => false)));
+check('vp_route: a consistent route has no warnings', $vRWarn3->warnings === array());
+$call($vDev, 'delete', array('kind' => 'vp_route', 'id' => $vR8['id']));
+
+// ---- deletes and cascades ----
+$vRoutesBefore = $vSite->tableDump('vpRoute');
+$vHandlersBefore = $vSite->tableDump('vpHandler');
+$vEventsBefore = $vSite->tableDump('vpEvent');
+$vDelDry = $call($vDev, 'delete', array('kind' => 'vp_handler', 'id' => $vH1['id'], 'dry_run' => true));
+check('vp_handler: a delete dry run changes nothing', $vSite->tableDump('vpRoute') == $vRoutesBefore && $vSite->tableDump('vpHandler') == $vHandlersBefore);
+$vClearsBefore = $vClears();
+$vHandlerCtx = $vActor('develop');
+$vDelH = $call($vHandlerCtx, 'delete', array('kind' => 'vp_handler', 'id' => $vH1['id']));
+check('vp_handler: deleting a handler removes its routes (xPDO composite) and says so', $vSite->row('vpHandler', $vH1['id']) === null && $vSite->row('vpRoute', $vR1['id']) === null && $vSite->row('vpRoute', $vR5['id']) === null
+    && $vSite->row('vpRoute', $vR2['id']) !== null && count($vSite->tableDump('vpRoute')) === 3 && strpos(implode(' ', $vHandlerCtx->warnings), "handler's 2 route(s)") !== false && $vClears() === $vClearsBefore + 1);
+$vDiff = $call($vDev, 'history_diff', array('changeset_id' => $vDelH['changeset_id']));
+check('vp_handler: the routes are journaled as deleted vp_route objects in the same changeset', count($vDiff['objects']) === 3 && $vDiff['objects'][0]['kind'] === 'vp_handler'
+    && count(array_filter($vDiff['objects'], function ($o) { return $o['kind'] === 'vp_route' && $o['op'] === 'delete'; })) === 2);
+$vClearsBefore = $vClears();
+$call($vDev, 'undo', array('changeset_id' => $vDelH['changeset_id'], 'confirm' => true));
+check('vp_handler: undo restores the handler and its routes exactly, and clears the cache', $vSite->tableDump('vpRoute') == $vRoutesBefore && $vSite->tableDump('vpHandler') == $vHandlersBefore && $vClears() > $vClearsBefore);
+$vDelE = $call($vDev, 'delete', array('kind' => 'vp_event', 'id' => $vEv1['id']));
+check('vp_event: deleting an event removes all its routes', $vSite->row('vpEvent', $vEv1['id']) === null && count($vSite->tableDump('vpRoute')) === 0 && count($vSite->tableDump('vpHandler')) === count($vHandlersBefore));
+$call($vDev, 'undo', array('changeset_id' => $vDelE['changeset_id'], 'confirm' => true));
+check('vp_event: undo restores the event and its routes exactly', $vSite->tableDump('vpRoute') == $vRoutesBefore && $vSite->tableDump('vpEvent') == $vEventsBefore);
+$vDelR = $call($vDev, 'delete', array('kind' => 'vp_route', 'id' => $vR3['id']));
+$call($vDev, 'undo', array('changeset_id' => $vDelR['changeset_id'], 'confirm' => true));
+check('vp_route: delete and undo restore the row exactly', $vSite->tableDump('vpRoute') == $vRoutesBefore);
+$vDelR2 = $call($vDev, 'delete', array('kind' => 'vp_route', 'id' => $vR2['id']));
+$vTaken = $call($vDev, 'create', array('kind' => 'vp_route', 'fields' => array('route' => '/catalog/special', 'handler' => $vH2['id'], 'event' => $vEv1['id'])));
+$e = throws('vp_route: undo onto a route another one took', ApiException::class, function () use ($call, $vDev, $vDelR2) { $call($vDev, 'undo', array('changeset_id' => $vDelR2['changeset_id'], 'confirm' => true)); });
+check('vp_route: such an undo is not_reversible', $e && $e->errorCode === 'not_reversible' && strpos($e->getMessage(), 'already answers') !== false);
+$call($vDev, 'delete', array('kind' => 'vp_route', 'id' => $vTaken['id']));
+$call($vDev, 'undo', array('changeset_id' => $vDelR2['changeset_id'], 'confirm' => true));
+check('vp_route: after the route is out of the way the undo restores it', $vSite->row('vpRoute', $vR2['id'])['route'] === '/catalog/special');
+// the event the routes of the earlier tests belong to is only changed by what the tests did
+$vActive = $vSite->tableDump('vpRoute');
+foreach ($vActive as $key => $row) { if (!in_array((int) $row['id'], array($vR1['id'], $vR2['id'], $vR3['id'], $vR4['id'], $vR5['id']), true)) { unset($vActive[$key]); } }
+
+// ---- resolve ----
+$vResolve = function ($path, $method = null, $ctx = null) use ($call, $vRead) {
+    return $call($ctx ?: $vRead, 'invoke', array('kind' => 'vp_route', 'op' => 'resolve', 'args' => array('path' => $path) + ($method === null ? array() : array('method' => $method))));
+};
+$vSite->options['virtualpage_active'] = 1;
+$vIds = function ($result) { return array_column($result['matches'], 'id'); };
+$vM = $vResolve('/catalog/5');
+check('resolve: a parameter route with a regex gives the value and the handler; the variable routes keep their order and the first answers',
+    $vIds($vM) === array($vR1['id'], $vR3['id']) && $vM['matches'][0]['parameters'] === array('id' => '5') && $vM['matches'][0]['handler']['name'] === 'Карточка товара' && $vM['matches'][0]['handler']['type'] === 'chunk'
+    && $vM['matches'][0]['handler']['entry'] === 3 && $vM['matches'][0]['event']['name'] === 'OnPageNotFound' && $vM['matches'][0]['answers'] === true && $vM['matches'][1]['answers'] === false
+    && $vM['answered_by'] === $vR1['id'] && $vM['path'] === '/catalog/5' && $vM['method'] === 'GET' && $vM['matches'][0]['properties'] == (object) array('layout' => 'карточка', 'depth' => 2) && $vM['notes'] === array('An OnPageNotFound route is tried only when no resource answers the path.'));
+$vM = $vResolve('/catalog/special');
+check('resolve: a static route comes before the variable one that also matches', $vIds($vM) === array($vR2['id'], $vR3['id']) && $vM['matches'][0]['parameters'] == new stdClass() && $vM['matches'][1]['parameters'] === array('slug' => 'special')
+    && $vM['matches'][0]['handler']['type'] === 'dynamic_resource');
+$vM = $vResolve('catalog/сумка');
+check('resolve: a leading slash is added as VirtualPage does, and a Cyrillic value is captured', $vIds($vM) === array($vR3['id']) && $vM['path'] === '/catalog/сумка' && $vM['matches'][0]['parameters'] === array('slug' => 'сумка'));
+$vM = $vResolve('/заказ', 'POST');
+check('resolve: a Cyrillic static route and its methods', $vIds($vM) === array($vR4['id']) && $vM['method'] === 'POST' && $vIds($vResolve('/заказ', 'get')) === array($vR4['id']));
+check('resolve: a method mismatch matches nothing', $vResolve('/заказ', 'PUT')['matches'] === array() && $vResolve('/catalog/5', 'POST')['matches'] === array());
+check('resolve: HEAD falls back to GET as the router does', $vIds($vResolve('/catalog/5', 'HEAD')) === array($vR1['id'], $vR3['id']) && $vIds($vResolve('/заказ', 'DELETE')) === array($vR5['id']));
+$vOffR5 = $call($vDev, 'update', array('kind' => 'vp_route', 'id' => $vR5['id'], 'fields' => array('active' => false)));
+check('resolve: an inactive route is ignored', $vResolve('/заказ', 'DELETE')['matches'] === array());
+$call($vDev, 'undo', array('changeset_id' => $vOffR5['changeset_id'], 'confirm' => true));
+$vOff = $call($vDev, 'update', array('kind' => 'vp_route', 'id' => $vR4['id'], 'fields' => array('active' => false)));
+check('resolve: after the route is switched off it no longer answers', $vResolve('/заказ', 'POST')['matches'] === array());
+$call($vDev, 'undo', array('changeset_id' => $vOff['changeset_id'], 'confirm' => true));
+$vOffHandler = $call($vDev, 'update', array('kind' => 'vp_handler', 'id' => $vH3['id'], 'fields' => array('active' => false)));
+check('resolve: a route of an inactive handler is ignored', $vIds($vResolve('/catalog/5')) === array($vR1['id']));
+$call($vDev, 'undo', array('changeset_id' => $vOffHandler['changeset_id'], 'confirm' => true));
+$vOffEvent = $call($vDev, 'update', array('kind' => 'vp_event', 'id' => $vEv1['id'], 'fields' => array('active' => false)));
+check('resolve: the routes of an inactive event are ignored', $vResolve('/catalog/5')['matches'] === array());
+$call($vDev, 'undo', array('changeset_id' => $vOffEvent['changeset_id'], 'confirm' => true));
+$vM = $vResolve('/ничего/нет');
+check('resolve: no match is {matches: []}, not an error', $vM['matches'] === array() && $vM['answered_by'] === null && $vM['path'] === '/ничего/нет' && json_encode(array('matches' => $vM['matches'])) === '{"matches":[]}');
+$vOpt = $call($vDev, 'create', array('kind' => 'vp_route', 'fields' => array('route' => '/блог[/{page:\d+}[/{sort}]]', 'handler' => $vH3['id'], 'event' => $vEv2['id'])));
+check('resolve: optional segments give the parameters that are present', $vResolve('/блог')['matches'][0]['parameters'] == new stdClass() && $vResolve('/блог/2')['matches'][0]['parameters'] === array('page' => '2')
+    && $vResolve('/блог/2/новые')['matches'][0]['parameters'] === array('page' => '2', 'sort' => 'новые') && $vResolve('/блог/x')['matches'] === array());
+$vTwo = $call($vDev, 'create', array('kind' => 'vp_route', 'fields' => array('route' => '/catalog/{any}', 'handler' => $vH4['id'], 'event' => $vEv2['id'])));
+$vM = $vResolve('/catalog/5');
+check('resolve: routes of the handle-request event come before those of the page-not-found event', $vIds($vM) === array($vTwo['id'], $vR1['id'], $vR3['id']) && $vM['answered_by'] === $vTwo['id']
+    && strpos(implode(' ', $vM['notes']), 'An OnPageNotFound route is tried only') !== false);
+check('resolve: a trailing slash does not match (no tolerance in the router)', $vResolve('/catalog/5/')['matches'] === array() || $vIds($vResolve('/catalog/5/')) === array());
+$vSite->options['virtualpage_active'] = 0;
+check('resolve: a note when VirtualPage is switched off', strpos(implode(' ', $vResolve('/catalog/5')['notes']), 'virtualpage_active is off') !== false);
+$vSite->options['virtualpage_active'] = 1;
+$e = throws('resolve: a path with a query string', ApiException::class, function () use ($vResolve) { $vResolve('/catalog/5?x=1'); });
+check('resolve: a query string is refused', $e && $e->errorCode === 'validation_failed');
+$e = throws('resolve: no path', ApiException::class, function () use ($call, $vRead) { $call($vRead, 'invoke', array('kind' => 'vp_route', 'op' => 'resolve', 'args' => new stdClass())); });
+check('resolve: the path is required', $e && $e->errorCode === 'validation_failed');
+$e = throws('resolve: with an id', ApiException::class, function () use ($call, $vRead, $vR1) { $call($vRead, 'invoke', array('kind' => 'vp_route', 'op' => 'resolve', 'id' => $vR1['id'], 'args' => array('path' => '/x'))); });
+check('resolve: takes no id', $e && $e->errorCode === 'validation_failed');
+$vJournalBefore = count($call($vDev, 'history', array('limit' => 100))['changesets']);
+$vResolve('/catalog/5');
+check('resolve: is read only and writes nothing to the journal', count($call($vDev, 'history', array('limit' => 100))['changesets']) === $vJournalBefore);
+$vCatalogDelete = $call($vDev, 'delete', array('kind' => 'vp_route', 'id' => $vOpt['id']));
+$call($vDev, 'delete', array('kind' => 'vp_route', 'id' => $vTwo['id']));
+
+// ---- scopes, groups, the cache after every kind of write ----
+$e = throws('vp: a read token cannot create', ApiException::class, function () use ($call, $vRead) { $call($vRead, 'create', array('kind' => 'vp_event', 'fields' => array('name' => 'OnX'))); });
+check('vp: writing needs the develop scope', $e && $e->errorCode === 'forbidden_scope');
+foreach (array('vp_event' => 1, 'vp_handler' => $vH2['id'], 'vp_route' => $vR2['id']) as $vKind => $vId) {
+    foreach (array('update' => array('fields' => array('description' => 'x')), 'delete' => array(), 'duplicate' => array()) as $vTool => $vArgs) {
+        $e = throws("vp: a content token cannot {$vTool} {$vKind}", ApiException::class, function () use ($call, $vActor, $vTool, $vKind, $vId, $vArgs) { $call($vActor('content'), $vTool, array('kind' => $vKind, 'id' => $vId) + $vArgs); });
+        check("vp: {$vTool} of {$vKind} needs the develop scope", $e && $e->errorCode === 'forbidden_scope');
+    }
+}
+check('vp: a read token reads all three kinds', $call($vRead, 'get', array('kind' => 'vp_event', 'id' => 1))['fields']['name'] === 'OnPageNotFound' && $call($vRead, 'get', array('kind' => 'vp_handler', 'id' => $vH2['id']))['fields']['name'] === 'Динамическая страница'
+    && $call($vRead, 'get', array('kind' => 'vp_route', 'id' => $vR2['id']))['fields']['route'] === '/catalog/special' && $vResolve('/catalog/special', null, $vRead)['matches'] !== array());
+$e = throws('vp: a token denied the group', ApiException::class, function () use ($call, $vActor) { $call($vActor('admin', array('denied_groups' => array('virtualpage'))), 'get', array('kind' => 'vp_route', 'id' => 1)); });
+check('vp: a token denied the virtualpage group cannot use the kinds', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'denied_for_token');
+$e = throws('vp: denied token cannot resolve', ApiException::class, function () use ($vResolve, $vActor) { $vResolve('/catalog/5', null, $vActor('admin', array('denied_groups' => array('virtualpage')))); });
+check('vp: nor run resolve', $e && $e->errorCode === 'unavailable');
+$vSite->options['modxmcp.disabled_groups'] = 'virtualpage';
+$e = throws('vp: group switched off', ApiException::class, function () use ($call, $vAdmin) { $call($vAdmin, 'list', array('kind' => 'vp_event')); });
+check('vp: the virtualpage group switched off for the site makes the kinds unavailable', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'disabled_group'
+    && !array_intersect(array('vp_event', 'vp_handler', 'vp_route'), array_column($call($vAdmin, 'describe')['kinds'], 'kind')));
+$vSite->options['modxmcp.disabled_groups'] = '';
+unlink($vpCore . 'model/virtualpage/virtualpage.class.php');
+$e = throws('vp: code missing', ApiException::class, function () use ($call, $vActor) { $call($vActor('admin'), 'list', array('kind' => 'vp_handler')); });
+check('vp: installed but its code is gone is unavailable', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'code_missing');
+touch($vpCore . 'model/virtualpage/virtualpage.class.php');
+$vC0 = $vClears();
+$call($vDev, 'create', array('kind' => 'vp_event', 'fields' => array('name' => 'OnCacheProbe')));
+$vC1 = $vClears();
+$vProbe = $call($vDev, 'create', array('kind' => 'vp_handler', 'fields' => array('name' => 'Кэш')));
+$vC2 = $vClears();
+$vProbeRoute = $call($vDev, 'create', array('kind' => 'vp_route', 'fields' => array('route' => '/кэш', 'handler' => $vProbe['id'], 'event' => $vEv2['id'])));
+$vC3 = $vClears();
+$call($vDev, 'delete', array('kind' => 'vp_route', 'id' => $vProbeRoute['id']));
+$vC4 = $vClears();
+check('vp: VirtualPage\'s cache is cleared after a create of each kind and after a delete', $vC1 === $vC0 + 1 && $vC2 === $vC1 + 1 && $vC3 === $vC2 + 1 && $vC4 === $vC3 + 1);
+
+// ---- the help topic ----
+$vHelp = $call($vRead, 'help', array('topic' => 'virtualpage'));
+check('vp help: the topic is served and listed, with the end-to-end example', in_array('virtualpage', $vHelp['topics'], true) && strpos($vHelp['content'], 'modx_create {kind: "vp_route"') !== false
+    && strpos($vHelp['content'], '"resolve"') !== false && strpos($vHelp['content'], 'modx_check_page {url_path: "/catalog/5"}') !== false);
+check('vp help: no 1.x tool name', strpos($vHelp['content'], 'modx_virtualpage_') === false && strpos($vHelp['content'], 'modx_create_element') === false);
+check('vp help: the index lists the topic', strpos($call($vRead, 'help')['content'], '`virtualpage`') !== false);
+
+// Review addition: VirtualPage 1.x wires its plugin `vpEvent` to the events routes use.
+list($vp1Site, $vp1Dev) = $retentionSite();
+$vp1Site->store('modNamespace', array('name' => 'virtualpage', 'path' => '{core_path}components/virtualpage/', 'assets_path' => ''));
+$vp1Site->store('modPlugin', array('id' => 50, 'name' => 'vpEvent', 'plugincode' => '', 'description' => '', 'category' => 0, 'disabled' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'property_preprocess' => 0));
+foreach (array('OnPageNotFound', 'OnHandleRequest') as $vpName) { $vp1Site->store('modEvent', array('name' => $vpName)); }
+$vp1Site->store('modChunk', array('id' => 7, 'name' => 'страница', 'snippet' => 'x', 'description' => '', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0));
+$vp1Core = $vp1Site->getOption('core_path') . 'components/virtualpage/';
+@mkdir($vp1Core . 'model/virtualpage', 0700, true);
+touch($vp1Core . 'model/virtualpage/virtualpage.class.php');
+touch($vp1Core . 'model/virtualpage/vproute.class.php');
+$vp1Ok = true;
+try { ModxMCP\Integration\VirtualPage::load($vp1Site); } catch (Throwable $e) { $vp1Ok = false; }
+if ($vp1Ok && in_array('vp_route', $call($vp1Dev, 'capabilities')['kinds'], true)) {
+    $vp1Event = $call($vp1Dev, 'create', array('kind' => 'vp_event', 'fields' => array('name' => 'OnPageNotFound')));
+    $vp1Handler = $call($vp1Dev, 'create', array('kind' => 'vp_handler', 'fields' => array('name' => 'Каталог', 'type' => 'chunk', 'entry' => 7)));
+    $vp1PluginRows = function () use ($vp1Site) { return $vp1Site->getCount('modPluginEvent', array('pluginid' => 50, 'event' => 'OnPageNotFound')); };
+    check('vp 1.x: an event without routes does not wire the plugin', $vp1PluginRows() === 0);
+    $vp1Route = $call($vp1Dev, 'create', array('kind' => 'vp_route', 'fields' => array('route' => '/catalog/{id:\d+}', 'handler' => $vp1Handler['id'], 'event' => $vp1Event['id'])));
+    check('vp 1.x: the first route wires the plugin to its event, journaled in the same changeset', $vp1PluginRows() === 1
+        && in_array('plugin', array_column($call($vp1Dev, 'history_diff', array('changeset_id' => $vp1Route['changeset_id']))['objects'], 'kind'), true));
+    $call($vp1Dev, 'undo', array('changeset_id' => $vp1Route['changeset_id'], 'confirm' => true));
+    check('vp 1.x: undo of the route unwires the plugin', $vp1PluginRows() === 0);
+    $vp1Route = $call($vp1Dev, 'create', array('kind' => 'vp_route', 'fields' => array('route' => '/catalog/{id:\d+}', 'handler' => $vp1Handler['id'], 'event' => $vp1Event['id'])));
+    $call($vp1Dev, 'delete', array('kind' => 'vp_route', 'id' => $vp1Route['id']));
+    check('vp 1.x: deleting the last route of an event unwires the plugin', $vp1PluginRows() === 0);
+} else {
+    check('vp 1.x: VirtualPage fixture is available for the plugin tests', false);
+}
+
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));
 check('canonical: list order is kept', Kernel::canonical(array(3, 1, 2)) === array(3, 1, 2));

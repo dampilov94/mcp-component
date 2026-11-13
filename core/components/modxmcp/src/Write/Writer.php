@@ -13,6 +13,8 @@ final class Writer {
      */
     public static function run(Context $context, $tool, callable $body) {
         $tx = new Transaction($context, $tool);
+        $outer = $context->transaction;
+        $context->transaction = $tx;
         try {
             $out = $body($tx);
             $info = $tx->commit(isset($out['summary']) ? $out['summary'] : $tool, isset($out['undoes']) ? $out['undoes'] : array(), !empty($out['informational']));
@@ -21,6 +23,7 @@ final class Writer {
             $tx->rollback();
             throw $e;
         } finally {
+            $context->transaction = $outer;
             $tx->release();
         }
     }

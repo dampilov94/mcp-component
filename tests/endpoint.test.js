@@ -411,3 +411,46 @@ test("MIGX: the configuration kind and MIGX TV values appear when it is installe
   assert.match(help.content, /modx_create \{kind: "migx_config"/);
   assert.ok(!/modx_migx_|modx_update_resource_tvs|modx_get_resource_tvs|modx_create_element/.test(help.content));
 });
+
+test("VirtualPage: the three kinds, the route tester and the help appear when it is installed", { skip: available ? false : "PHP with pdo_sqlite is not available" }, async (t) => {
+  const site = await startSite({ MODXMCP_TEST_VIRTUALPAGE: "1" });
+  t.after(site.stop);
+  const { admin, read } = site.info.tokens;
+  const call = (token, action, args = {}) => site.post(token, { v: 2, action, args });
+  // 22 kinds without VirtualPage (see "kernel: wire protocol"), three more with it; a read token reads them.
+  const adminKinds = (await call(admin, "describe")).body.result.kinds.map((kind) => kind.kind);
+  assert.equal(adminKinds.length, 25);
+  assert.deepEqual(adminKinds.slice(-3), ["vp_event", "vp_handler", "vp_route"]);
+  const readKinds = (await call(read, "describe")).body.result.kinds.map((kind) => kind.kind);
+  assert.equal(readKinds.length, 20);
+  assert.deepEqual(readKinds.slice(-3), ["vp_event", "vp_handler", "vp_route"]);
+  const integration = (await call(read, "capabilities")).body.result.integrations.find((item) => item.key === "virtualpage");
+  assert.equal(integration.available, true);
+
+  const event = (await call(admin, "create", { kind: "vp_event", fields: { name: "OnPageNotFound" } })).body;
+  assert.equal(event.ok, true, JSON.stringify(event));
+  const chunk = (await call(admin, "create", { kind: "chunk", fields: { name: "товар", content: "<h1>[[+vp.id]]</h1>" } })).body.result;
+  const handler = (await call(admin, "create", { kind: "vp_handler", fields: { name: "Товар", type: "chunk", entry: chunk.id } })).body;
+  assert.equal(handler.ok, true, JSON.stringify(handler));
+  const route = (await call(admin, "create", { kind: "vp_route", fields: { route: "/каталог/{id:\\d+}", handler: handler.result.id, event: event.result.id } })).body;
+  assert.equal(route.ok, true, JSON.stringify(route));
+  const resolved = (await call(read, "invoke", { kind: "vp_route", op: "resolve", args: { path: "/каталог/5" } })).body.result;
+  assert.equal(resolved.matches.length, 1);
+  assert.deepEqual(resolved.matches[0].parameters, { id: "5" });
+  assert.equal(resolved.matches[0].handler.type, "chunk");
+  assert.equal(resolved.answered_by, route.result.id);
+  assert.deepEqual((await call(read, "invoke", { kind: "vp_route", op: "resolve", args: { path: "/нет" } })).body.result.matches, []);
+  assert.equal((await call(read, "update", { kind: "vp_route", id: route.result.id, fields: { active: false } })).body.error.code, "forbidden_scope");
+  const refused = (await call(admin, "create", { kind: "vp_route", fields: { route: "/каталог/{id:\\d+}", handler: handler.result.id, event: event.result.id } })).body;
+  assert.equal(refused.error.code, "validation_failed");
+
+  const removed = (await call(admin, "delete", { kind: "vp_handler", id: handler.result.id })).body;
+  assert.equal(removed.ok, true, JSON.stringify(removed));
+  assert.equal((await call(read, "list", { kind: "vp_route" })).body.result.total, 0);
+  assert.equal((await call(admin, "undo", { changeset_id: removed.result.changeset_id, confirm: true })).body.ok, true);
+  assert.equal((await call(read, "list", { kind: "vp_route" })).body.result.items[0].label, "GET /каталог/{id:\\d+} → Товар (OnPageNotFound)");
+
+  const help = (await call(read, "help", { topic: "virtualpage" })).body.result;
+  assert.match(help.content, /modx_create \{kind: "vp_route"/);
+  assert.ok(!/modx_virtualpage_/.test(help.content));
+});
