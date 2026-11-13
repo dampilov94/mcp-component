@@ -140,7 +140,29 @@ $menuGraphVehicle = $builder->createVehicle($menuGraph, array(
     xPDOTransport::RELATED_OBJECTS => false,
 ));
 $builder->putVehicle($menuGraphVehicle);
-$modx->log(modX::LOG_LEVEL_INFO, 'Packaged manager menus (Components > modxMCP, + Граф связей).');
+
+/* Third screen: the change history with undo. */
+$menuHistory = $modx->newObject('modMenu');
+$menuHistory->fromArray(array(
+    'text'        => 'modxmcp_history',
+    'parent'      => 'modxmcp',
+    'description' => 'modxmcp_history_desc',
+    'icon'        => '',
+    'menuindex'   => 2,
+    'params'      => '',
+    'handler'     => '',
+    'action'      => 'history',
+    'namespace'   => PKG_NAMESPACE,
+    'permissions' => 'settings',
+), '', true, true);
+$menuHistoryVehicle = $builder->createVehicle($menuHistory, array(
+    xPDOTransport::PRESERVE_KEYS => true,
+    xPDOTransport::UPDATE_OBJECT => true,
+    xPDOTransport::UNIQUE_KEY    => 'text',
+    xPDOTransport::RELATED_OBJECTS => false,
+));
+$builder->putVehicle($menuHistoryVehicle);
+$modx->log(modX::LOG_LEVEL_INFO, 'Packaged manager menus (Components > modxMCP, + Граф связей, + История).');
 
 /* ---- core files ---- */
 $coreVehicle = $builder->createVehicle(

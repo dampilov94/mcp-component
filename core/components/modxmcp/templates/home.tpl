@@ -55,6 +55,12 @@
         <a href="?a=graph&amp;namespace=modxmcp" class="x-btn" style="display:inline-block;padding:8px 16px;cursor:pointer;text-decoration:none;">Открыть граф связей &rarr;</a>
     </div>
 
+    <div style="margin:18px 0;padding:14px 16px;border:1px solid #dfe3e8;border-radius:6px;background:#fbfcfd;">
+        <div style="font-weight:bold;margin-bottom:3px;">{$l.history_title}</div>
+        <p style="color:#666;margin:0 0 11px;">{$l.history_desc}</p>
+        <a href="?a=history&amp;namespace=modxmcp" class="x-btn" style="display:inline-block;padding:8px 16px;cursor:pointer;text-decoration:none;">{$l.history_open} &rarr;</a>
+    </div>
+
     {if $components || $features}
     <h3 style="margin:18px 0 6px;">Возможности</h3>
     <p style="color:#666;margin-top:0;">Выключенные группы не передаются ИИ (экономия токенов) и блокируются на сервере. Изменения применяются автоматически при следующем действии ИИ (переподключение не требуется).</p>

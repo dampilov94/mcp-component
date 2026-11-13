@@ -127,36 +127,78 @@ final class Journal {
 
     /**
      * Changesets, newest first.
-     * @param array $filter session_id, source, kind, object_key, since (unix time), after_id, ids (int[]), status,
+     * @param array $filter session_id, source, kind, object_key, since / until (unix time, inclusive), after_id, ids (int[]), status,
+     *                      tool, query (substring of the summary or of an object's name),
      *                      exclude_undos (skip changesets that are themselves undos),
      *                      with_changes (skip changesets that record no change, e.g. a package install)
      */
     public function changesets(array $filter = array(), $limit = 20) {
+        $page = $this->page($filter, $limit, 0, false);
+        return $page['changesets'];
+    }
+
+    /**
+     * One page of changesets, newest first, and how many match in all.
+     * @return array ['changesets' => [...], 'total' => int]
+     */
+    public function page(array $filter, $limit, $start, $withTotal = true) {
+        $built = $this->where($filter);
+        if ($built === null) { return array('changesets' => array(), 'total' => 0); }
+        list($where, $params) = $built;
+        $rows = $this->run(
+            'SELECT c.* FROM ' . $this->t('changesets') . ' c WHERE ' . implode(' AND ', $where)
+            . ' ORDER BY c.`id` DESC LIMIT ' . max(1, min(500, (int) $limit)) . ' OFFSET ' . max(0, (int) $start),
+            $params
+        )->fetchAll(\PDO::FETCH_ASSOC);
+        $total = $withTotal
+            ? (int) $this->run('SELECT COUNT(*) FROM ' . $this->t('changesets') . ' c WHERE ' . implode(' AND ', $where), $params)->fetchColumn()
+            : 0;
+        return array('changesets' => array_map(array($this, 'changesetRow'), $rows), 'total' => $total);
+    }
+
+    /** @return array|null [conditions, parameters]; null when the filter can match nothing */
+    private function where(array $filter) {
         $where = array('1=1');
         $params = array();
-        foreach (array('session_id', 'source', 'status') as $column) {
+        foreach (array('session_id', 'source', 'status', 'tool') as $column) {
             if (isset($filter[$column])) { $where[] = "c.`{$column}` = ?"; $params[] = $filter[$column]; }
         }
         if (!empty($filter['exclude_undos'])) { $where[] = 'c.`undoes` IS NULL'; }
         if (!empty($filter['with_changes'])) { $where[] = 'EXISTS (SELECT 1 FROM ' . $this->t('changes') . ' w WHERE w.`changeset_id` = c.`id`)'; }
         if (isset($filter['since'])) { $where[] = 'c.`created_at` >= ?'; $params[] = (int) $filter['since']; }
+        if (isset($filter['until'])) { $where[] = 'c.`created_at` <= ?'; $params[] = (int) $filter['until']; }
         if (isset($filter['after_id'])) { $where[] = 'c.`id` > ?'; $params[] = (int) $filter['after_id']; }
         if (isset($filter['ids'])) {
-            if (!$filter['ids']) { return array(); }
+            if (!$filter['ids']) { return null; }
             $where[] = 'c.`id` IN (' . implode(',', array_map('intval', $filter['ids'])) . ')';
         }
-        if (isset($filter['kind'])) {
-            $sub = 'SELECT 1 FROM ' . $this->t('changes') . ' x WHERE x.`changeset_id` = c.`id` AND x.`kind` = ?';
-            $params[] = $filter['kind'];
+        if (isset($filter['kind']) || isset($filter['object_key'])) {
+            $sub = 'SELECT 1 FROM ' . $this->t('changes') . ' x WHERE x.`changeset_id` = c.`id`';
+            if (isset($filter['kind'])) { $sub .= ' AND x.`kind` = ?'; $params[] = $filter['kind']; }
             if (isset($filter['object_key'])) { $sub .= ' AND x.`object_key` = ?'; $params[] = (string) $filter['object_key']; }
             $where[] = 'EXISTS (' . $sub . ')';
         }
-        $rows = $this->run(
-            'SELECT c.* FROM ' . $this->t('changesets') . ' c WHERE ' . implode(' AND ', $where)
-            . ' ORDER BY c.`id` DESC LIMIT ' . max(1, min(500, (int) $limit)),
-            $params
-        )->fetchAll(\PDO::FETCH_ASSOC);
-        return array_map(array($this, 'changesetRow'), $rows);
+        if (isset($filter['query']) && (string) $filter['query'] !== '') {
+            // "!" escapes the LIKE wildcards; the comparison is case-insensitive in MySQL's utf8mb4 collations.
+            $like = '%' . str_replace(array('!', '%', '_'), array('!!', '!%', '!_'), (string) $filter['query']) . '%';
+            $where[] = '(c.`summary` LIKE ? ESCAPE \'!\' OR EXISTS (SELECT 1 FROM ' . $this->t('changes') . ' q WHERE q.`changeset_id` = c.`id` AND q.`label` LIKE ? ESCAPE \'!\'))';
+            $params[] = $like;
+            $params[] = $like;
+        }
+        return array($where, $params);
+    }
+
+    /** Checkpoints, newest first. */
+    public function checkpoints($limit = 20) {
+        $rows = $this->run('SELECT * FROM ' . $this->t('checkpoints') . ' ORDER BY `id` DESC LIMIT ' . max(1, min(200, (int) $limit)))->fetchAll(\PDO::FETCH_ASSOC);
+        $out = array();
+        foreach ($rows as $row) {
+            $out[] = array(
+                'id' => (int) $row['id'], 'created_at' => (int) $row['created_at'], 'label' => (string) $row['label'],
+                'token_id' => $row['token_id'] === null ? null : (int) $row['token_id'], 'last_changeset_id' => (int) $row['last_changeset_id'],
+            );
+        }
+        return $out;
     }
 
     /** One changeset with its changes (in recording order), or null. */

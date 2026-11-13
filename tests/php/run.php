@@ -5771,6 +5771,190 @@ if ($vp1Ok && in_array('vp_route', $call($vp1Dev, 'capabilities')['kinds'], true
     check('vp 1.x: VirtualPage fixture is available for the plugin tests', false);
 }
 
+// --- Manager history page: HistoryService ---
+use ModxMCP\Manager\HistoryService;
+$hCore = dirname(dirname(__DIR__)) . '/core/components/modxmcp/';
+$hDir = sys_get_temp_dir() . '/modxmcp-hist-' . bin2hex(random_bytes(6));
+mkdir($hDir . '/core', 0700, true);
+$hSite = fakeSite($hDir);
+$hSite->options['modxmcp.auto_static'] = false;
+$hSite->store('modUser', array('id' => 1, 'username' => 'admin', 'primary_group' => 0));
+$hSite->store('modUser', array('id' => 2, 'username' => 'Иванов', 'primary_group' => 0));
+$hSite->user = $hSite->getObject('modUser', 2);
+$hTokens = new TokenStore($hSite);
+$hTokenA = $hTokens->create('Claude Code', 'develop');
+$hTokenB = $hTokens->create('Старый токен', 'develop');
+$hActor = function (array $token) use ($hSite, $hCore) {
+    unset($token['token']);
+    $c = new Context($hSite, $token, $hCore, function () { throw new RuntimeException('no store in tests'); });
+    $c->sessionId = 'session-history-0001';
+    return $c;
+};
+$hDev = $hActor($hTokenA);
+$hDevB = $hActor($hTokenB);
+$hAdmin = $hActor(array('scope' => 'admin') + $hTokenA);
+$hService = new HistoryService($hSite, $hSite->user);
+
+$hCheckpoint = $call($hDev, 'checkpoint', array('label' => 'Перед работой'));
+$hHead = $call($hDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'шапка', 'content' => "<h1>\nЗаголовок\n</h1>")));       // 1
+$hHeadEdit = $call($hDev, 'update', array('kind' => 'chunk', 'id' => $hHead['id'], 'fields' => array('description' => 'первая правка')));        // 2
+$hFoot = $call($hDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'подвал')));                                               // 3
+$hSide = $call($hDevB, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'sidebar')));                                              // 4
+$hTokens->revoke($hTokenB['id']);
+$hSite->store('modChunk', array('description' => 'правка в админке') + $hSite->row('modChunk', $hFoot['id']));                                  // found as 5
+$call($hDev, 'update', array('kind' => 'chunk', 'id' => $hFoot['id'], 'fields' => array('description' => 'после правки в админке')));            // 6
+$hGone = $hDev->journal()->commit(array('source' => 'mcp', 'token_id' => 999, 'session_id' => null, 'request_id' => null, 'tool' => 'install', 'summary' => 'запись о пакете'), array());   // 7
+$hRows = $hService->changesets(array(), 100);
+check('history page: every changeset listed newest first with a total', array_column($hRows['changesets'], 'changeset_id') === array(7, 6, 5, 4, 3, 2, 1) && $hRows['total'] === 7);
+
+// authors
+$hAuthor = array_column($hRows['changesets'], 'author', 'changeset_id');
+check('history page: author of an MCP token is its label', $hAuthor[1] === 'Claude Code' && $hAuthor[6] === 'Claude Code');
+check('history page: a revoked token keeps its label, a vanished one is named so', $hAuthor[4] === 'Старый токен' && $hAuthor[7] === '(revoked token)');
+check('history page: a change found outside the journal has an unknown author', $hAuthor[5] === 'unknown' && $hRows['changesets'][2]['source'] === 'external');
+
+// the entries are those of modx_history, plus the author (the API tool shows it too)
+$hApi = $call($hDev, 'history', array('limit' => 100))['changesets'];
+$hDrop = function (array $entries) { foreach ($entries as $i => $entry) { unset($entries[$i]['this_session']); } return $entries; };
+check('history page: entries are the entries of modx_history', $hDrop($hRows['changesets']) === $hDrop($hApi) && $hApi[0]['author'] === '(revoked token)' && $hApi[6]['author'] === 'Claude Code');
+
+// filters
+$ids = function (array $filter, $limit = 100, $start = 0) use ($hService) { return array_column($hService->changesets($filter, $limit, $start)['changesets'], 'changeset_id'); };
+check('history page: filter source', $ids(array('source' => 'mcp')) === array(7, 6, 4, 3, 2, 1) && $ids(array('source' => 'external')) === array(5) && $ids(array('source' => 'manager')) === array());
+check('history page: filter kind', $ids(array('kind' => 'chunk')) === array(6, 5, 4, 3, 2, 1) && $ids(array('kind' => 'snippet')) === array());
+check('history page: filter object id and key', $ids(array('kind' => 'chunk', 'id' => $hHead['id'])) === array(2, 1) && $ids(array('id' => (string) $hFoot['id'])) === array(6, 5, 3)
+    && $ids(array('key' => (string) $hHead['id'])) === array(2, 1) && $ids(array('kind' => 'tv', 'id' => $hHead['id'])) === array());
+check('history page: filter tool and status', $ids(array('tool' => 'update')) === array(6, 2) && $ids(array('tool' => 'install')) === array(7) && $ids(array('status' => 'undone')) === array() && count($ids(array('status' => 'committed'))) === 7);
+$hSite->pdo->exec('UPDATE modx_modxmcp_changesets SET created_at = 1000000 WHERE id = 1');
+check('history page: filter since and until', $ids(array('until' => 2000000)) === array(1) && $ids(array('since' => 2000000)) === array(7, 6, 5, 4, 3, 2) && $ids(array('since' => 1000000, 'until' => 1000000)) === array(1)
+    && $ids(array('since' => '', 'until' => '')) === array(7, 6, 5, 4, 3, 2, 1));
+check('history page: text search in an object name, case as typed, in Cyrillic', $ids(array('query' => 'шапк')) === array(2, 1) && $ids(array('query' => 'подвал')) === array(6, 5, 3));
+check('history page: text search in the summary', $ids(array('query' => 'запись о пакете')) === array(7));
+check('history page: wildcards in the search are literal', $ids(array('query' => '%')) === array() && $ids(array('query' => '_')) === array());
+check('history page: filters combine', $ids(array('source' => 'mcp', 'kind' => 'chunk', 'query' => 'подвал')) === array(6, 3));
+$e = throws('history page: unknown source', ApiException::class, function () use ($hService) { $hService->changesets(array('source' => 'robot')); });
+check('history page: unknown source is validation_failed', $e && $e->errorCode === 'validation_failed');
+
+// paging
+$hPageA = $hService->changesets(array(), 3, 0);
+$hPageB = $hService->changesets(array(), 3, 3);
+$hPageC = $hService->changesets(array(), 3, 6);
+check('history page: paging keeps the total and the order', array_column($hPageA['changesets'], 'changeset_id') === array(7, 6, 5) && array_column($hPageB['changesets'], 'changeset_id') === array(4, 3, 2)
+    && array_column($hPageC['changesets'], 'changeset_id') === array(1) && $hPageA['total'] === 7 && $hPageC['total'] === 7 && $hService->changesets(array('source' => 'mcp'), 2, 2)['total'] === 6
+    && $hService->changesets(array(), 3, 50)['changesets'] === array());
+
+// one changeset equals modx_history_diff, plus what the page needs
+$hExtra = array_fill_keys(array('author', 'reversible', 'undone_by', 'undoes', 'not_reversible', 'notes'), true);
+$hOne = $hService->changeset(2);
+check('history page: changeset is the data of modx_history_diff', array_diff_key($hOne, $hExtra) === $call($hDev, 'history_diff', array('changeset_id' => 2))
+    && $hOne['author'] === 'Claude Code' && $hOne['reversible'] === true && $hOne['undone_by'] === null && $hOne['objects'][0]['changed']['description']['new'] === 'первая правка');
+$hNoChanges = $hService->changeset(7);
+check('history page: a record without changes says why it cannot be undone', $hNoChanges['reversible'] === false && $hNoChanges['not_reversible'] === 'no_changes' && $hNoChanges['objects'] === array());
+$e = throws('history page: unknown changeset', ApiException::class, function () use ($hService) { $hService->changeset(999); });
+check('history page: unknown changeset is not_found', $e && $e->errorCode === 'not_found');
+
+// undo: plan, conflict, force
+$hHeadSecond = $call($hDev, 'update', array('kind' => 'chunk', 'id' => $hHead['id'], 'fields' => array('description' => 'вторая правка')));    // 8
+$hPlan = $hService->undo(array('changeset_id' => 2));
+check('history page: undo without confirm is a plan', $hPlan['performed'] === false && $hPlan['conflicts'] === 1 && $hPlan['objects'][0]['action'] === 'restore'
+    && strpos($hPlan['objects'][0]['conflict'], 'changed later by changeset 8') === 0 && $hSite->row('modChunk', $hHead['id'])['description'] === 'вторая правка');
+$e = throws('history page: a conflict stops a confirmed undo', ApiException::class, function () use ($hService) { $hService->undo(array('changeset_id' => 2), true); });
+check('history page: undo_conflict with the plan in its details', $e && $e->errorCode === 'undo_conflict' && $e->details['conflicts'] === 1 && $hSite->row('modChunk', $hHead['id'])['description'] === 'вторая правка'
+    && $hService->changesets(array('source' => 'manager'))['total'] === 0);
+$hForced = $hService->undo(array('changeset_id' => 2), true, true);                                                                              // 9
+check('history page: force undoes over the later change', $hForced['performed'] === true && $hForced['changeset_id'] === 9 && $hSite->row('modChunk', $hHead['id'])['description'] === '');
+$hManagerRow = $hSite->pdo->query('SELECT source, user_id, token_id, session_id FROM modx_modxmcp_changesets WHERE id = 9')->fetch(PDO::FETCH_ASSOC);
+check('history page: the undo is recorded as a manager changeset', $hManagerRow['source'] === 'manager' && (int) $hManagerRow['user_id'] === 2 && $hManagerRow['token_id'] === null && $hManagerRow['session_id'] === null);
+$hMgr = $call($hDev, 'history', array('source' => 'manager'))['changesets'];
+check('history page: modx_history shows it with the user name as author', count($hMgr) === 1 && $hMgr[0]['changeset_id'] === 9 && $hMgr[0]['author'] === 'Иванов' && $hMgr[0]['undoes'] === array(2) && $hMgr[0]['summary'] === 'undo changesets 2');
+check('history page: the undone changeset links to its undo', $hService->changeset(2)['undone_by'] === 9 && $ids(array('status' => 'undone')) === array(2) && $hService->changeset(9)['undoes'] === array(2));
+$e = throws('history page: an undone changeset cannot be undone again', ApiException::class, function () use ($hService) { $hService->undo(array('changeset_id' => 2), true); });
+check('history page: that is not_reversible', $e && $e->errorCode === 'not_reversible');
+$hSimple = $hService->undo(array('changeset_id' => 4), true);                                                                                    // 10
+check('history page: undo of a creation removes the object', $hSimple['performed'] === true && $hSimple['objects'][0]['action'] === 'remove' && $hSite->getCount('modChunk', array('name' => 'sidebar')) === 0
+    && $hService->changeset(10)['author'] === 'Иванов');
+$e = throws('history page: a record without changes cannot be undone', ApiException::class, function () use ($hService) { $hService->undo(array('changeset_id' => 7), true); });
+check('history page: that is not_reversible too', $e && $e->errorCode === 'not_reversible');
+foreach (array(array(), array('changeset_id' => 1, 'to_checkpoint' => 1), array('changeset_id' => 0)) as $hBad) {
+    $e = throws('history page: undo needs exactly one valid selector ' . json_encode($hBad), ApiException::class, function () use ($hService, $hBad) { $hService->undo($hBad); });
+    check('history page: bad selector is validation_failed ' . json_encode($hBad), $e && $e->errorCode === 'validation_failed');
+}
+// redo: undoing the manager's undo brings the object back, as a manager changeset again
+$hRedo = $hService->undo(array('changeset_id' => 10), true);                                                                                     // 11
+check('history page: undo of a manager undo', $hRedo['performed'] === true && $hSite->getCount('modChunk', array('name' => 'sidebar')) === 1 && $hService->changeset(4)['undone_by'] === null && $hService->changeset(11)['author'] === 'Иванов');
+
+// checkpoints, then a rollback to one
+$hCps = $hService->checkpoints();
+check('history page: checkpoints with label, author and counts', count($hCps['checkpoints']) === 1 && $hCps['checkpoints'][0]['checkpoint_id'] === $hCheckpoint['checkpoint_id']
+    && $hCps['checkpoints'][0]['label'] === 'Перед работой' && $hCps['checkpoints'][0]['author'] === 'Claude Code' && $hCps['checkpoints'][0]['after'] === 7
+    && $hCps['checkpoints'][0]['undoable_after'] === 5 && is_int($hCps['checkpoints'][0]['at']));
+$hLater = $call($hDev, 'checkpoint', array('label' => 'Позже'));
+$hCps = $hService->checkpoints()['checkpoints'];
+check('history page: checkpoints newest first, a later one counts nothing yet', array_column($hCps, 'label') === array('Позже', 'Перед работой') && $hCps[0]['after'] === 0 && $hCps[0]['undoable_after'] === 0 && count($hService->checkpoints(1)['checkpoints']) === 1);
+check('history page: a rollback to a checkpoint with nothing after it is empty', $hService->undo(array('to_checkpoint' => $hLater['checkpoint_id']))['changesets'] === array());
+$hRollPlan = $hService->undo(array('to_checkpoint' => $hCheckpoint['checkpoint_id']));
+check('history page: rollback plan, with conflicts', $hRollPlan['performed'] === false && $hRollPlan['conflicts'] >= 1 && count($hRollPlan['changesets']) === 5);
+$e = throws('history page: rollback needs force over conflicts', ApiException::class, function () use ($hService, $hCheckpoint) { $hService->undo(array('to_checkpoint' => $hCheckpoint['checkpoint_id']), true); });
+check('history page: rollback conflict is undo_conflict', $e && $e->errorCode === 'undo_conflict' && $hSite->getCount('modChunk', array('name' => 'шапка')) === 1);
+$hRoll = $hService->undo(array('to_checkpoint' => $hCheckpoint['checkpoint_id']), true, true);
+$hRollRow = $hSite->pdo->query('SELECT source, user_id, token_id FROM modx_modxmcp_changesets WHERE id = ' . (int) $hRoll['changeset_id'])->fetch(PDO::FETCH_ASSOC);
+check('history page: rollback to a checkpoint is one manager changeset', $hRoll['performed'] === true && $hRollRow['source'] === 'manager' && (int) $hRollRow['user_id'] === 2 && $hRollRow['token_id'] === null
+    && $hSite->getCount('modChunk', array('name' => 'шапка')) === 0 && $hSite->getCount('modChunk', array('name' => 'подвал')) === 0);
+
+// the guards of the API apply to the page
+$hSettingKind = $hAdmin->kinds->get('system_setting');
+$hSite->store('modSystemSetting', array('key' => 'modxmcp.api_limit', 'value' => '50', 'xtype' => 'textfield', 'namespace' => 'modxmcp', 'area' => 'modxmcp:main'));
+$hNow = ModxMCP\Journal\Snapshot::capture($hSite, $hSettingKind, 'modxmcp.api_limit');
+$hOlder = $hNow;
+$hOlder['fields']['value'] = '10';
+foreach (array($hOlder, $hNow) as $hState) { $hAdmin->blobs()->put(ModxMCP\Journal\Snapshot::encode($hState)); }
+$hOwnChange = $hAdmin->journal()->commit(array('source' => 'mcp', 'token_id' => 1, 'tool' => 'update', 'summary' => 'planted own setting'), array(array(
+    'kind' => 'system_setting', 'object_key' => 'modxmcp.api_limit', 'label' => 'modxmcp.api_limit', 'op' => 'update',
+    'before_revision' => ModxMCP\Journal\Snapshot::revision($hOlder), 'after_revision' => ModxMCP\Journal\Snapshot::revision($hNow), 'extra_blob' => null, 'reversible' => true, 'note' => '',
+)));
+$hSettingsBefore = $hSite->tableDump('modSystemSetting');
+foreach (array(array(false, false), array(true, false), array(true, true)) as $hMode) {
+    $e = throws('history page: a modxMCP setting is not restored from the page (' . json_encode($hMode) . ')', ApiException::class, function () use ($hService, $hOwnChange, $hMode) { $hService->undo(array('changeset_id' => $hOwnChange), $hMode[0], $hMode[1]); });
+    check('history page: refusal is not_reversible with the explanation (' . json_encode($hMode) . ')', $e && $e->errorCode === 'not_reversible' && strpos($e->getMessage(), 'MODX manager') !== false);
+}
+check('history page: the refused undo changed nothing', $hSite->tableDump('modSystemSetting') === $hSettingsBefore);
+// a rule of the Administrator group: planted as if an earlier allowed state of it had been journaled
+$hSite->store('modAccessContext', array('id' => 77, 'target' => 'web', 'principal_class' => 'modUserGroup', 'principal' => 1, 'authority' => 9999, 'policy' => 2));
+$hRuleKind = $hAdmin->kinds->get('context_access');
+$hRuleNow = ModxMCP\Journal\Snapshot::capture($hSite, $hRuleKind, 77);
+$hRuleOlder = $hRuleNow;
+$hRuleOlder['fields']['authority'] = 5;
+foreach (array($hRuleOlder, $hRuleNow) as $hState) { $hAdmin->blobs()->put(ModxMCP\Journal\Snapshot::encode($hState)); }
+$hRuleChange = $hAdmin->journal()->commit(array('source' => 'mcp', 'token_id' => 1, 'tool' => 'update', 'summary' => 'planted admin rule'), array(array(
+    'kind' => 'context_access', 'object_key' => '77', 'label' => 'web', 'op' => 'update',
+    'before_revision' => ModxMCP\Journal\Snapshot::revision($hRuleOlder), 'after_revision' => ModxMCP\Journal\Snapshot::revision($hRuleNow), 'extra_blob' => null, 'reversible' => true, 'note' => '',
+)));
+$e = throws('history page: a rule of the Administrator group is not restored from the page', ApiException::class, function () use ($hService, $hRuleChange) { $hService->undo(array('changeset_id' => $hRuleChange), true, true); });
+check('history page: that is not_reversible and nothing changed', $e && $e->errorCode === 'not_reversible' && strpos($e->getMessage(), 'Administrator group') !== false && $hSite->row('modAccessContext', 77)['authority'] === '9999');
+// a user group undo the site-wide switch of the access group turns off
+$hGroup = $call($hAdmin, 'create', array('kind' => 'user_group', 'fields' => array('name' => 'Редакторы')));
+$hSite->options['modxmcp.disabled_groups'] = 'access';
+$e = throws('history page: a site-wide disabled group still applies', ApiException::class, function () use ($hService, $hGroup) { $hService->undo(array('changeset_id' => $hGroup['changeset_id']), true, true); });
+check('history page: undo into a disabled group is refused', $e instanceof ApiException && $hSite->getCount('modUserGroup', array('name' => 'Редакторы')) === 1);
+$hSite->options['modxmcp.disabled_groups'] = '';
+
+// the context for a manager user
+$hContext = Context::forManager($hSite, $hSite->user, $hCore);
+check('manager context: admin scope, no token, the user recorded', $hContext->managerUserId === 2 && $hContext->token['id'] === null && $hContext->token['scope'] === 'admin'
+    && $hContext->token['label'] === 'manager: Иванов' && $hContext->token['plan_only'] === false && $hContext->token['denied_groups'] === array());
+check('api context: no manager user by default', $hDev->managerUserId === null && $hAdmin->managerUserId === null);
+$hAllowed = array('Context.php', 'Write/Transaction.php', 'Manager/HistoryService.php');
+$hFound = array();
+foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($hCore . 'src', FilesystemIterator::SKIP_DOTS)) as $hFile) {
+    if (substr($hFile->getFilename(), -4) !== '.php') { continue; }
+    $hText = file_get_contents($hFile->getPathname());
+    if (strpos($hText, 'managerUserId') !== false || strpos($hText, 'forManager') !== false) { $hFound[] = str_replace('\\', '/', substr($hFile->getPathname(), strlen($hCore . 'src/'))); }
+}
+sort($hFound);
+sort($hAllowed);
+check('manager context: only the context, the transaction and the service touch it, the kernel never does', $hFound === $hAllowed
+    && strpos(file_get_contents($hCore . 'src/Kernel.php'), 'managerUserId') === false);
+
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));
 check('canonical: list order is kept', Kernel::canonical(array(3, 1, 2)) === array(3, 1, 2));

@@ -96,6 +96,7 @@ class ModxmcpIndexManagerController extends modExtraManagerController {
         $labelKeys = array(
             'intro', 'endpoint', 'enabled', 'yes', 'no', 'enable_hint', 'auto_static', 'audit_log',
             'on', 'off', 'settings_hint', 'integrations', 'integrations_intro',
+            'history_title', 'history_desc', 'history_open',
         );
         $l = array();
         foreach ($labelKeys as $k) {
