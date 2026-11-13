@@ -188,6 +188,15 @@ class FakeCache {
     public $flushes = 0;
     public function refresh() { $this->refreshes++; return true; }
     public function flushPermissions() { $this->flushes++; return true; }
+    /** Folders cleaned with clean(['cache_key' => …]) (VirtualPage cleans `default/virtualpage`). */
+    public $cleaned = array();
+    public function clean($options = array()) { $this->cleaned[] = isset($options['cache_key']) ? $options['cache_key'] : ''; return true; }
+}
+
+/** Stand-in for VirtualPage's service: clearAllCache() cleans its cache folder and builds the route lists again (counted). */
+class FakeVirtualPageService {
+    public $clears = 0;
+    public function clearAllCache() { $this->clears++; }
 }
 
 class xPDO {
@@ -432,6 +441,11 @@ trait FakeMiniShop2 {
     public function getService($name, $class = '', $path = '') {
         if ($name === 'miniShop2' && $this->ms2On()) {
             if (!isset($this->services[$name])) { $this->services[$name] = new FakeMs2Service($this); }
+            return $this->services[$name];
+        }
+        // VirtualPage: the service class is found through the registered package.
+        if ($name === 'virtualpage' && isset($this->packages['virtualpage'])) {
+            if (!isset($this->services[$name])) { $this->services[$name] = new FakeVirtualPageService(); }
             return $this->services[$name];
         }
         return null;
@@ -713,6 +727,9 @@ class modX extends xPDO {
         // MIGX: a configuration takes its form tabs, and a form tab its fields (xPDO composites).
         array('migxConfig', 'migxFormtab', 'config_id', array()),
         array('migxFormtab', 'migxFormtabField', 'formtab_id', array()),
+        // VirtualPage: an event and a handler take their routes with them (xPDO composites 'Routes').
+        array('vpEvent', 'vpRoute', 'event', array()),
+        array('vpHandler', 'vpRoute', 'handler', array()),
         // A user takes its profile, memberships and settings with it.
         array('modUser', 'modUserProfile', 'internalKey', array()),
         array('modUser', 'modUserGroupMember', 'member', array()),

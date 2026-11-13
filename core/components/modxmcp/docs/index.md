@@ -5,6 +5,7 @@ Call `modx_help` with a `topic` for a focused guide.
 - `graph` — dependency graph, missing references and unused-element candidates.
 - `tv_input_types` — choose a TV input type and attach it to templates.
 - `migx` — MIGX: rows in a TV, named configurations (`migx_config`), binding a TV to a configuration.
+- `virtualpage` — VirtualPage: events, handlers and routes (`vp_event`, `vp_handler`, `vp_route`), the route tester.
 - `getting_started` — how to work on a site: orient, read, change safely, undo.
 
 Quick reference:
