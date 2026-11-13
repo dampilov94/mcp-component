@@ -5742,6 +5742,35 @@ check('vp help: the topic is served and listed, with the end-to-end example', in
 check('vp help: no 1.x tool name', strpos($vHelp['content'], 'modx_virtualpage_') === false && strpos($vHelp['content'], 'modx_create_element') === false);
 check('vp help: the index lists the topic', strpos($call($vRead, 'help')['content'], '`virtualpage`') !== false);
 
+// Review addition: VirtualPage 1.x wires its plugin `vpEvent` to the events routes use.
+list($vp1Site, $vp1Dev) = $retentionSite();
+$vp1Site->store('modNamespace', array('name' => 'virtualpage', 'path' => '{core_path}components/virtualpage/', 'assets_path' => ''));
+$vp1Site->store('modPlugin', array('id' => 50, 'name' => 'vpEvent', 'plugincode' => '', 'description' => '', 'category' => 0, 'disabled' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'property_preprocess' => 0));
+foreach (array('OnPageNotFound', 'OnHandleRequest') as $vpName) { $vp1Site->store('modEvent', array('name' => $vpName)); }
+$vp1Site->store('modChunk', array('id' => 7, 'name' => 'страница', 'snippet' => 'x', 'description' => '', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0));
+$vp1Core = $vp1Site->getOption('core_path') . 'components/virtualpage/';
+@mkdir($vp1Core . 'model/virtualpage', 0700, true);
+touch($vp1Core . 'model/virtualpage/virtualpage.class.php');
+touch($vp1Core . 'model/virtualpage/vproute.class.php');
+$vp1Ok = true;
+try { ModxMCP\Integration\VirtualPage::load($vp1Site); } catch (Throwable $e) { $vp1Ok = false; }
+if ($vp1Ok && in_array('vp_route', $call($vp1Dev, 'capabilities')['kinds'], true)) {
+    $vp1Event = $call($vp1Dev, 'create', array('kind' => 'vp_event', 'fields' => array('name' => 'OnPageNotFound')));
+    $vp1Handler = $call($vp1Dev, 'create', array('kind' => 'vp_handler', 'fields' => array('name' => 'Каталог', 'type' => 'chunk', 'entry' => 7)));
+    $vp1PluginRows = function () use ($vp1Site) { return $vp1Site->getCount('modPluginEvent', array('pluginid' => 50, 'event' => 'OnPageNotFound')); };
+    check('vp 1.x: an event without routes does not wire the plugin', $vp1PluginRows() === 0);
+    $vp1Route = $call($vp1Dev, 'create', array('kind' => 'vp_route', 'fields' => array('route' => '/catalog/{id:\d+}', 'handler' => $vp1Handler['id'], 'event' => $vp1Event['id'])));
+    check('vp 1.x: the first route wires the plugin to its event, journaled in the same changeset', $vp1PluginRows() === 1
+        && in_array('plugin', array_column($call($vp1Dev, 'history_diff', array('changeset_id' => $vp1Route['changeset_id']))['objects'], 'kind'), true));
+    $call($vp1Dev, 'undo', array('changeset_id' => $vp1Route['changeset_id'], 'confirm' => true));
+    check('vp 1.x: undo of the route unwires the plugin', $vp1PluginRows() === 0);
+    $vp1Route = $call($vp1Dev, 'create', array('kind' => 'vp_route', 'fields' => array('route' => '/catalog/{id:\d+}', 'handler' => $vp1Handler['id'], 'event' => $vp1Event['id'])));
+    $call($vp1Dev, 'delete', array('kind' => 'vp_route', 'id' => $vp1Route['id']));
+    check('vp 1.x: deleting the last route of an event unwires the plugin', $vp1PluginRows() === 0);
+} else {
+    check('vp 1.x: VirtualPage fixture is available for the plugin tests', false);
+}
+
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));
 check('canonical: list order is kept', Kernel::canonical(array(3, 1, 2)) === array(3, 1, 2));

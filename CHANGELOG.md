@@ -151,6 +151,9 @@ After stage 3:
 - MIGX: kind `migx_config` (form tabs and columns as JSON, shape checked; delete marks deleted),
   MIGX TV values on pages written and read as lists with `MIGX_id`s; TV `input_properties`
   (binds a MIGX TV to its configuration); help topic `migx`.
+- VirtualPage: kinds `vp_event`, `vp_handler`, `vp_route` (validated; cascades journaled; on
+  VirtualPage 1.x its plugin is wired to the events routes use, journaled with the route), route
+  tester `modx_invoke {kind: "vp_route", op: "resolve"}`, help topic `virtualpage`.
 
 - Offline tests (`npm test`): pure PHP logic, the real kernel behind PHP's built-in server with
   stubbed MODX classes, and the Node bridge end to end. CI runs them.

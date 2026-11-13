@@ -134,3 +134,29 @@ VirtualPage's cache (`default/virtualpage` and the rebuilt route lists) is clear
 - Should creating an event attach VirtualPage's plugin after all (the brief's design)? The source says no; which plugin would it be on 2.0.6?
 - Should a delete of an event or handler that routes use be refused instead of cascading? xPDO cascades and the manager does not refuse, so it cascades (journaled).
 - Case-insensitive route comparison (MySQL collation) vs the router's case-sensitive matching: `/Catalog` and `/catalog` are treated as the same route for the uniqueness rule.
+
+## Review
+
+Accepted and merged. The stand runs VirtualPage **1.0.9** (2.0.6 needs PHP 8 for its router
+and broke on the stand's PHP 7.4; the owner reinstalled 1.0.9). The model of the three
+classes is identical in both versions, so the kinds work unchanged. Verified on the stand with
+`scripts/stand/check-virtualpage.cjs`: an event, a handler on a test chunk and the route
+`/mcp2test-catalog/{id:\d+}`; `resolve` finds it; a real request to `/mcp2test-catalog/5` is
+answered by VirtualPage (200, the chunk rendered with the parameter); after the undo the URL is
+404 again and the error log is clean.
+
+Changes by the architect, both found only with 1.0.9 on the stand:
+
+1. **VirtualPage 1.x answers through its plugin `vpEvent`,** which its route processors attach
+   to an event when the first route uses it and detach when the last is gone
+   (`virtualpage::doEvent()`). The executor correctly found that 2.0.6 has no such wiring.
+   `AbstractVirtualPageKind::syncPluginEvents()` now keeps the plugin's events in step when the
+   plugin exists (1.x) and does nothing otherwise (2.x). The plugin is touched first, so the
+   change is in the same changeset and an undo of the route unwires it. To touch another object
+   from inside `writeObject()`, `Context` now carries the transaction in progress
+   (`$context->transaction`, set by `Writer::run`).
+2. **MODX keeps the event → plugin map in the context cache:** without a refresh the site kept
+   ignoring the new route (404). A changed plugin wiring now refreshes the MODX cache.
+
+Open questions answered: deleting an event or handler cascades to its routes (journaled), as
+VirtualPage does; route uniqueness by database collation is accepted.

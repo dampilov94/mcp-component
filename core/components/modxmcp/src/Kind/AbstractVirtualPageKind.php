@@ -84,11 +84,57 @@ abstract class AbstractVirtualPageKind extends Kind {
             if (!array_key_exists('rank', $columns) && array_key_exists('rank', $this->defaults())) {
                 $columns['rank'] = min(255, (int) $modx->getCount($this->modelClass()));
             }
-            return $this->save($modx, $object, $columns + $this->defaults());
+            $created = $this->save($modx, $object, $columns + $this->defaults());
+            $this->syncPluginEvents($context, $this->eventNamesOf($modx, $this->findByKey($modx, $created)));
+            return $created;
         }
         $object = $this->findByKey($modx, $id);
         if (!$object) { throw new ApiException('not_found', "No {$this->name()} with id {$id}."); }
-        return $this->save($modx, $object, $columns);
+        $before = $this->eventNamesOf($modx, $object);
+        $saved = $this->save($modx, $object, $columns);
+        $this->syncPluginEvents($context, array_merge($before, $this->eventNamesOf($modx, $this->findByKey($modx, $saved))));
+        return $saved;
+    }
+
+    /**
+     * VirtualPage 1.x answers routes through its plugin `vpEvent`, which its route processors attach to an event
+     * (priority 10) when a route uses it and detach when no route does (virtualpage::doEvent()). 2.x ships no such
+     * plugin and needs none. When the plugin exists, keep its events in step for the given event names, touching
+     * the plugin first so the change is journaled with the call and undone with it.
+     */
+    protected function syncPluginEvents(Context $context, array $eventNames) {
+        $modx = $context->modx;
+        $plugin = $modx->getObject('modPlugin', array('name' => 'vpEvent'), false);
+        if (!$plugin) { return; }
+        $pluginId = (int) $plugin->get('id');
+        $changed = false;
+        $pluginKind = $context->kinds->get('plugin');
+        if ($pluginKind && $context->transaction) { $context->transaction->touch($pluginKind, $pluginId); }
+        foreach (array_unique(array_filter(array_map('strval', $eventNames))) as $name) {
+            $used = false;
+            foreach ($modx->getCollection('vpEvent', array('name' => $name)) as $event) {
+                if ($modx->getCount('vpRoute', array('event' => (int) $event->get('id')))) { $used = true; }
+            }
+            $row = $modx->getObject('modPluginEvent', array('pluginid' => $pluginId, 'event' => $name));
+            if ($used && !$row) {
+                if (!$modx->getCount('modEvent', array('name' => $name))) { continue; }
+                $row = $modx->newObject('modPluginEvent');
+                $row->fromArray(array('pluginid' => $pluginId, 'event' => $name, 'priority' => 10, 'propertyset' => 0), '', true, true);
+                $row->save();
+                $changed = true;
+            } elseif (!$used && $row) {
+                $row->remove();
+                $changed = true;
+            }
+        }
+        // MODX keeps the event → plugin map in the context cache: without a refresh the site keeps
+        // calling (or not calling) the plugin as before.
+        if ($changed && $modx->getCacheManager()) { $modx->getCacheManager()->refresh(); }
+    }
+
+    /** Event names a write or delete of this object can affect (its own name, its routes' event). */
+    protected function eventNamesOf(\modX $modx, $object) {
+        return array();
     }
 
     /** Columns as stored (API spelling turned into what VirtualPage keeps). */
@@ -102,6 +148,8 @@ abstract class AbstractVirtualPageKind extends Kind {
         VirtualPage::load($modx);
         $object = $this->findByKey($modx, $key);
         if (!$object) { throw new ApiException('not_found', "No {$this->name()} with id {$key}."); }
+        $names = $this->eventNamesOf($modx, $object);
         if (!$object->remove()) { throw new \RuntimeException('Cannot remove the VirtualPage object.'); }
+        $this->syncPluginEvents($context, $names);
     }
 }

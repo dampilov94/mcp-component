@@ -24,6 +24,11 @@ final class VpEventKind extends AbstractVirtualPageKind {
     public function defaultSort() { return array(array('rank', 'ASC'), array('id', 'ASC')); }
     protected function defaults() { return self::DEFAULTS; }
 
+    /** The event's own name (before and after a rename). */
+    protected function eventNamesOf(\modX $modx, $object) {
+        return $object ? array((string) $object->get('name')) : array();
+    }
+
     public function fields() {
         return array(
             'id'          => array('type' => 'integer', 'list' => true, 'read_only' => true),

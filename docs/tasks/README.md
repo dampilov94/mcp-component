@@ -60,7 +60,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 21 | [miniShop2 products and options](21-minishop2-products.md) | `task/21-minishop2-products` | merged |
 | 22 | [miniShop2 links and orders](22-minishop2-links-orders.md) | `task/22-minishop2-links-orders` | merged |
 | 23 | [MIGX](23-migx.md) | `task/23-migx` | merged |
-| 24 | [VirtualPage](24-virtualpage.md) | `task/24-virtualpage` | ready for the executor |
+| 24 | [VirtualPage](24-virtualpage.md) | `task/24-virtualpage` | merged |
 
 ## Doing several briefs in a row
 

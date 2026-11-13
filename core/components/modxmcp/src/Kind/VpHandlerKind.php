@@ -23,6 +23,17 @@ final class VpHandlerKind extends AbstractVirtualPageKind {
     public function defaultSort() { return array(array('rank', 'ASC'), array('id', 'ASC')); }
     protected function defaults() { return self::DEFAULTS; }
 
+    /** Deleting a handler removes its routes, whose events may then have none left. */
+    protected function eventNamesOf(\modX $modx, $object) {
+        $names = array();
+        if (!$object) { return $names; }
+        foreach ($modx->getCollection('vpRoute', array('handler' => (int) $object->get('id'))) as $route) {
+            $event = $modx->getObject('vpEvent', array('id' => (int) $route->get('event')), false);
+            if ($event) { $names[] = (string) $event->get('name'); }
+        }
+        return $names;
+    }
+
     public function fields() {
         return array(
             'id'          => array('type' => 'integer', 'list' => true, 'read_only' => true),

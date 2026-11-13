@@ -26,6 +26,12 @@ final class VpRouteKind extends AbstractVirtualPageKind {
     public function defaultSort() { return array(array('rank', 'ASC'), array('id', 'ASC')); }
     protected function defaults() { return self::DEFAULTS; }
 
+    /** A route needs VirtualPage 1.x's plugin on the event it belongs to. */
+    protected function eventNamesOf(\modX $modx, $object) {
+        $event = $object ? $modx->getObject('vpEvent', array('id' => (int) $object->get('event')), false) : null;
+        return $event ? array((string) $event->get('name')) : array();
+    }
+
     public function fields() {
         return array(
             'id'          => array('type' => 'integer', 'list' => true, 'read_only' => true),
