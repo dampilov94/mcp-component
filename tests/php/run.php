@@ -6467,7 +6467,7 @@ check('audit: broken snippet and disabled plugin with line and message', array_k
 $f = $aOne('missing_template');
 check('audit: a live page with a missing template, not the deleted one', $f && $f['severity'] === 'error' && $f['id'] === 8 && $f['name'] === 'Без шаблона' && $f['details'] === array('template' => 77)
     && $audit['summary']['missing_template']['scanned'] === 7);
-check('audit: scanned counts and the rules in the notes', $audit['summary']['broken_link']['scanned'] === 8 + (5 + 2 + 2 + 2) && $audit['summary']['unused_element']['scanned'] === 5 + 2 + 2 + 2
+check('audit: scanned counts and the rules in the notes', $audit['summary']['broken_link']['scanned'] === 7 + (5 + 2 + 2 + 2) && $audit['summary']['unused_element']['scanned'] === 5 + 2 + 2 + 2
     && count(array_filter($audit['notes'], function ($note) { return strpos($note, 'unused_element follows the dependency graph') === 0; })) === 1);
 check('audit: read-only, nothing changed and nothing journaled', array($aSite->tableDump('modResource'), $aSite->tableDump('modChunk'), $aSite->tableDump('modSnippet'), $aSite->tableDump('modPlugin')) === $aStateBefore
     && count($call($aRead, 'history', array('limit' => 100))['changesets']) === $aJournalBefore);

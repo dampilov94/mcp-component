@@ -48,11 +48,15 @@ final class Runner {
             } elseif ($spec['mode'] === 'chunk') {
                 $result = $modx->getChunk($spec['name'], $spec['properties']);
             } else {
-                // The two passes MODX makes for a page: the cacheable tags, then the uncacheable ones. Tags that could not be
-                // processed stay in the text (the third pass that removes them is left out, so a missing element is visible).
+                $result = $spec['text'];
+            }
+            if (is_string($result) && strpos($result, '[[') !== false) {
+                // What a page would finally show: the two passes MODX makes for a page, the cacheable tags and then the
+                // uncacheable ones — also over the output of a snippet or chunk, whose [[!tags]] are otherwise left for
+                // the page. Tags that cannot be processed stay in the text (the third pass that removes them is left
+                // out), so a missing element is visible.
                 $modx->getParser();
                 $iterations = (int) $modx->getOption('parser_max_iterations', null, 10);
-                $result = $spec['text'];
                 $modx->parser->processElementTags('', $result, false, false, '[[', ']]', array(), $iterations);
                 $modx->parser->processElementTags('', $result, true, false, '[[', ']]', array(), $iterations);
             }
