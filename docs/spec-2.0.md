@@ -553,14 +553,14 @@ MODX ставит блокировку. Конвейер записи прове
 1. **Ядро** (сделано). Структура `src/`, автозагрузка, протокол v2, манифест, токены с
    областями, тонкий клиент, `capabilities`, `site_info`, `describe`, `help`,
    `request_status`; минимальное управление токенами на странице компонента.
-2. **Запись и журнал** (сделано, кроме проверки блокировки в админке). Конвейер записи,
+2. **Запись и журнал** (сделано). Конвейер записи,
    ревизии, таблицы журнала, хранилище содержимого, проверка PHP, обнаружение внешних правок,
    запись правок из админки плагином, `duplicate`, `invoke`, `make_static` и авто-статика,
    очистка журнала по сроку и объёму. Виды `chunk`, `snippet`, `template`, `plugin`, `tv`, `category`.
    Инструменты объектов и кода, `history`, `history_diff`, `undo`, `checkpoint`.
 3. **Контент и файлы** (сделано; свойства источников файлов пока не редактируются). Вид `resource` с TV, `resource_tree`, `bulk_resources`, файловые
    инструменты, `media_source`.
-4. **Проверка.** `run`, `check_page`, `read_log`, `audit_site`, `search`, `replace`,
+4. **Проверка** (сделано). `run`, `check_page`, `read_log`, `audit_site`, `search`, `replace`,
    `find_usages`, `dependency_graph`.
 5. **Администрирование.** Виды настроек, доступа, пакетов; `install_package`,
    `uninstall_package`, `maintenance`, `run_processor`, `query_db`.

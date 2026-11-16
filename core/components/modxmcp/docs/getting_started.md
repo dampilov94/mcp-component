@@ -134,6 +134,13 @@ Rules that keep a live site safe:
   returns status, time, title and the error-log entries written during the request. MODX
   drops unknown tags from the output, so a missing snippet or a broken tag is found in
   those log entries, not in the page.
+- `modx_run {snippet|chunk|text, properties?, context?, resource?}` runs a snippet, renders a
+  chunk or parses a string of MODX tags and returns the output, the time, new error-log lines
+  and `unparsed_tags` (usually a missing element). It is off until the administrator sets
+  `modxmcp.allow_run`, needs the `develop` scope and really executes the code: what the code
+  changes on the site is not journaled and `modx_undo` cannot revert it. An error thrown by the
+  code comes back as `ok: false` with type, message and line. A snippet's echo and return value
+  are joined in `output`, as MODX does. Use `dry_run: true` to see what would run.
 - `modx_read_log` returns the tail of the MODX error log and an `end_offset`. Read it
   before a risky change, then call it with `after_offset` afterwards to see only new errors.
 - `modx_maintenance {operation}` (admin): `clear_cache`, `refresh_uris`, `remove_locks`,

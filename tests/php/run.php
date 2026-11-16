@@ -6240,7 +6240,7 @@ $oSite = fakeSite($oDir);
 $oSite->options['modxmcp.auto_static'] = false;
 $oSite->store('modUser', array('id' => 601, 'username' => 'Редактор', 'primary_group' => 0));
 $oSite->store('modUser', array('id' => 602, 'username' => 'service', 'primary_group' => 0));
-$oSite->store('modResource', array('id' => 9, 'pagetitle' => 'placeholder', 'context_key' => 'web'));
+$oSite->store('modResource', array('id' => 9, 'pagetitle' => 'placeholder', 'context_key' => 'web', 'content' => ''));
 $oCtx = function ($scope = 'develop') use ($oSite, $dev) { return new Context($oSite, array('scope' => $scope) + $dev->token, $dev->corePath, function () { throw new RuntimeException('no store'); }); };
 $oText = "Текст страницы\nвторая строка";
 $oMake = function ($title) use ($call, $oCtx, $oText) { return $call($oCtx(), 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => $title, 'content' => $oText)))['id']; };
@@ -6374,6 +6374,30 @@ $oRecorderSource = '';
 foreach (glob($oCtx()->corePath . 'src/Manager/*.php') as $oFile) { $oRecorderSource .= file_get_contents($oFile); }
 check('open: the manager recorder does not call assertNotOpen', $oRecorderSource !== '' && strpos($oRecorderSource, 'assertNotOpen') === false && strpos($oRecorderSource, 'openInManager') === false);
 
+// MODX's resource delete processor locks every child and never unlocks it. The API call must not leave those locks
+// behind (they would read as "open in the manager" by the service user for lock_ttl and block the next write or undo),
+// but a lock that a person held before the call stays.
+$oUserBefore = $oSite->user;
+$oSite->user = new FakeObject($oSite, 'modUser', array('id' => 602, 'username' => 'service', 'active' => 1), false);
+$oFolder = $oMake('Папка');
+$oKid1 = $call($oCtx(), 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Дочерняя 1', 'parent' => $oFolder, 'content' => 'x')))['id'];
+$oKid2 = $call($oCtx(), 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Дочерняя 2', 'parent' => $oFolder, 'content' => 'x')))['id'];
+$oSite->lockResource($oKid2, 601);
+$oDel = $call($oCtx(), 'delete', array('kind' => 'resource', 'id' => $oFolder));
+check('locks: an API delete leaves no lock of its own on the children', $oSite->getObject('modResource', $oKid1)->get('deleted') == 1 && $oSite->resourceLock($oKid1) === 0);
+check('locks: a lock a person held before the call is kept', $oSite->resourceLock($oKid2) === 601);
+$oSite->unlockResource($oKid2);
+$oUndo = $call($oCtx(), 'undo', array('changeset_id' => $oDel['changeset_id'], 'confirm' => true));
+check('locks: so the delete can be undone at once, without force', $oUndo['performed'] === true && $oUndo['conflicts'] === 0
+    && $oSite->getObject('modResource', $oKid1)->get('deleted') == 0 && $oSite->resourceLock($oKid1) === 0);
+$oSite->lockResource($oKid1, 602);
+$e = throws('locks: a lock of the service user that existed before the call still blocks', ApiException::class, function () use ($call, $oCtx, $oKid1) {
+    $call($oCtx(), 'update', array('kind' => 'resource', 'id' => $oKid1, 'fields' => array('longtitle' => 'x')));
+});
+check('locks: and it is kept', $e && $e->details['reason'] === 'open_in_manager' && $oSite->resourceLock($oKid1) === 602);
+$oSite->unlockResource($oKid1);
+$oSite->user = $oUserBefore;
+
 // --- Site audit ---
 use ModxMCP\Verify\SiteAudit;
 $aDir = sys_get_temp_dir() . '/modxmcp-audit-' . bin2hex(random_bytes(6));
@@ -6467,7 +6491,7 @@ check('audit: broken snippet and disabled plugin with line and message', array_k
 $f = $aOne('missing_template');
 check('audit: a live page with a missing template, not the deleted one', $f && $f['severity'] === 'error' && $f['id'] === 8 && $f['name'] === 'Без шаблона' && $f['details'] === array('template' => 77)
     && $audit['summary']['missing_template']['scanned'] === 7);
-check('audit: scanned counts and the rules in the notes', $audit['summary']['broken_link']['scanned'] === 8 + (5 + 2 + 2 + 2) && $audit['summary']['unused_element']['scanned'] === 5 + 2 + 2 + 2
+check('audit: scanned counts and the rules in the notes', $audit['summary']['broken_link']['scanned'] === 7 + (5 + 2 + 2 + 2) && $audit['summary']['unused_element']['scanned'] === 5 + 2 + 2 + 2
     && count(array_filter($audit['notes'], function ($note) { return strpos($note, 'unused_element follows the dependency graph') === 0; })) === 1);
 check('audit: read-only, nothing changed and nothing journaled', array($aSite->tableDump('modResource'), $aSite->tableDump('modChunk'), $aSite->tableDump('modSnippet'), $aSite->tableDump('modPlugin')) === $aStateBefore
     && count($call($aRead, 'history', array('limit' => 100))['changesets']) === $aJournalBefore);
@@ -6502,6 +6526,176 @@ SiteAudit::$maxResources = 5000;
 check('audit: below the cap everything is scanned', $cUncapped['summary']['missing_template'] === array('count' => 4, 'truncated' => false, 'scanned' => 4));
 check('audit: above the cap the newest-edited pages are scanned and truncated is set with a note', $cCapped['summary']['missing_template'] === array('count' => 2, 'truncated' => true, 'scanned' => 2)
     && array_column($cCapped['findings'], 'id') === array(1, 2) && count(array_filter($cCapped['notes'], function ($note) { return strpos($note, '2 most recently edited of 4 resources') !== false; })) === 1);
+
+// --- Run ---
+$uDir = sys_get_temp_dir() . '/modxmcp-run-' . bin2hex(random_bytes(6));
+mkdir($uDir . '/core/cache/logs', 0700, true);
+$uBase = dirname(dirname(__DIR__)) . '/';
+$uSite = fakeSite($uDir, array('modxmcp.allow_run' => true, 'base_path' => $uBase));
+$uSite->store('modContext', array('key' => 'mgr', 'name' => 'Manager'));
+$uSite->store('modContext', array('key' => 'web', 'name' => 'Web'));
+$uSite->store('modContext', array('key' => 'second', 'name' => 'Second'));
+$uSite->store('modResource', array('id' => 1, 'pagetitle' => 'Главная', 'context_key' => 'web', 'content' => 'x', 'uri' => 'index.html'));
+$uSite->store('modResource', array('id' => 2, 'pagetitle' => 'Другая страница', 'context_key' => 'second', 'content' => 'y', 'uri' => 'other.html'));
+$uSnippets = array();
+$uSnippet = function ($name, callable $body) use ($uSite) {
+    static $id = 0;
+    $uSite->store('modSnippet', array('id' => ++$id, 'name' => $name, 'snippet' => '', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => ''));
+    $uSite->snippetRunners[$name] = $body;
+};
+$uChunk = function ($id, $name, $content) use ($uSite) {
+    $uSite->store('modChunk', array('id' => $id, 'name' => $name, 'snippet' => $content, 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => ''));
+};
+$uLog = $uSite->getCachePath() . 'logs/error.log';
+file_put_contents($uLog, "[2026-01-01 09:00:00] (ERROR in Old::line @ fake) Старая ошибка\n");
+$uSnippet('hello', function (array $scriptProperties, $modx) { return 'Привет, ' . (isset($scriptProperties['name']) ? $scriptProperties['name'] : 'мир'); });
+$uSnippet('echoer', function (array $scriptProperties, $modx) { echo 'эхо '; return 'ответ'; });
+$uSnippet('where', function (array $scriptProperties, $modx) { return $modx->context->get('key') . '|' . $modx->resourceIdentifier . '|' . ($modx->resource ? $modx->resource->get('pagetitle') : '-'); });
+$uSnippet('thrower', function (array $scriptProperties, $modx) { echo 'частично'; throw new RuntimeException('Ошибка в сниппете'); });
+$uSnippet('wherethrow', function (array $scriptProperties, $modx) { throw new LogicException($modx->context->get('key')); });
+$uSnippet('leaky', function (array $scriptProperties, $modx) { ob_start(); ob_start(); echo 'утечка'; return 'ok'; });
+$uSnippet('big', function (array $scriptProperties, $modx) { return str_repeat('я', 100); });
+$uSnippet('logger', function (array $scriptProperties, $modx) use ($uLog) { file_put_contents($uLog, "[2026-01-01 10:01:00] (ERROR in Foo::bar @ fake) Ошибка журнала\n[2026-01-01 10:02:00] (WARN @ fake) Предупреждение\n", FILE_APPEND); return 'готово'; });
+$uSnippet('structured', function (array $scriptProperties, $modx) { return array('имя' => 'ы', 'n' => 3); });
+$uSnippet('tags', function (array $scriptProperties, $modx) { return "строка\nПривет [[\$нет]] и [[+пусто]]"; });
+$uSnippet('manytags', function (array $scriptProperties, $modx) { return str_repeat('[[+нет]] ', 25); });
+$uChunk(1, 'wrap', '<b>[[+title]]</b> [[*pagetitle]] [[$inner? &t=`вложенный`]]');
+$uChunk(2, 'inner', '(внутри [[+t]])');
+$uAdmin = new Context($uSite, array('scope' => 'admin') + $dev->token, $dev->corePath, function () { throw new RuntimeException('no store'); });
+$uCtx = function ($scope = 'develop', array $token = array()) use ($uSite, $dev) { return new Context($uSite, $token + array('scope' => $scope) + $dev->token, $dev->corePath, function () { throw new RuntimeException('no store'); }); };
+$uTools = function ($scope) use ($uCtx) { return array_column(Manifest::tools($uCtx($scope)), 'name'); };
+$uCalls = function () use ($uSite) { return count($uSite->runCalls); };
+$uHistory = function () use ($call, $uCtx) { return $call($uCtx(), 'history', array('limit' => 100))['changesets']; };
+$uState = function () use ($uSite) { return array($uSite->context->get('key'), $uSite->resource, $uSite->resourceIdentifier, ob_get_level()); };
+$uBefore = $uState();
+
+// the gate, the scope and the manifest
+check('run: with the setting on, a develop token has the tool; a content token does not', in_array('modx_run', $uTools('develop'), true) && !in_array('modx_run', $uTools('content'), true) && !in_array('modx_run', $uTools('read'), true));
+$e = throws('run: a content token is refused', ApiException::class, function () use ($call, $uCtx) { $call($uCtx('content'), 'run', array('text' => 'x')); });
+check('run: refusal for the scope is forbidden_scope', $e && $e->errorCode === 'forbidden_scope');
+$uSite->options['modxmcp.allow_run'] = false;
+$e = throws('run: gate off', ApiException::class, function () use ($call, $uCtx) { $call($uCtx(), 'run', array('text' => 'x')); });
+check('run: gate off is unavailable and the tool is absent from every manifest', $e && $e->errorCode === 'unavailable' && $e->getMessage() === 'disabled_by_setting' && !in_array('modx_run', $uTools('admin'), true) && $uCalls() === 0);
+$uSite->options['modxmcp.allow_run'] = true;
+$uAction = $uCtx()->actions->get('run');
+check('run: effect flags and schema', $uAction->readOnly() === false && $uAction->reversible() === false && $uAction->openWorld() === true && $uAction->destructive() === true && $uAction->scope() === 'develop'
+    && $uAction->group() === 'verify' && strpos($uAction->description(), 'NOT journaled') !== false);
+check('run: the setting is in the build data and both lexicons', strpos(file_get_contents(dirname(dirname(__DIR__)) . '/_build/data/transport.settings.php'), "'modxmcp.allow_run', 0, 'combo-boolean', 'modxmcp:security'") !== false
+    && strpos(file_get_contents($uBase . 'core/components/modxmcp/lexicon/en/setting.inc.php'), "setting_modxmcp.allow_run_desc") !== false
+    && strpos(file_get_contents($uBase . 'core/components/modxmcp/lexicon/ru/setting.inc.php'), "setting_modxmcp.allow_run_desc") !== false);
+
+// snippet mode: properties reach the code, the result is a result
+$c = $uCtx();
+$r = $call($c, 'run', array('snippet' => 'hello', 'properties' => array('name' => 'Мир')));
+check('run snippet: properties reach the code', $r['ok'] === true && $r['mode'] === 'snippet' && $r['name'] === 'hello' && $r['output'] === 'Привет, Мир' && $r['output_type'] === 'string'
+    && $r['echoed'] === '' && $r['truncated'] === false && $r['bytes'] === strlen('Привет, Мир') && $r['performed'] === true && is_int($r['duration_ms']) && $r['context'] === 'web');
+check('run snippet: the warning about untracked changes is given', in_array('Changes made by the executed code are not journaled.', $c->warnings, true));
+check('run snippet: no properties is an empty set', $call($uCtx(), 'run', array('snippet' => 'hello'))['output'] === 'Привет, мир');
+$r = $call($uCtx(), 'run', array('snippet' => 'echoer'));
+check('run snippet: what the snippet echoes and returns are joined, as MODX does, and nothing escapes its buffer', $r['output'] === 'эхо ответ' && $r['echoed'] === '');
+$r = $call($uCtx(), 'run', array('snippet' => 'structured'));
+check('run snippet: a returned array is JSON and says so', $r['output'] === '{"имя":"ы","n":3}' && $r['output_type'] === 'json');
+$r = $call($uCtx(), 'run', array('snippet' => 'leaky'));
+check('run snippet: buffers the code left open are closed', $r['ok'] === true && $r['output'] === 'утечкаok' && ob_get_level() === $uBefore[3]);
+
+// chunk mode
+$r = $call($uCtx(), 'run', array('chunk' => 'wrap', 'properties' => array('title' => 'Заголовок'), 'resource' => 1));
+check('run chunk: placeholders, resource fields and a nested chunk', $r['ok'] === true && $r['mode'] === 'chunk' && $r['name'] === 'wrap' && $r['resource'] === 1
+    && $r['output'] === '<b>Заголовок</b> Главная (внутри вложенный)' && $r['unparsed_count'] === 0 && $r['unparsed_tags'] === array());
+$r = $call($uCtx(), 'run', array('chunk' => 'wrap'));
+check('run chunk: without the resource its tags stay and are listed', $r['output'] === '<b>[[+title]]</b> [[*pagetitle]] (внутри вложенный)' && $r['unparsed_count'] === 2
+    && array_column($r['unparsed_tags'], 'tag') === array('[[+title]]', '[[*pagetitle]]') && $r['unparsed_tags'][0]['line'] === 1);
+
+// text mode: the two parser passes of a page, leftovers stay visible
+$uSite->parser->passes = array();
+$r = $call($uCtx(), 'run', array('text' => "[[*pagetitle]] — [[hello? &name=`Мир`]]\n[[!hello]] [[\$нет]]", 'resource' => 1));
+check('run text: cacheable and uncacheable tags are processed, a missing chunk stays', $r['ok'] === true && $r['mode'] === 'text' && !isset($r['name'])
+    && $r['output'] === "Главная — Привет, Мир\nПривет, мир [[\$нет]]" && $r['unparsed_count'] === 1 && $r['unparsed_tags'] === array(array('tag' => '[[$нет]]', 'line' => 2)));
+check('run text: the cacheable pass, then the uncacheable one, and never the pass that removes unprocessed tags',
+    $uSite->parser->passes[0] === array(false, false, 10) && in_array(array(true, false, 10), $uSite->parser->passes, true) && !in_array(true, array_column($uSite->parser->passes, 1), true));
+$r = $call($uCtx(), 'run', array('snippet' => 'tags'));
+check('run: unparsed tags carry their line', $r['unparsed_tags'] === array(array('tag' => '[[$нет]]', 'line' => 2), array('tag' => '[[+пусто]]', 'line' => 2)));
+$r = $call($uCtx(), 'run', array('snippet' => 'manytags'));
+check('run: at most 20 unparsed tags are listed, the count is real', count($r['unparsed_tags']) === 20 && $r['unparsed_count'] === 25);
+
+// context and resource: set during the run, restored after it
+$r = $call($uCtx(), 'run', array('snippet' => 'where', 'context' => 'second', 'resource' => 2));
+check('run: the context and the resource are set during the run', $r['output'] === 'second|2|Другая страница' && $r['context'] === 'second' && $r['resource'] === 2);
+check('run: they are restored after it', $uState() === $uBefore);
+$r = $call($uCtx(), 'run', array('snippet' => 'where'));
+check('run: without a resource none is set, the default context is web', $r['output'] === 'web||-' && $uState() === $uBefore);
+$uSite->resource = $uSite->getObject('modResource', 1);
+$uSite->resourceIdentifier = 1;
+$r = $call($uCtx(), 'run', array('snippet' => 'where', 'context' => 'second', 'resource' => 2));
+check('run: the previous resource comes back too', $uSite->resourceIdentifier === 1 && (int) $uSite->resource->get('id') === 1);
+$uSite->resource = null;
+$uSite->resourceIdentifier = null;
+$r = $call($uCtx(), 'run', array('snippet' => 'wherethrow', 'context' => 'second', 'resource' => 2));
+check('run: a throwing snippet is a result and the state is restored all the same', $r['ok'] === false && $r['error']['message'] === 'second' && $uState() === $uBefore);
+
+// errors of the code under test
+$r = $call($uCtx(), 'run', array('snippet' => 'thrower'));
+check('run: an exception is a result with type, message, line and a relative file', $r['ok'] === false && $r['error']['type'] === 'RuntimeException' && $r['error']['message'] === 'Ошибка в сниппете'
+    && is_int($r['error']['line']) && $r['error']['line'] > 0 && $r['error']['file'] === 'tests/php/run.php' && strpos(json_encode($r), $uBase) === false);
+check('run: the partial output is kept', $r['echoed'] === 'частично' && $r['output'] === '' && $uState() === $uBefore);
+$e = throws('run: a missing snippet', ApiException::class, function () use ($call, $uCtx) { $call($uCtx(), 'run', array('snippet' => 'нет такого')); });
+$e2 = throws('run: a missing chunk', ApiException::class, function () use ($call, $uCtx) { $call($uCtx(), 'run', array('chunk' => 'нет такого')); });
+check('run: missing snippet and chunk are not_found', $e && $e2 && $e->errorCode === 'not_found' && $e2->errorCode === 'not_found');
+
+// truncation: by bytes, never inside a character
+$r = $call($uCtx(), 'run', array('snippet' => 'big', 'max_output' => 51));
+check('run: output is cut on a character boundary, the real size is reported', $r['truncated'] === true && $r['bytes'] === 200 && strlen($r['output']) === 50 && preg_match('//u', $r['output']) === 1
+    && $r['output'] === str_repeat('я', 25));
+$r = $call($uCtx(), 'run', array('snippet' => 'big'));
+check('run: below the limit nothing is cut', $r['truncated'] === false && $r['bytes'] === 200 && $r['output'] === str_repeat('я', 100));
+throws('run: max_output above 200000', ApiException::class, function () use ($call, $uCtx) { $call($uCtx(), 'run', array('snippet' => 'big', 'max_output' => 200001)); });
+
+// new error-log lines
+$r = $call($uCtx(), 'run', array('snippet' => 'logger'));
+check('run: only the log lines written during the run are reported', $r['new_log_errors'] === 2 && count($r['log_lines']) === 2 && $r['log_lines'][0]['message'] === 'Ошибка журнала' && $r['log_lines'][0]['level'] === 'ERROR'
+    && $r['log_lines'][1]['message'] === 'Предупреждение');
+check('run: a run that logs nothing reports none', $call($uCtx(), 'run', array('snippet' => 'hello'))['new_log_errors'] === 0);
+
+// journal: one informational changeset per run, not reversible, refused by undo
+$uHistoryBefore = count($uHistory());
+$uRun = $call($uCtx(), 'run', array('snippet' => 'hello', 'properties' => array('name' => 'Мир')));
+$uEntries = $uHistory();
+check('run: exactly one informational changeset, named after the run, not reversible', count($uEntries) === $uHistoryBefore + 1 && $uRun['changeset_id'] === $uEntries[0]['changeset_id'] && $uRun['reversible'] === false
+    && $uEntries[0]['tool'] === 'run' && $uEntries[0]['summary'] === 'run snippet hello' && $uEntries[0]['objects'] === array());
+$uText = $call($uCtx(), 'run', array('text' => 'просто текст'));
+$uChunkRun = $call($uCtx(), 'run', array('chunk' => 'inner', 'properties' => array('t' => 'x')));
+$uEntries = $uHistory();
+check('run: chunk and text runs are named too', $uEntries[0]['summary'] === 'run chunk inner' && $uEntries[1]['summary'] === 'run text');
+$e = throws('run: modx_undo refuses it', ApiException::class, function () use ($call, $uCtx, $uRun) { $call($uCtx(), 'undo', array('changeset_id' => $uRun['changeset_id'], 'confirm' => true)); });
+check('run: the refusal is not_reversible', $e && $e->errorCode === 'not_reversible');
+$call($uCtx(), 'run', array('snippet' => 'thrower'));
+check('run: a failed run is journaled as failed', $uHistory()[0]['summary'] === 'run snippet thrower (failed)');
+
+// a plan-only token and dry_run do not execute
+$uCountBefore = $uCalls();
+$uHistoryBefore = count($uHistory());
+$uDry = $call($uCtx(), 'run', array('snippet' => 'hello', 'dry_run' => true, 'context' => 'second', 'resource' => 2));
+$uPlanned = $call($uCtx('develop', array('plan_only' => true)), 'run', array('chunk' => 'wrap'));
+$uPlannedText = $call($uCtx('develop', array('plan_only' => true)), 'run', array('text' => '[[hello]]'));
+check('run: dry_run and a plan-only token say what would run and execute nothing', $uCalls() === $uCountBefore && count($uHistory()) === $uHistoryBefore
+    && $uDry['dry_run'] === true && $uDry['performed'] === false && $uDry['mode'] === 'snippet' && $uDry['name'] === 'hello' && $uDry['context'] === 'second' && $uDry['resource'] === 2
+    && $uPlanned['planned'] === true && $uPlanned['performed'] === false && $uPlanned['would_run'] === 'run chunk wrap in context web' && $uPlannedText['planned'] === true && $uState() === $uBefore);
+
+// validation
+foreach (array('none' => array(), 'two' => array('snippet' => 'hello', 'chunk' => 'wrap'), 'three' => array('snippet' => 'hello', 'chunk' => 'wrap', 'text' => 'x')) as $label => $args) {
+    $e = throws("run: {$label} of snippet/chunk/text", ApiException::class, function () use ($call, $uCtx, $args) { $call($uCtx(), 'run', $args); });
+    check("run: {$label} of snippet/chunk/text is validation_failed", $e && $e->errorCode === 'validation_failed');
+}
+$e = throws('run: properties with text', ApiException::class, function () use ($call, $uCtx) { $call($uCtx(), 'run', array('text' => 'x', 'properties' => array('a' => 1))); });
+check('run: properties with text is validation_failed', $e && $e->errorCode === 'validation_failed');
+$e = throws('run: a resource of another context', ApiException::class, function () use ($call, $uCtx) { $call($uCtx(), 'run', array('snippet' => 'hello', 'resource' => 2)); });
+check('run: a resource from another context is validation_failed and nothing ran', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), "'second'") !== false);
+$e = throws('run: a missing resource', ApiException::class, function () use ($call, $uCtx) { $call($uCtx(), 'run', array('snippet' => 'hello', 'resource' => 99)); });
+$e2 = throws('run: an unknown context', ApiException::class, function () use ($call, $uCtx) { $call($uCtx(), 'run', array('snippet' => 'hello', 'context' => 'nope')); });
+check('run: a missing resource and an unknown context are validation_failed', $e && $e2 && $e->errorCode === 'validation_failed' && $e2->errorCode === 'validation_failed');
+throws('run: text longer than 20000 characters', ApiException::class, function () use ($call, $uCtx) { $call($uCtx(), 'run', array('text' => str_repeat('я', 20001))); });
+check('run: text of exactly 20000 characters is accepted', $call($uCtx(), 'run', array('text' => str_repeat('я', 20000), 'max_output' => 10))['truncated'] === true);
+check('run: none of the failed validations ran anything or left state behind', $uState() === $uBefore);
 
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));

@@ -128,10 +128,19 @@ final class ResourceKind extends Kind {
      * A recorded state that holds product rows cannot be put back while miniShop2 is switched off or gone: the rows would
      * be left as they are and the undo would claim to have restored them.
      */
-    public function openInManager(\modX $modx, $key) {
+    public function managerLockOwner(\modX $modx, $key) {
         $resource = $this->findByKey($modx, $key);
         // getLock() reads the lock registry; a lock past its TTL reads as 0 (and MODX drops that message).
-        $userId = $resource ? (int) $resource->getLock() : 0;
+        return $resource ? (int) $resource->getLock() : 0;
+    }
+
+    public function releaseManagerLock(\modX $modx, $key, $userId) {
+        $resource = $this->findByKey($modx, $key);
+        if ($resource) { $resource->removeLock((int) $userId); }
+    }
+
+    public function openInManager(\modX $modx, $key) {
+        $userId = $this->managerLockOwner($modx, $key);
         if (!$userId) { return null; }
         $user = $modx->getObject('modUser', $userId);
         return array('user_id' => $userId, 'username' => $user ? (string) $user->get('username') : '');

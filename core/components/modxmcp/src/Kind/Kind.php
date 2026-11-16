@@ -287,6 +287,15 @@ abstract class Kind {
         return null;
     }
 
+    /** The id of the user whose manager lock is on the object now, or 0. Only reads. */
+    public function managerLockOwner(\modX $modx, $key) {
+        return 0;
+    }
+
+    /** Remove the manager lock of $userId from the object (only that user's lock). */
+    public function releaseManagerLock(\modX $modx, $key, $userId) {
+    }
+
     /** Called after a successful write or delete through the processors, and after an undo has restored an object. */
     public function afterWrite(\modX $modx) {
     }

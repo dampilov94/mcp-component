@@ -124,7 +124,8 @@ final class SiteAudit {
             foreach ($modx->getCollection('modResource', array('id:IN' => $page)) as $resource) { $rows[(int) $resource->get('id')] = $resource; }
             ksort($rows);
             foreach ($rows as $id => $resource) {
-                $deleted = (bool) $resource->get('deleted');
+                // A page in the trash is not shown to anyone: its links and address are not problems of the site.
+                if ((bool) $resource->get('deleted')) { continue; }
                 $title = (string) $resource->get('pagetitle');
                 if ($graph) {
                     $this->summary['broken_link']['scanned']++;
@@ -133,7 +134,6 @@ final class SiteAudit {
                         $this->linkNames['resource:' . $id] = $title;
                     }
                 }
-                if ($deleted) { continue; }
                 if ($this->wants('missing_template')) {
                     $this->summary['missing_template']['scanned']++;
                     $template = (int) $resource->get('template');

@@ -52,9 +52,43 @@ final class Transaction {
             $this->lock->acquire($id);
             $before = $subject->capture();
             $this->recordOutsideChange($subject, $before);
-            $this->touched[$id] = array('subject' => $subject, 'extra' => array(), 'before' => $before);
+            $this->touched[$id] = array('subject' => $subject, 'extra' => array(), 'before' => $before, 'lock_before' => $this->lockOwner($subject));
         }
         return $this->touched[$id]['before'];
+    }
+
+    /**
+     * Who holds the object's manager lock (null when the subject has no such locks). Some MODX processors lock
+     * objects they touch and never unlock them — the resource delete processor locks every child and releases those
+     * locks only when saving fails — so afterwards the children would look "open in the manager" by whoever deleted
+     * them (the API's service user, or the person in the manager) for lock_ttl seconds, and an undo would see a
+     * conflict. release() removes such locks of the acting user; a lock that existed before the call is kept.
+     */
+    private function lockOwner(Subject $subject) {
+        if (!($subject instanceof ObjectSubject)) { return null; }
+        try {
+            return $subject->kind()->managerLockOwner($this->context->modx, $subject->key());
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /** Remove manager locks that this call's processors left on objects that had none before it. */
+    private function releaseLeftLocks() {
+        $modx = $this->context->modx;
+        $self = $modx->user ? (int) $modx->user->get('id') : 0;
+        if ($self <= 0) { return; }
+        foreach ($this->touched as $entry) {
+            if (!array_key_exists('lock_before', $entry) || $entry['lock_before'] !== 0) { continue; }
+            $subject = $entry['subject'];
+            try {
+                if ($subject->kind()->managerLockOwner($modx, $subject->key()) === $self) {
+                    $subject->kind()->releaseManagerLock($modx, $subject->key(), $self);
+                }
+            } catch (\Throwable $e) {
+                $modx->log(\modX::LOG_LEVEL_ERROR, '[modxmcp] Could not release the lock MODX left on ' . $subject->kindName() . ' ' . $subject->key() . ': ' . $e->getMessage());
+            }
+        }
     }
 
     /**
@@ -216,6 +250,7 @@ final class Transaction {
     }
 
     public function release() {
+        if (!$this->released) { $this->releaseLeftLocks(); }
         $this->lock->releaseAll();
         if (!$this->released) {
             $this->released = true;

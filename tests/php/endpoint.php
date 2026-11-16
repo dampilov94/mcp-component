@@ -41,6 +41,10 @@ function installVirtualPage($modx, $dir) {
 
 function testSite($dir) {
     $modx = testSiteOptions($dir);
+    // A real site always has its contexts; modx_run starts in web.
+    if (getenv('MODXMCP_TEST_ALLOW_RUN')) {
+        foreach (array('mgr' => 'Manager', 'web' => 'Web') as $key => $name) { $modx->store('modContext', array('key' => $key, 'name' => $name)); }
+    }
     if (getenv('MODXMCP_TEST_MS2')) { installMiniShop2($modx, $dir); }
     if (getenv('MODXMCP_TEST_MIGX')) { installMigx($modx, $dir); }
     if (getenv('MODXMCP_TEST_VIRTUALPAGE')) { installVirtualPage($modx, $dir); }
@@ -54,6 +58,7 @@ function testSiteOptions($dir) {
         'modxmcp.max_payload_bytes' => 4096,
         'modxmcp.allow_run_processor' => (bool) getenv('MODXMCP_TEST_ALLOW_ESCAPE'),
         'modxmcp.allow_query_db' => (bool) getenv('MODXMCP_TEST_ALLOW_ESCAPE'),
+        'modxmcp.allow_run' => (bool) getenv('MODXMCP_TEST_ALLOW_RUN'),
     ));
 }
 
