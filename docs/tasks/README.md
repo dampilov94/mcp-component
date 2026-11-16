@@ -70,6 +70,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 31 | [Resource drafts](31-drafts.md) | `task/31-drafts` | merged |
 | 32 | [Fenom](32-fenom.md) | `task/32-fenom` | merged |
 | 33 | [Scenarios (prompts)](33-prompts.md) | `task/33-prompts` | merged |
+| 34 | [MCP over HTTP](34-mcp-http.md) | `task/34-mcp-http` | ready for the executor |
 
 ## Doing several briefs in a row
 
