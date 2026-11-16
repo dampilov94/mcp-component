@@ -170,6 +170,21 @@ Stage 4 — checking the result:
   page's parser passes, unparsed tags, errors of the code as results, new error-log entries.
   Context, resource and output buffers are always restored. What the code changes is not journaled.
 
+Stage 8 — drafts and Fenom:
+
+- Resource drafts (`modx_invoke` on `resource`: `create_draft`, `apply_draft`, `discard_draft`,
+  `list_drafts`): an unpublished hidden copy next to the page, previewable by a logged-in manager
+  user; applying copies the content fields and TVs to the live page and removes the draft in one
+  changeset (one undo brings both back), with a plan first and a refusal when the page changed
+  since the draft was made. A "Черновики" block on the panel previews, applies and discards
+  without the AI. Only `modDocument` pages; one draft per page.
+- Fenom (pdoTools): the graph, `modx_find_usages` and the audit read `{include}`, `{insert}`,
+  `{extends}`, `| chunk`, `| snippet`, `$_modx->getChunk/parseChunk/runSnippet`, `tpl` arrays and
+  `makeUrl` / `| url` links; Cyrillic element names are recognised. Chunks and templates that
+  pdoTools would compile are compiled with the site's own Fenom before saving (`lint_failed` with
+  the line), and the audit has a `fenom_syntax` check. No check when pdoTools or Fenom is off.
+
+Stage 7 — manager:
 
 - History page (Components > modxMCP > История): everything recorded in the journal with source,
   author, tool and objects; filters and text search; a changeset opens under its row with old and
