@@ -63,9 +63,9 @@ below) or append a `## Review` section to the brief with numbered change request
 | 24 | [VirtualPage](24-virtualpage.md) | `task/24-virtualpage` | merged |
 | 25 | [History page](25-history-page.md) | `task/25-history-page` | merged |
 | 26 | [Recording manager edits](26-manager-recorder.md) | `task/26-manager-recorder` | merged |
-| 27 | [Open in the manager](27-manager-lock.md) | `task/27-manager-lock` | ready for the executor |
-| 28 | [modx_audit_site](28-audit-site.md) | `task/28-audit-site` | ready for the executor |
-| 29 | [modx_run](29-run.md) | `task/29-run` | ready for the executor |
+| 27 | [Open in the manager](27-manager-lock.md) | `task/27-manager-lock` | merged |
+| 28 | [modx_audit_site](28-audit-site.md) | `task/28-audit-site` | merged |
+| 29 | [modx_run](29-run.md) | `task/29-run` | merged |
 
 ## Doing several briefs in a row
 
@@ -113,3 +113,11 @@ Lessons from briefs 25–26:
 - When the journal differs from an object's current state, the difference belongs to whoever is
   acting now only if their action has no before-event; otherwise it was made earlier by someone
   unknown.
+
+Lessons from briefs 27–29:
+
+- MODX processors can leave state behind that looks like a person's action (the resource delete
+  processor locks children and never unlocks them). Anything that reads such state must tell
+  "there before the call" from "left by the call".
+- A setting added in `_build/data/transport.settings.php` exists on a site only after a package
+  install; on the stand (deployed file by file) it must be created by hand before checking.

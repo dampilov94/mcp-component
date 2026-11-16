@@ -48,7 +48,12 @@ Stage 2 — writes and the change journal (element kinds):
   `expected_revision` when the model omits it.
 - Built-in guide rewritten for 2.0 (`index`, `getting_started`); 1.x topics moved to
   `docs/legacy-help/` until their stages land.
-- Not yet: refusing an API write while a person has the object open in the manager.
+- A resource that a person has open in the manager is not written over: writes, line edits,
+  replacements, bulk operations and undo are refused with `locked` (`details.reason:
+  open_in_manager`, the user) unless `force: true`; dry runs report it. MODX's own processors
+  leave locks behind (deleting a folder locks every child and never unlocks it); a write now
+  removes the locks of the acting user that were not there before it, so the next write or the
+  undo of a delete is not blocked. Elements have no such locks in MODX 2.8.
 
 Stage 3 — resources:
 
@@ -154,7 +159,17 @@ After stage 3:
   VirtualPage 1.x its plugin is wired to the events routes use, journaled with the route), route
   tester `modx_invoke {kind: "vp_route", op: "resolve"}`, help topic `virtualpage`.
 
-Stage 7 — manager:
+Stage 4 — checking the result:
+
+- `modx_audit_site`: concrete problems tied to objects — links `[[~id]]` to missing, deleted or
+  unpublished pages, calls of missing chunks and snippets, unused elements (candidates, from the
+  dependency graph), missing static files, duplicate page addresses, PHP that does not parse,
+  pages with a missing template. Read-only; pages in the trash are not audited.
+- `modx_run` (setting `modxmcp.allow_run`, off by default; scope develop): run a snippet, render a
+  chunk or parse a string of tags in a context and for a resource; returns the output after the
+  page's parser passes, unparsed tags, errors of the code as results, new error-log entries.
+  Context, resource and output buffers are always restored. What the code changes is not journaled.
+
 
 - History page (Components > modxMCP > История): everything recorded in the journal with source,
   author, tool and objects; filters and text search; a changeset opens under its row with old and
