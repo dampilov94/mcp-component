@@ -6086,11 +6086,12 @@ $rBase = $rCount();
 $rSave(array('snippet' => 'после FTP', 'description' => 'правка по FTP'));
 $rTwo = array_slice($rLog(), 0, 2);
 $rTwoDiff = $call($rDev, 'history_diff', array('changeset_id' => $rTwo[0]['changeset_id']));
-check('recorder: an outside change before the manager save is its own changeset first', $rCount() === $rBase + 2 && $rTwo[1]['summary'] === "chunk {$rHead['id']} was changed in the manager" && $rTwo[1]['source'] === 'manager'
-    && $rTwo[1]['author'] === 'Иванов' && $rTwo[0]['summary'] === "save chunk {$rHead['id']} in the manager"
+check('recorder: an outside change before the manager save is its own changeset first', $rCount() === $rBase + 2 && $rTwo[1]['summary'] === "chunk {$rHead['id']} was changed outside the journal" && $rTwo[1]['source'] === 'external'
+    && $rTwo[1]['author'] === 'unknown' && $rTwo[0]['source'] === 'manager' && $rTwo[0]['author'] === 'Иванов' && $rTwo[0]['summary'] === "save chunk {$rHead['id']} in the manager"
     && $rTwoDiff['objects'][0]['changed']['content']['diff'] === "@@ -1,1 +1,1 @@\n-сохранится\n+после FTP");
 $rOutside = (new \ModxMCP\Journal\Journal($rSite))->changes(array($rTwo[1]['changeset_id']));
-check('recorder: the outside change has no "author unknown" note', $rOutside[0]['note'] === '');
+// It was made earlier by somebody unknown, not by the person who is saving now.
+check('recorder: the earlier outside change keeps its "author unknown" note', $rOutside[0]['note'] !== '');
 
 // an MCP lock on the object: the save succeeds, nothing is recorded, nothing is thrown
 $rBase = $rCount();
@@ -6125,7 +6126,7 @@ $rWeb = $rCount() === $rBase;
 $rSite->context = new FakeObject($rSite, 'modContext', array('key' => 'mgr'), false);
 $rSave(array('snippet' => 'менеджер', 'description' => 'после блокировки'));
 // the unrecorded saves above are found as one outside change before this one is recorded
-check('recorder: a web-context user is not a manager edit, the mgr context is', $rWeb && $rCount() === $rBase + 2 && $rLog()[0]['summary'] === "save chunk {$rHead['id']} in the manager" && $rLog()[1]['summary'] === "chunk {$rHead['id']} was changed in the manager");
+check('recorder: a web-context user is not a manager edit, the mgr context is', $rWeb && $rCount() === $rBase + 2 && $rLog()[0]['summary'] === "save chunk {$rHead['id']} in the manager" && $rLog()[1]['summary'] === "chunk {$rHead['id']} was changed outside the journal");
 unset($rSite->context);
 $rBase = $rCount();
 

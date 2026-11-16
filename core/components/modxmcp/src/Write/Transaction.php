@@ -71,8 +71,9 @@ final class Transaction {
         $blobs = $this->context->blobs();
         $reversible = $last['after_revision'] === null || $blobs->has($last['after_revision']);
         if ($current !== null && $blobs->put(Snapshot::encode($current)) === null) { $reversible = false; }
-        // In the manager the person who is saving now is known (the change came in through the recorder's before-event).
-        if ($this->context->managerUserId !== null) {
+        // Only the recorder's after-only events know the author: the change was made by the person acting now.
+        // A difference found before a save (or during an undo from the history page) was made earlier, by someone unknown.
+        if ($this->context->managerUserId !== null && $this->context->outsideChangeIsManagers) {
             $meta = array(
                 'source' => 'manager', 'tool' => 'manager', 'user_id' => $this->context->managerUserId,
                 'summary' => "{$subject->kindName()} {$subject->key()} was changed in the manager",
@@ -80,7 +81,7 @@ final class Transaction {
             $note = '';
         } else {
             $meta = array('source' => 'external', 'tool' => '', 'summary' => "{$subject->kindName()} {$subject->key()} was changed outside the journal");
-            $note = 'Detected at the next MCP write; author and exact time are unknown.';
+            $note = 'Detected at the next write to the object; author and exact time are unknown.';
         }
         $journal->commit($meta, array(array(
             'kind' => $subject->kindName(), 'object_key' => $subject->key(),

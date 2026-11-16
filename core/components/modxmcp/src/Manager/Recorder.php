@@ -151,7 +151,8 @@ final class Recorder {
                     if ($tx === null) { $tx = new Transaction($context, 'manager'); }
                     try { $tx->created($kind, $key); } catch (\Throwable $e) { $tx->release(); throw $e; }
                 } else {
-                    // No before-event was seen: whatever the journal does not know about is an outside change.
+                    // No before-event was seen: what differs from the journal's last state is this person's change.
+                    $context->outsideChangeIsManagers = true;
                     $tx = new Transaction($context, 'manager');
                     try { $tx->touch($kind, $key); } catch (\Throwable $e) { $tx->release(); throw $e; }
                 }
@@ -162,6 +163,7 @@ final class Recorder {
         if ($role === 'delete') {
             $tx = self::take($id);
             if ($tx === null) {
+                $context->outsideChangeIsManagers = true;
                 $tx = new Transaction($context, 'manager');
                 try { $tx->touch($kind, $key); } catch (\Throwable $e) { $tx->release(); throw $e; }
             }
@@ -169,6 +171,7 @@ final class Recorder {
             return;
         }
         if ($role === 'touch') {
+            $context->outsideChangeIsManagers = true;
             $tx = self::open($context, function (Transaction $tx) use ($kind, $modx, $key, $spec) {
                 $tx->touch($kind, $key);
                 if ($spec['cascade'] === 'undelete') {
