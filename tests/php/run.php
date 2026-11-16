@@ -6197,7 +6197,7 @@ $rExpected = array(
     'OnResourceUndelete', 'OnDocPublished', 'OnDocUnPublished', 'OnResourceBeforeSort', 'OnResourceSort', 'OnBeforeEmptyTrash', 'OnEmptyTrash',
     'OnBeforeUserFormSave', 'OnUserFormSave', 'OnBeforeUserFormDelete', 'OnUserFormDelete', 'OnUserActivate', 'OnUserDeactivate',
     'OnMediaSourceBeforeFormSave', 'OnMediaSourceFormSave', 'OnMediaSourceBeforeFormDelete', 'OnMediaSourceFormDelete',
-    'OnContextUpdate', 'OnContextBeforeSave', 'OnContextSave', 'OnContextBeforeRemove', 'OnContextRemove',
+    'OnContextBeforeSave', 'OnContextSave', 'OnContextBeforeRemove', 'OnContextRemove',
 );
 $rEvents = Recorder::events();
 $rSorted = $rEvents;

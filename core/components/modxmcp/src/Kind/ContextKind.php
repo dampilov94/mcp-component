@@ -8,13 +8,13 @@ use ModxMCP\Context;
 /** A context (modContext), identified by its key. Its settings travel with it in snapshots. */
 final class ContextKind extends Kind {
     public function managerEvents() {
-        // The model (modContext::save / remove) fires the first four; the update processor also fires OnContextUpdate.
+        // Fired by the model (modContext::save / remove), so they cover every way a context is changed. The update
+        // processor also fires OnContextUpdate, but MODX does not register that event, so a plugin cannot be attached to it.
         return array(
             'OnContextBeforeSave' => array('role' => 'before_save', 'param' => 'context'),
             'OnContextSave' => array('role' => 'save', 'param' => 'context'),
             'OnContextBeforeRemove' => array('role' => 'before_delete', 'param' => 'context'),
             'OnContextRemove' => array('role' => 'delete', 'param' => 'context'),
-            'OnContextUpdate' => array('role' => 'touch', 'param' => 'context'),
         );
     }
 
