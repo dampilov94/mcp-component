@@ -51,6 +51,15 @@ class FakeObject {
     }
     /** modResource::getLock(): the id of the user who has the resource open in the manager, or 0. Only reads. */
     public function getLock() { return $this->class === 'modResource' ? $this->modx->resourceLock($this->fields['id']) : 0; }
+    /** modResource::removeLock($user): removes the lock only when it is that user's (0 = the current user). */
+    public function removeLock($user = 0) {
+        if ($this->class !== 'modResource') { return false; }
+        $user = $user ? (int) $user : ($this->modx->user ? (int) $this->modx->user->get('id') : 0);
+        $owner = $this->modx->resourceLock($this->fields['id']);
+        if ($owner && $owner !== $user) { return false; }
+        $this->modx->unlockResource($this->fields['id']);
+        return true;
+    }
     public function getBasePath() { return (string) $this->get('basePath'); }
     public function getSourceFile() { return !empty($this->fields['static']) ? str_replace('[[++core_path]]', $this->modx->getOption('core_path'), (string) $this->fields['static_file']) : false; }
     public function joinGroup($id) {
@@ -555,6 +564,8 @@ trait FakeResourceProcessors {
             if ($action === 'delete') { $this->invokeEvent('OnBeforeDocFormDelete', array('id' => $resource->get('id'), 'resource' => &$resource, 'children' => $children)); }
             foreach (array_merge(array($data['id']), $children) as $id) {
                 $item = $this->getObject('modResource', array('id' => $id));
+                // Like MODX 2.8: the delete processor locks each child and never unlocks it (only when saving fails).
+                if ($action === 'delete' && $id !== $data['id'] && !$this->resourceLock($id) && $this->user) { $this->lockResource($id, (int) $this->user->get('id')); }
                 $item->set('deleted', $action === 'delete' ? 1 : 0);
                 $item->set('deletedon', $action === 'delete' ? 1700000000 : 0);
                 $item->save();

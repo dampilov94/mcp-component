@@ -6374,6 +6374,30 @@ $oRecorderSource = '';
 foreach (glob($oCtx()->corePath . 'src/Manager/*.php') as $oFile) { $oRecorderSource .= file_get_contents($oFile); }
 check('open: the manager recorder does not call assertNotOpen', $oRecorderSource !== '' && strpos($oRecorderSource, 'assertNotOpen') === false && strpos($oRecorderSource, 'openInManager') === false);
 
+// MODX's resource delete processor locks every child and never unlocks it. The API call must not leave those locks
+// behind (they would read as "open in the manager" by the service user for lock_ttl and block the next write or undo),
+// but a lock that a person held before the call stays.
+$oUserBefore = $oSite->user;
+$oSite->user = new FakeObject($oSite, 'modUser', array('id' => 602, 'username' => 'service', 'active' => 1), false);
+$oFolder = $oMake('Папка');
+$oKid1 = $call($oCtx(), 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Дочерняя 1', 'parent' => $oFolder, 'content' => 'x')))['id'];
+$oKid2 = $call($oCtx(), 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Дочерняя 2', 'parent' => $oFolder, 'content' => 'x')))['id'];
+$oSite->lockResource($oKid2, 601);
+$oDel = $call($oCtx(), 'delete', array('kind' => 'resource', 'id' => $oFolder));
+check('locks: an API delete leaves no lock of its own on the children', $oSite->getObject('modResource', $oKid1)->get('deleted') == 1 && $oSite->resourceLock($oKid1) === 0);
+check('locks: a lock a person held before the call is kept', $oSite->resourceLock($oKid2) === 601);
+$oSite->unlockResource($oKid2);
+$oUndo = $call($oCtx(), 'undo', array('changeset_id' => $oDel['changeset_id'], 'confirm' => true));
+check('locks: so the delete can be undone at once, without force', $oUndo['performed'] === true && $oUndo['conflicts'] === 0
+    && $oSite->getObject('modResource', $oKid1)->get('deleted') == 0 && $oSite->resourceLock($oKid1) === 0);
+$oSite->lockResource($oKid1, 602);
+$e = throws('locks: a lock of the service user that existed before the call still blocks', ApiException::class, function () use ($call, $oCtx, $oKid1) {
+    $call($oCtx(), 'update', array('kind' => 'resource', 'id' => $oKid1, 'fields' => array('longtitle' => 'x')));
+});
+check('locks: and it is kept', $e && $e->details['reason'] === 'open_in_manager' && $oSite->resourceLock($oKid1) === 602);
+$oSite->unlockResource($oKid1);
+$oSite->user = $oUserBefore;
+
 // --- Site audit ---
 use ModxMCP\Verify\SiteAudit;
 $aDir = sys_get_temp_dir() . '/modxmcp-audit-' . bin2hex(random_bytes(6));
