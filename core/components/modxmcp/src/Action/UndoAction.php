@@ -96,6 +96,7 @@ final class UndoAction extends WriteAction {
 
         list(, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $plan, $ids) {
             foreach ($plan['items'] as $item) {
+                if ($item['open']) { $context->warnings[] = "{$item['subject']->kindName()} {$item['key']} is open in the manager by {$item['open']['username']}; undone anyway because force is set."; }
                 $tx->touchSubject($item['subject']);
                 $item['subject']->restore($item['target'], $item['extra']);
             }

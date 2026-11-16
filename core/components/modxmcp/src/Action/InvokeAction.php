@@ -21,7 +21,8 @@ final class InvokeAction extends WriteAction {
             'op' => Schema::str(null, array('pattern' => '^[a-z][a-z0-9_]{0,63}$')),
             'id' => Schema::int(null, array('minimum' => 1)), 'name' => Schema::str(null, array('maxLength' => 255)),
             'key' => self::keyArgument(),
-            'args' => Schema::obj(array(), array(), true), 'dry_run' => Schema::bool()), array('kind', 'op'));
+            'args' => Schema::obj(array(), array(), true), 'dry_run' => Schema::bool(),
+            'force' => Schema::bool('Write even though the object is open in the manager.')), array('kind', 'op'));
     }
     public function outputSchema() {
         return Schema::obj(array('kind' => Schema::str(), 'op' => Schema::str()), array('kind', 'op'), true);
@@ -47,14 +48,15 @@ final class InvokeAction extends WriteAction {
         if ($read) { return $meta + $kind->$handler($context, $object, $values); }
         // An operation with a plan answers with it unless it is confirmed (a plan-only token and dry_run never confirm).
         if (!empty($spec['plan']) && ($this->isDryRun($args, $context) || empty($values['confirm']))) {
-            return $this->plan($context, $meta + $kind->{$spec['plan']}($context, $object, $values));
+            return $this->plan($context, $meta + $kind->{$spec['plan']}($context, $object, $values) + ($key !== null ? Objects::openPlan($context, $kind, $key) : array()));
         }
-        if ($this->isDryRun($args, $context)) { return $this->plan($context, $meta + array('validated' => true)); }
+        if ($this->isDryRun($args, $context)) { return $this->plan($context, $meta + array('validated' => true) + ($key !== null ? Objects::openPlan($context, $kind, $key) : array())); }
         // An irreversible operation that does not change an object the journal could restore (an order's status, which sends
         // e-mails): the object is only locked, and a changeset without changes records that it happened.
         if (!empty($spec['informational'])) {
-            list($result, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $kind, $meta, $handler, $values, $key) {
+            list($result, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $kind, $meta, $handler, $values, $key, $args) {
                 $tx->lock($kind->name() . ':' . $key);
+                Objects::assertNotOpen($context, $kind, $key, $args);
                 $object = Objects::resolveKey($context, $kind, $key);
                 $result = $kind->$handler($context, $tx, $object, $values);
                 $summary = isset($result['summary']) ? (string) $result['summary'] : $meta['op'] . ' ' . $meta['kind'] . ' ' . $key;
@@ -63,10 +65,11 @@ final class InvokeAction extends WriteAction {
             });
             return $meta + array('changeset_id' => $info['changeset_id'], 'reversible' => false) + $result;
         }
-        list($result, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $kind, $meta, $handler, $values, $key) {
+        list($result, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $kind, $meta, $handler, $values, $key, $args) {
             $object = null;
             if ($key !== null) {
                 if ($tx->touch($kind, $key) === null) { throw new ApiException('not_found', 'The target object no longer exists.'); }
+                Objects::assertNotOpen($context, $kind, $key, $args);
                 $object = Objects::resolveKey($context, $kind, $key);
             }
             $result = $kind->$handler($context, $tx, $object, $values);

@@ -13,7 +13,7 @@ final class Undo {
     /**
      * @param array $changesets journal changesets (any order) with their changes loaded
      * @return array ['items' => [...], 'conflicts' => int]; each item has subject (Subject), key,
-     *               label, action (restore|recreate|remove), target (state|null), extra, conflict
+     *               label, action (restore|recreate|remove), target (state|null), extra, conflict, open (who has it open in the manager, or null)
      */
     public static function plan(Context $context, array $changesets) {
         usort($changesets, function ($a, $b) { return $b['id'] - $a['id']; });
@@ -63,6 +63,15 @@ final class Undo {
                     ? "changed later by changeset {$last['changeset_id']} ({$last['source']}, {$last['tool']})"
                     : 'changed outside the journal since this change';
             }
+            // A person with the object open would overwrite the restored state on their next save.
+            $open = null;
+            if ($subject instanceof ObjectSubject && $current !== null) {
+                $open = $subject->kind()->openInManager($context->modx, $key);
+                if ($open) {
+                    $reason = 'open in the manager by ' . $open['username'];
+                    $conflict = $conflict === null ? $reason : $conflict . '; ' . $reason;
+                }
+            }
             if ($conflict !== null) { $conflicts++; }
 
             $target = null;
@@ -88,7 +97,7 @@ final class Undo {
             $items[] = array(
                 'subject' => $subject, 'key' => $key, 'label' => $newest['label'],
                 'action' => $target === null ? 'remove' : ($current === null ? 'recreate' : 'restore'),
-                'target' => $target, 'extra' => $extra, 'conflict' => $conflict,
+                'target' => $target, 'extra' => $extra, 'conflict' => $conflict, 'open' => $open,
             );
         }
         return array('items' => $items, 'conflicts' => $conflicts);

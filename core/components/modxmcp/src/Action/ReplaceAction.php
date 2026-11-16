@@ -25,6 +25,7 @@ final class ReplaceAction extends WriteAction {
             'case_sensitive' => Schema::bool('Default true.'),
             'limit' => Schema::int('Preview objects, default 50.', array('minimum' => 1, 'maximum' => 100)),
             'dry_run' => Schema::bool(),
+            'force' => Schema::bool('Write even though an object is open in the manager.'),
             'expected_revisions' => Schema::obj(array(), array(), true) + array('description' => 'Reviewed kind:id to revision map from dry_run.'),
         ), array('find', 'replacement'));
     }
@@ -71,6 +72,8 @@ final class ReplaceAction extends WriteAction {
                 if (Snapshot::revision($state) !== $expected[$key]) { $changed[] = $key; }
             }
             if ($changed) { throw new ApiException('revision_conflict', 'Reviewed objects changed. Run dry_run again.', array('changed' => $changed)); }
+            // One changeset: an object that is open in the manager stops all of it, as a changed object does.
+            foreach ($selection as $item) { Objects::assertNotOpen($context, $item[0], $item[1], $args); }
             $plans = array();
             foreach ($selection as $key => $item) {
                 list($kind, $id) = $item;
@@ -126,7 +129,8 @@ final class ReplaceAction extends WriteAction {
                     if (count($matches) === 3) { break; }
                 }
                 $hits[] = array('kind' => $kind->name(), 'id' => $id, 'name' => (string) $kind->value($object, $kind->nameField()),
-                    'static' => $content[1], 'occurrences' => $count, 'revision' => Snapshot::revision(Snapshot::capture($context->modx, $kind, $id)), 'matches' => $matches);
+                    'static' => $content[1], 'occurrences' => $count, 'revision' => Snapshot::revision(Snapshot::capture($context->modx, $kind, $id)), 'matches' => $matches)
+                    + Objects::openPlan($context, $kind, $id);
             }
             usort($hits, function ($a, $b) { return strcmp($a['name'], $b['name']) ?: $a['id'] <=> $b['id']; });
             $objects = array_merge($objects, $hits);

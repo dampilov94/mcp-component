@@ -279,6 +279,14 @@ abstract class Kind {
     public function assertUndoable(\modX $modx, $key, $target) {
     }
 
+    /**
+     * Who has this object open in the manager right now, or null. Only reads; never takes or releases a lock.
+     * @return array|null ['user_id' => int, 'username' => string]
+     */
+    public function openInManager(\modX $modx, $key) {
+        return null;
+    }
+
     /** Called after a successful write or delete through the processors, and after an undo has restored an object. */
     public function afterWrite(\modX $modx) {
     }

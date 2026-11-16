@@ -53,6 +53,7 @@ final class UpdateAction extends WriteAction {
             $before = $tx->touch($kind, $id);
             if ($before === null) { throw new ApiException('not_found', "No {$kind->name()} with " . Objects::keyText($kind, $id) . '.'); }
             Objects::assertRevision($context, $kind, $id, $before, $args);
+            if (!$dry) { Objects::assertNotOpen($context, $kind, $id, $args); }
             Objects::lint($context, $kind, $columns, !empty($args['skip_lint']));
             if ($dry) {
                 $would = array();
@@ -63,7 +64,7 @@ final class UpdateAction extends WriteAction {
                 return array('result' => array(
                     'kind' => $kind->name(), $kind->keyField() => $id, 'revision' => Snapshot::revision($before),
                     'would_change' => array_merge($would, array_keys($relations)), 'reversible' => true,
-                ));
+                ) + Objects::openPlan($context, $kind, $id));
             }
             Objects::save($context, $tx, $kind, $id, $columns, $relations);
             return array('result' => array(), 'summary' => "update {$kind->name()} {$id}");

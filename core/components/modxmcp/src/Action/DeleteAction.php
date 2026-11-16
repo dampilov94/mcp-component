@@ -43,6 +43,7 @@ final class DeleteAction extends WriteAction {
             $before = $tx->touch($kind, $id);
             if ($before === null) { throw new ApiException('not_found', "No {$kind->name()} with " . Objects::keyText($kind, $id) . '.'); }
             Objects::assertRevision($context, $kind, $id, $before, $args);
+            if (!$dry) { Objects::assertNotOpen($context, $kind, $id, $args); }
             $tx->keepDeleteExtra($kind, $id);
             foreach ($kind->deleteCascade($context->modx, $id) as $cascade) {
                 $other = $context->kinds->get($cascade[0]);
@@ -57,7 +58,7 @@ final class DeleteAction extends WriteAction {
                     'kind' => $kind->name(), $kind->keyField() => $id, 'revision' => Snapshot::revision($before),
                     'would_delete' => array('name' => $label, 'related_rows' => $related ? $related : new \stdClass()),
                     'reversible' => true,
-                ) + $this->usagePlan($context, $kind, $id));
+                ) + Objects::openPlan($context, $kind, $id) + $this->usagePlan($context, $kind, $id));
             }
             foreach ($kind->alsoAffected($context->modx, $id, array(), 'delete') as $other) { $tx->touch($kind, $other); }
             $staticPath = $kind->effectiveContent(Objects::resolveKey($context, $kind, $id))[2];

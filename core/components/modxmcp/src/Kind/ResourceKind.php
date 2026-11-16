@@ -128,6 +128,15 @@ final class ResourceKind extends Kind {
      * A recorded state that holds product rows cannot be put back while miniShop2 is switched off or gone: the rows would
      * be left as they are and the undo would claim to have restored them.
      */
+    public function openInManager(\modX $modx, $key) {
+        $resource = $this->findByKey($modx, $key);
+        // getLock() reads the lock registry; a lock past its TTL reads as 0 (and MODX drops that message).
+        $userId = $resource ? (int) $resource->getLock() : 0;
+        if (!$userId) { return null; }
+        $user = $modx->getObject('modUser', $userId);
+        return array('user_id' => $userId, 'username' => $user ? (string) $user->get('username') : '');
+    }
+
     public function assertUndoable(\modX $modx, $key, $target) {
         if ($target === null || $this->ms2Active()) { return; }
         foreach (array('ms2_data', 'ms2_options', 'ms2_categories') as $name) {

@@ -30,6 +30,7 @@ abstract class WriteAction extends Action {
         return array(
             'expected_revision' => Schema::str('Revision the object had when you read it. The write is refused if it changed since.', array('pattern' => '^[a-f0-9]{64}$')),
             'dry_run' => Schema::bool('Validate and report what would change without changing anything.'),
+            'force' => Schema::bool('Write even though the object is open in the manager.'),
         );
     }
 
