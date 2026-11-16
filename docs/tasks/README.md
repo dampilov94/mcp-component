@@ -63,6 +63,9 @@ below) or append a `## Review` section to the brief with numbered change request
 | 24 | [VirtualPage](24-virtualpage.md) | `task/24-virtualpage` | merged |
 | 25 | [History page](25-history-page.md) | `task/25-history-page` | merged |
 | 26 | [Recording manager edits](26-manager-recorder.md) | `task/26-manager-recorder` | merged |
+| 27 | [Open in the manager](27-manager-lock.md) | `task/27-manager-lock` | ready for the executor |
+| 28 | [modx_audit_site](28-audit-site.md) | `task/28-audit-site` | ready for the executor |
+| 29 | [modx_run](29-run.md) | `task/29-run` | ready for the executor |
 
 ## Doing several briefs in a row
 
