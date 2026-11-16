@@ -75,6 +75,11 @@ final class Context {
         return $context;
     }
 
+    /** The manager user this context acts for, or null for an API token. */
+    public function actingUserId() {
+        return $this->managerUserId;
+    }
+
     /** Private runtime state of the component, outside the MODX cache and the component files. */
     public function dataDir() {
         return rtrim($this->modx->getOption('core_path'), '/\\') . '/modxmcp-data';

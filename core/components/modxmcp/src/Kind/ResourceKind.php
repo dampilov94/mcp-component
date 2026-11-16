@@ -4,8 +4,12 @@ namespace ModxMCP\Kind;
 use ModxMCP\ApiException;
 use ModxMCP\Auth\Scope;
 use ModxMCP\Context;
+use ModxMCP\Draft\DraftStore;
+use ModxMCP\Draft\Drafts;
 use ModxMCP\Integration\MiniShop2;
 use ModxMCP\Integration\Migx;
+use ModxMCP\Schema;
+use ModxMCP\Write\Transaction;
 
 final class ResourceKind extends Kind {
     /** More descendants than this cannot be changed in one call. */
@@ -105,6 +109,96 @@ final class ResourceKind extends Kind {
             'createdon'     => array('type' => 'string', 'format' => 'datetime', 'derived' => true),
             'editedon'      => array('type' => 'string', 'format' => 'datetime', 'derived' => true),
         );
+    }
+
+    // ---- drafts (see Draft\Drafts) ----
+
+    private function drafts() {
+        return $this->context !== null ? new DraftStore($this->context->modx) : null;
+    }
+
+    public function operations() {
+        $confirm = Schema::bool('Really do it. Without it only the plan is returned.');
+        return array(
+            'create_draft' => array(
+                'description' => 'Make a draft of this page: an unpublished copy (same parent, TV values copied, no children) that can be edited with modx_update / modx_edit_code and looked at under preview_url while the live page stays as it is. '
+                    . 'Only modDocument pages; one open draft per page. Returns {draft_id, preview_url, preview_note, base_revision}. Reversible with modx_undo.',
+                'read_only' => false, 'needs_object' => true, 'check_open' => false, 'input' => Schema::obj(), 'handler' => 'opCreateDraft'),
+            'apply_draft' => array(
+                'description' => 'Put a draft on its live page (call it on the page or on the draft). Without confirm: true it returns what would change on the page: field values (content as a line diff), TV values, and original_changed (the page was edited after the draft was made, with the changed fields). '
+                    . 'Confirmed, it copies pagetitle, longtitle, description, introtext, content, menutitle, link_attributes, template, richtext and all TV values of the draft onto the page (alias, parent, published and schedule stay), removes the draft and records one changeset: modx_undo brings back the old page and the draft. '
+                    . 'If the page changed after the draft was made, the confirmed call is refused with revision_conflict unless force: true. A page open in the manager is refused like any write.',
+                'read_only' => false, 'needs_object' => true, 'plan' => 'planApplyDraft', 'handler' => 'opApplyDraft',
+                'input' => Schema::obj(array('confirm' => $confirm))),
+            'discard_draft' => array(
+                'description' => 'Throw a draft away (call it on the page or on the draft); the live page is untouched. Without confirm: true it returns the plan. Reversible with modx_undo.',
+                'read_only' => false, 'needs_object' => true, 'check_open' => false, 'plan' => 'planDiscardDraft', 'handler' => 'opDiscardDraft',
+                'input' => Schema::obj(array('confirm' => $confirm))),
+            'list_drafts' => array(
+                'description' => 'Every open draft: original id and title, draft id, created_at, author, preview_url and original_changed. Takes no id.',
+                'read_only' => true, 'needs_object' => false, 'input' => Schema::obj(), 'handler' => 'opListDrafts'),
+        );
+    }
+
+    public function opCreateDraft(Context $context, Transaction $tx, $object, array $args): array {
+        return Drafts::create($this, $context, $tx, $object, $args);
+    }
+
+    public function planApplyDraft(Context $context, $object, array $args) {
+        return Drafts::planApply($this, $context, $object, $args);
+    }
+
+    public function opApplyDraft(Context $context, Transaction $tx, $object, array $args): array {
+        return Drafts::apply($this, $context, $tx, $object, $args);
+    }
+
+    public function planDiscardDraft(Context $context, $object, array $args) {
+        return Drafts::planDiscard($this, $context, $object, $args);
+    }
+
+    public function opDiscardDraft(Context $context, Transaction $tx, $object, array $args): array {
+        return Drafts::discard($this, $context, $tx, $object, $args);
+    }
+
+    public function opListDrafts(Context $context, $object, array $args) {
+        return array('drafts' => Drafts::items($this, $context));
+    }
+
+    /** The links of drafts follow the resources: after a call that may have added or removed a draft resource they are brought in line. */
+    public function afterInvoke(Context $context, $op, array $result, array $info) {
+        if (in_array($op, array('create_draft', 'apply_draft', 'discard_draft'), true)) { (new DraftStore($context->modx))->reconcile($context); }
+    }
+
+    /** modx_get and modx_list: a draft says which page it is a draft of, a page with a draft says which. */
+    public function redact(Context $context, $object, array $fields, array $relations) {
+        $flags = array();
+        try {
+            $link = (new DraftStore($context->modx))->linkOf((int) $object->get('id'));
+            if ($link) { $flags = $link['draft_id'] === (int) $object->get('id') ? array('draft_of' => $link['original_id']) : array('draft_id' => $link['draft_id']); }
+        } catch (\Throwable $e) {
+            // The markers are a convenience; a read never fails because of them.
+        }
+        return array($fields, $relations, $flags);
+    }
+
+    /** A page with an open draft, or a draft, is not deleted through the generic tools: the draft would be left behind or lost. */
+    public function assertObjectWritable(\modX $modx, $object, $op) {
+        if ($op !== 'delete') { return; }
+        $id = (int) $object->get('id');
+        $link = (new DraftStore($modx))->linkOf($id);
+        if (!$link) { return; }
+        if ($link['draft_id'] === $id) {
+            throw new ApiException('validation_failed', "Resource {$id} is a draft of resource {$link['original_id']}. Use modx_invoke {kind: 'resource', op: 'discard_draft'} to throw it away or 'apply_draft' to put it on the page.");
+        }
+        throw new ApiException('validation_failed', "Resource {$id} has the open draft {$link['draft_id']}: discard or apply the draft first (modx_invoke {kind: 'resource', op: 'discard_draft' or 'apply_draft'}).");
+    }
+
+    /** A draft never has children. */
+    public function assertColumns(array $columns, $creating) {
+        if (!isset($columns['parent']) || (int) $columns['parent'] < 1 || $this->context === null) { return; }
+        if ($this->drafts()->isDraft((int) $columns['parent'])) {
+            throw new ApiException('validation_failed', "Resource {$columns['parent']} is a draft and cannot be the parent of a page.");
+        }
     }
 
     // ---- miniShop2: a product (class_key msProduct) keeps its price, options and extra categories outside the resource ----
@@ -313,7 +407,7 @@ final class ResourceKind extends Kind {
     }
 
     /** TVs attached to the resource template: name => [id, default, input type]. */
-    private function templateTvs(\modX $modx, $object) {
+    public function templateTvs(\modX $modx, $object) {
         $out = array();
         foreach ($modx->getCollection('modTemplateVarTemplate', array('templateid' => (int) $object->get('template'))) as $link) {
             $tv = $modx->getObject('modTemplateVar', array('id' => $link->get('tmplvarid')), false);

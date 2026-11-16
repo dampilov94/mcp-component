@@ -3,6 +3,7 @@ namespace ModxMCP\Action;
 
 use ModxMCP\ApiException;
 use ModxMCP\Context;
+use ModxMCP\Draft\DraftStore;
 use ModxMCP\Journal\Subjects;
 use ModxMCP\Journal\Undo;
 use ModxMCP\Schema;
@@ -104,6 +105,8 @@ final class UndoAction extends WriteAction {
             if ($cache) { $cache->refresh(); }
             return array('result' => array(), 'summary' => 'undo changesets ' . implode(', ', $ids), 'undoes' => $ids);
         });
+        // A draft resource that this undo removed or brought back: its link follows (the link table is not journaled).
+        (new DraftStore($context->modx))->reconcile($context);
         // Undoing an undo re-applies the original changes, so those are live again.
         foreach ($changesets as $changeset) {
             if ($changeset['undoes']) { $journal->setUndone($changeset['undoes'], null); }

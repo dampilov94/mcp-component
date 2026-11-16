@@ -120,3 +120,56 @@ they change (they should not: these are operations, not tools).
 `npm run check`, `npm test`. Report as usual; say exactly how the link table stays consistent
 through undo, and what needs the stand (real duplicate processor, preview of an unpublished page
 for a logged-in manager user, real URIs of the copy).
+
+## Report
+
+Based on: main at f2aefac
+
+Checks: `npm run check` and `npm test` pass. PHP checks 4927 before, 5012 after (85 new, block "Drafts" in `tests/php/run.php`); Node tests 32 before and after. No tool or kind was added, so no tool/kind count or list assertion changed, and no existing assertion was edited.
+
+### Implemented
+
+- `src/Draft/DraftStore.php` (new): plain-SQL tables `modxmcp_drafts` (the columns of the brief plus `base_state`, see deviations) and `modxmcp_draft_archive`; `install()` (MySQL, also created lazily on first use like the journal), lookups that always check that both resources exist (`ofOriginal`, `ofDraft`, `linkOf`, `all`, `marks`, `draftIds`), `add()`, `reconcile()`.
+- `src/Draft/Drafts.php` (new): the four operations. `create` copies like `modx_duplicate` (fields, TV values) with the draft flags, placeholder alias first and `<alias>-draft-<id>` / `draft-<id>` right after the id is known, in the same transaction; `planApply` / `apply` / `planDiscard` / `discard` / `items`. The draft resource is removed through `ObjectSubject::restore(null)` (the path an undo uses), never the delete processor.
+- `src/Kind/ResourceKind.php`: `operations()` (create_draft, apply_draft, discard_draft, list_drafts) with thin handlers, `redact()` (adds `draft_of` / `draft_id` to `modx_get` and `modx_list`), `assertObjectWritable()` (delete of a page with a draft or of a draft is `validation_failed`), `assertColumns()` (a parent that is a draft is refused by create and update), `afterInvoke()`; `templateTvs()` became public.
+- `src/Kind/Kind.php`: new no-op hook `afterInvoke()`. `src/Action/InvokeAction.php`: see deviations.
+- `src/Action/BulkResourcesAction.php`: bulk `delete` and `move` honour the same guards. `src/Action/ResourceTreeAction.php`: nodes carry `draft_of` / `draft_id`. `src/Verify/SiteAudit.php`: draft resources are skipped by the per-resource checks. `src/Action/UndoAction.php`: `reconcile()` after an undo.
+- `src/Context.php`: `actingUserId()`. `src/Manager/HistoryService.php`: `context()` made public. `src/Manager/DraftService.php` (new): runs `InvokeAction` for list_drafts / apply_draft / discard_draft in the manager context.
+- Panel: `processors/mgr/drafts/{getlist,apply,discard}.class.php` (permission `settings`), `controllers/index.class.php` (drafts and the `modxmcp_drafts_*` lexicon go into `Modxmcp`), `templates/home.tpl` (container and styles), `assets/components/modxmcp/js/home.js` (the block: list, plan, confirmation, "apply anyway" when the page changed or is open; every site value via textContent), lexicons ru and en (29 keys each, prefix `modxmcp_drafts_`).
+- `_build/resolvers/resolve.token.php`: `DraftStore::install()` after the journal tables. `docs/getting_started.md`: section "Drafts".
+- Tests: `tests/php/FakeModx.php` (`fakeSchema()` has both tables; `setTVValue()` now behaves like `modTemplateVar::setValue()`: a value equal to the TV default is not stored and removes an existing row; no existing check changed because of it) and `tests/php/run.php` block "Drafts".
+
+### How the link table stays consistent through undo
+
+The link table is not journaled; the resources are. Rules (all in `DraftStore`):
+1. Every lookup believes a link only while both resources exist.
+2. `reconcile()` runs after create/apply/discard (`afterInvoke`) and after every undo (`UndoAction`, so also the manager's). A link whose draft resource is gone is deleted; if the journal's last change of that draft resource is a `delete`, the link is first copied to `modxmcp_draft_archive` keyed by that changeset id (the apply, the discard, or the undo that removed the draft). A link whose original is gone is deleted without archive.
+3. A draft resource that exists again gets its link back from the archive when the changeset that archived it now has status `undone` (undo of apply / discard, or undo of the undo of a create_draft), the original exists and has no other open draft. Checking the status matters because a removed resource's id can be reused by a new resource.
+4. Creating a link for a draft id deletes archive rows of that id. Archive rows whose changeset the retention removed are pruned in `reconcile()`.
+Tested: apply, undo, undo of the undo, and again; discard and undo; undo of create_draft and undo of that undo; id reuse.
+
+### Deviations and decisions
+
+- Table `modxmcp_drafts` has an extra column `base_state` (the original's canonical state when the draft was made). The brief asks for the changed field names in `original_changed`; only a hash cannot give them, and the journal's blobs are garbage-collected when unreferenced. Added the table `modxmcp_draft_archive` (see above).
+- `InvokeAction` (generic, small): (a) a top-level `force` is passed to the handler as `args.force` (the confirmed apply needs it for `revision_conflict`); (b) a handler may return `summary` to name its changeset (`apply draft <draft id> to resource <id>`); (c) an operation may declare `check_open => false`: `create_draft` and `discard_draft` do not change the page they are called on, so a page open in the manager does not block them (apply checks both the page and the draft, whichever the call was made on; discard checks the draft); (d) calls `Kind::afterInvoke()` after the commit.
+- `Context::actingUserId()` and a public `HistoryService::context()` exist only because an existing test asserts which source files mention `managerUserId` / `forManager`; `DraftService` and `Drafts` avoid those words instead of changing that assertion.
+- Resource groups are not copied to a draft: `modx_duplicate` does not copy them either (the relation is not writable through the API), and the brief says "the way modx_duplicate copies".
+- Apply writes every TV of the draft's template (stored value, or the TV default, which removes the row on the original through `setTVValue`, as `modTemplateVar::setValue()` does). Rows of TVs that belong only to the original's old template are left, as MODX leaves them on a template change.
+- `list_drafts` does no housekeeping writes (a read token reads); it only hides links that are not believed.
+- A draft's `uri` is whatever the update processor derives from the alias; the brief gave no rule beyond the alias.
+
+### Verified only against the fake MODX (please check on the stand)
+
+- The real create processor with the placeholder alias followed by an update to `<alias>-draft-<id>` (uri regeneration, duplicate-alias rules, `friendly_urls`), and a `template` change through the real update processor.
+- `makeUrl($id, '', '', 'full')` for an unpublished resource just created (real URI of the copy), and that a manager user in the same browser actually sees the draft while others get a 404 (`preview_note` says so).
+- xPDO `remove()` of the draft cascades its TV values (and resource group rows) on MySQL; that nothing lands in the trash; that `modTemplateVar::setValue` really drops the row when given the default.
+- `DraftStore::install()` DDL on MySQL (SQLite versions are in `fakeSchema()`), the lazy creation on a site without the tables, `INSERT`/`DELETE` of the archive on MySQL.
+- The manager page: the Drafts block, plan, force button, preview link, edit links (`?a=resource/update&id=`), lexicon keys, `logManagerAction`.
+- The manager lock (`getLock()`) behaviour for the page and the draft.
+
+### Open questions
+
+- Deleting a parent (generic or bulk) trashes the original and its draft together as descendants; only a direct delete of a page with a draft or of a draft is refused. The link stays and works after an undo. Say if descendants should be refused too.
+- Undo of a discard while the page has since got a new draft: the draft resource comes back (that is the journal's job) but its link is not restored because the page already has an open one; the old draft is then a plain unpublished page with a `-draft-` alias. A stronger option is to make such an undo a conflict.
+- Editing the draft's `parent` / `alias` through `modx_update` is allowed (only a draft as a parent is refused); apply never copies them.
+- Manager-side deletion of a page or draft through the tree (recorder) is out of scope and not guarded, as the brief says.

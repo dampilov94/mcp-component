@@ -44,6 +44,8 @@ final class InvokeAction extends WriteAction {
         $keyField = $kind->keyField();
         $key = $object ? $kind->keyOf($object) : null;
         if ($object) { $meta[$keyField] = $key; }
+        // The call's own force reaches the handler: an operation may have conflicts of its own that force overrides.
+        if (!$read && !empty($args['force'])) { $values['force'] = true; }
         $handler = $spec['handler'];
         if ($read) { return $meta + $kind->$handler($context, $object, $values); }
         // An operation with a plan answers with it unless it is confirmed (a plan-only token and dry_run never confirm).
@@ -69,12 +71,17 @@ final class InvokeAction extends WriteAction {
             $object = null;
             if ($key !== null) {
                 if ($tx->touch($kind, $key) === null) { throw new ApiException('not_found', 'The target object no longer exists.'); }
-                Objects::assertNotOpen($context, $kind, $key, $args);
+                // An operation that does not change the object it is called on (a draft is made of a page) leaves a person's open page alone.
+                if (!isset($spec['check_open']) || $spec['check_open']) { Objects::assertNotOpen($context, $kind, $key, $args); }
                 $object = Objects::resolveKey($context, $kind, $key);
             }
             $result = $kind->$handler($context, $tx, $object, $values);
-            return array('result' => $result, 'summary' => $meta['op'] . ' ' . $meta['kind'] . ($key !== null ? ' ' . $key : ''));
+            // A handler may name its own changeset summary.
+            $summary = isset($result['summary']) ? (string) $result['summary'] : $meta['op'] . ' ' . $meta['kind'] . ($key !== null ? ' ' . $key : '');
+            unset($result['summary']);
+            return array('result' => $result, 'summary' => $summary);
         });
+        $kind->afterInvoke($context, $meta['op'], $result, $info);
         if ($key === null) { return $meta + array('changeset_id' => $info['changeset_id']) + $result; }
         return $this->written($kind, $key, $info, array('revision' => Snapshot::revision(Snapshot::capture($context->modx, $kind, $key))))
             + $meta + $result;

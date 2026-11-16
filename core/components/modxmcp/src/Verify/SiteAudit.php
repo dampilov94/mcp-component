@@ -2,6 +2,7 @@
 namespace ModxMCP\Verify;
 
 use ModxMCP\Context;
+use ModxMCP\Draft\DraftStore;
 use ModxMCP\Graph\GraphBuilder;
 use ModxMCP\Lint\PhpLint;
 
@@ -119,13 +120,19 @@ final class SiteAudit {
         }
         $routes = array();
         $graph = $this->wants('broken_link') ? new GraphBuilder($modx) : null;
+        // A draft is a working copy of a page: its address and links are not problems of the site.
+        try {
+            $drafts = (new DraftStore($modx))->draftIds();
+        } catch (\Throwable $e) {
+            $drafts = array();
+        }
         foreach (array_chunk($ids, self::PAGE) as $page) {
             $rows = array();
             foreach ($modx->getCollection('modResource', array('id:IN' => $page)) as $resource) { $rows[(int) $resource->get('id')] = $resource; }
             ksort($rows);
             foreach ($rows as $id => $resource) {
                 // A page in the trash is not shown to anyone: its links and address are not problems of the site.
-                if ((bool) $resource->get('deleted')) { continue; }
+                if ((bool) $resource->get('deleted') || isset($drafts[$id])) { continue; }
                 $title = (string) $resource->get('pagetitle');
                 if ($graph) {
                     $this->summary['broken_link']['scanned']++;

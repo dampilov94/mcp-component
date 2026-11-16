@@ -82,4 +82,164 @@ Ext.onReady(function () {
             });
         });
     }
+
+    // ---- drafts of pages: list, plan, confirmation ----------------------------------------
+    // Every value from the site (titles, names, field values, diffs) goes into the page with textContent only.
+    var draftsRoot = document.getElementById('modxmcp-drafts');
+    var draftsBody = document.getElementById('modxmcp-drafts-body');
+    var DL = cfg.dl || {};
+    if (draftsRoot && draftsBody) {
+        var dt = function (key, vars) {
+            var text = DL.hasOwnProperty(key) ? DL[key] : key;
+            if (vars) { Object.keys(vars).forEach(function (name) { text = text.split('{' + name + '}').join(String(vars[name])); }); }
+            return text;
+        };
+        var el = function (tag, cls, text) {
+            var node = document.createElement(tag);
+            if (cls) { node.className = cls; }
+            if (text !== undefined && text !== null) { node.textContent = String(text); }
+            return node;
+        };
+        var add = function (parent) {
+            for (var i = 1; i < arguments.length; i++) { if (arguments[i]) { parent.appendChild(arguments[i]); } }
+            return parent;
+        };
+        var clear = function (node) { while (node.firstChild) { node.removeChild(node.firstChild); } };
+        var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+        var fmtTime = function (unix) {
+            var d = new Date(unix * 1000);
+            return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+        };
+        var button = function (label, handler) {
+            var b = el('button', 'o-btn', label);
+            b.type = 'button';
+            b.addEventListener('click', handler);
+            return b;
+        };
+        var anchor = function (label, href, newTab) {
+            var a = el('a', 'o-link', label);
+            a.href = href;
+            if (newTab) { a.target = '_blank'; a.rel = 'noopener'; }
+            return a;
+        };
+        var shown = function (value) {
+            if (value === null || value === undefined || value === '') { return dt('plan_empty'); }
+            if (typeof value === 'string') { return value; }
+            try { return JSON.stringify(value); } catch (e) { return String(value); }
+        };
+        var call = function (action, params, onOk, onFail) {
+            params.action = action;
+            MODx.Ajax.request({
+                url: cfg.connector_url,
+                params: params,
+                listeners: {
+                    success: { fn: function (r) { onOk(r.object || {}); } },
+                    failure: { fn: function (r) { onFail(r || {}); } }
+                }
+            });
+        };
+        var failed = function (box, r) {
+            add(box, el('div', 'd-error', dt('failed', { message: (r && r.message) || '' })));
+        };
+
+        var drawPlan = function (draft, kind, plan, box, done) {
+            clear(box);
+            var panel = el('div', 'd-plan');
+            if (kind === 'discard') {
+                add(panel, el('h4', '', dt('plan_discard', { title: draft.original_title })));
+            } else {
+                add(panel, el('h4', '', dt('plan_apply', { title: draft.original_title })));
+                var fields = Object.keys(plan.changes || {});
+                var tvs = Object.keys(plan.tvs || {});
+                if (!fields.length && !tvs.length) { add(panel, el('div', 'o-muted', dt('plan_no_changes'))); }
+                if (fields.length) {
+                    add(panel, el('h4', '', dt('plan_fields')));
+                    fields.forEach(function (name) {
+                        var change = plan.changes[name];
+                        var row = el('div', 'd-change');
+                        add(row, el('b', '', name));
+                        if (change.diff !== undefined) {
+                            add(row, el('div', 'd-diff', change.diff));
+                        } else {
+                            add(row, el('div', 'd-old', dt('plan_old') + ': ' + shown(change.old)), el('div', 'd-new', dt('plan_new') + ': ' + shown(change['new'])));
+                        }
+                        add(panel, row);
+                    });
+                }
+                if (tvs.length) {
+                    add(panel, el('h4', '', dt('plan_tvs')));
+                    tvs.forEach(function (name) {
+                        var change = plan.tvs[name];
+                        var row = el('div', 'd-change');
+                        add(row, el('b', '', name), el('div', 'd-old', dt('plan_old') + ': ' + shown(change.old)), el('div', 'd-new', dt('plan_new') + ': ' + shown(change['new'])));
+                        add(panel, row);
+                    });
+                }
+                if (plan.original_changed) {
+                    add(panel, el('div', 'd-warn', dt('changed_warning', { fields: (plan.original_changed_fields || []).join(', ') })));
+                }
+                if (plan.open_in_manager) {
+                    add(panel, el('div', 'd-warn', dt('open_warning', { user: plan.open_in_manager.username })));
+                }
+            }
+            var buttons = el('div', 'd-actions');
+            var run = function (force) {
+                Array.prototype.forEach.call(buttons.querySelectorAll('button'), function (b) { b.disabled = true; });
+                var params = { id: draft.draft_id, confirm: 'true' };
+                if (force) { params.force = 'true'; }
+                call(kind === 'discard' ? 'mgr/drafts/discard' : 'mgr/drafts/apply', params, function () { done(kind); }, function (r) {
+                    Array.prototype.forEach.call(buttons.querySelectorAll('button'), function (b) { b.disabled = false; });
+                    failed(panel, r);
+                });
+            };
+            var needsForce = kind === 'apply' && (plan.original_changed || plan.open_in_manager);
+            add(buttons, button(needsForce ? dt('force') : dt('confirm'), function () { run(needsForce); }));
+            add(buttons, button(dt('cancel'), function () { clear(box); }));
+            add(panel, buttons);
+            add(box, panel);
+        };
+
+        var drawDrafts = function (drafts, message) {
+            clear(draftsBody);
+            draftsRoot.style.display = drafts.length || message ? '' : 'none';
+            if (message) { add(draftsBody, el('div', 'd-ok', message)); }
+            if (!drafts.length) { return; }
+            add(draftsBody, el('p', 'd-intro', dt('intro')));
+            var table = el('table', 'd-table');
+            var head = el('tr');
+            add(head, el('th', '', dt('col_page')), el('th', '', dt('col_created')), el('th', '', dt('col_actions')));
+            add(table, head);
+            drafts.forEach(function (draft) {
+                var row = el('tr');
+                var page = el('td');
+                add(page, anchor(draft.original_title, draft.edit_url, false), document.createTextNode(' '), anchor('✎', draft.edit_draft_url, false));
+                if (draft.original_changed) { add(page, el('div', 'd-warn', dt('changed_warning', { fields: (draft.original_changed_fields || []).join(', ') }))); }
+                var created = el('td', '', fmtTime(draft.created_at) + ' · ' + dt('by') + ' ' + draft.author);
+                var actions = el('td', 'd-actions');
+                var box = el('div');
+                var show = function (kind) {
+                    clear(box);
+                    add(box, el('div', 'o-muted', dt('plan_loading')));
+                    call(kind === 'discard' ? 'mgr/drafts/discard' : 'mgr/drafts/apply', { id: draft.draft_id }, function (plan) {
+                        drawPlan(draft, kind, plan, box, finished);
+                    }, function (r) { clear(box); failed(box, r); });
+                };
+                if (draft.preview_url) { add(actions, anchor(dt('preview'), draft.preview_url, true)); }
+                add(actions, button(dt('apply'), function () { show('apply'); }), button(dt('discard'), function () { show('discard'); }), box);
+                add(row, page, created, actions);
+                add(table, row);
+            });
+            add(draftsBody, table);
+        };
+
+        var finished = function (kind) {
+            var message = dt(kind === 'discard' ? 'discarded' : 'applied');
+            call('mgr/drafts/getlist', {}, function (r) { drawDrafts(r.drafts || [], message); }, function (r) {
+                drawDrafts([], message);
+                failed(draftsBody, r);
+            });
+        };
+
+        drawDrafts(cfg.drafts || [], '');
+    }
 });

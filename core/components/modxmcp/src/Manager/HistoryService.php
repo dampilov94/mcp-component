@@ -27,7 +27,8 @@ final class HistoryService {
         $this->user = $user;
     }
 
-    private function context() {
+    /** The context this service acts in (the manager user's; its changes are journaled as the manager's). */
+    public function context() {
         if ($this->context === null) {
             $corePath = $this->modx->getOption('modxmcp.core_path', null, $this->modx->getOption('core_path') . 'components/modxmcp/');
             $this->context = Context::forManager($this->modx, $this->user, $corePath);

@@ -6886,6 +6886,285 @@ check('overview: active tokens leave out revoked ones, the rest of the status', 
     && $ovData['endpoint'] === 'https://example.test/assets/components/modxmcp/api.php' && $ovData['audit_log'] === true && $ovData['auto_static'] === true);
 check('overview: the result is plain JSON data without secrets', strpos(json_encode($ovData), 'mcp_') === false && json_decode(json_encode($ovData), true) === $ovData);
 
+// --- Drafts ---
+use ModxMCP\Draft\DraftStore;
+use ModxMCP\Manager\DraftService;
+$dCore = dirname(dirname(__DIR__)) . '/core/components/modxmcp/';
+$dDir = sys_get_temp_dir() . '/modxmcp-drafts-' . bin2hex(random_bytes(6));
+mkdir($dDir . '/core', 0700, true);
+$dSite = fakeSite($dDir, array('site_url' => 'https://example.test/', 'manager_url' => '/manager/'));
+$dSite->options['modxmcp.auto_static'] = false;
+$dSite->store('modUser', array('id' => 2, 'username' => 'Иванов', 'primary_group' => 0));
+$dSite->store('modUser', array('id' => 602, 'username' => 'Редактор', 'primary_group' => 0));
+$dSite->user = $dSite->getObject('modUser', 2);
+$dTokens = new TokenStore($dSite);
+$dTokenRec = $dTokens->create('Рабочий', 'develop');
+unset($dTokenRec['token']);
+$dActor = function (array $override = array()) use ($dSite, $dCore, $dTokenRec) {
+    $c = new Context($dSite, $override + $dTokenRec, $dCore, function () { throw new RuntimeException('no store in tests'); });
+    $c->sessionId = 'session-drafts-0001';
+    return $c;
+};
+$dDev = $dActor();
+$dInvoke = function (Context $c, $op, $id, array $args = array(), array $more = array()) use ($call) {
+    $params = array('kind' => 'resource', 'op' => $op) + ($id === null ? array() : array('id' => $id)) + ($args ? array('args' => $args) : array()) + $more;
+    return $call($c, 'invoke', $params);
+};
+$dSite->store('modTemplate', array('id' => 2, 'templatename' => 'Страница', 'content' => '', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => '', 'icon' => ''));
+$dSite->store('modTemplate', array('id' => 3, 'templatename' => 'Лендинг', 'content' => '', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => '', 'icon' => ''));
+$dSite->store('modTemplateVar', array('id' => 20, 'name' => 'subtitle', 'default_text' => 'по умолчанию', 'caption' => '', 'type' => 'text', 'category' => 0));
+$dSite->store('modTemplateVar', array('id' => 21, 'name' => 'seo', 'default_text' => '', 'caption' => '', 'type' => 'text', 'category' => 0));
+foreach (array(array(20, 2), array(21, 2), array(20, 3)) as $dLink) { $dSite->store('modTemplateVarTemplate', array('tmplvarid' => $dLink[0], 'templateid' => $dLink[1], 'rank' => 0)); }
+$dTv = function ($id) use ($dSite) {
+    $out = array();
+    foreach ($dSite->getCollection('modTemplateVarResource', array('contentid' => $id)) as $row) { $out[(int) $row->get('tmplvarid')] = (string) $row->get('value'); }
+    ksort($out);
+    return $out;
+};
+$dCount = function ($table, $where = '1=1', array $params = array()) use ($dSite) {
+    $st = $dSite->pdo->prepare('SELECT COUNT(*) FROM modx_modxmcp_' . $table . ' WHERE ' . $where);
+    $st->execute($params);
+    return (int) $st->fetchColumn();
+};
+$dChangesIn = function ($changeset) use ($dCount) { return $dCount('changes', 'changeset_id = ?', array($changeset)); };
+$dLast = function () use ($dSite) { $row = $dSite->pdo->query('SELECT * FROM modx_modxmcp_changesets ORDER BY id DESC LIMIT 1')->fetch(PDO::FETCH_ASSOC); $row['id'] = (int) $row['id']; return $row; };
+$dGet = function ($id) use ($call, $dDev) { return $call($dDev, 'get', array('kind' => 'resource', 'id' => $id)); };
+
+$dSection = $call($dDev, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Раздел')));
+$dA = $call($dDev, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Главная страница', 'alias' => 'glavnaya', 'parent' => $dSection['id'], 'template' => 2,
+    'content' => "<h1>Заголовок</h1>\n<p>Старый текст</p>", 'published' => true, 'longtitle' => 'Длинный', 'menuindex' => 3),
+    'relations' => array('tvs' => array('subtitle' => 'Подзаголовок', 'seo' => 'ключевые слова'))));
+$dABefore = $dGet($dA['id']);
+$dTrashBefore = $dSite->getCount('modResource', array('deleted' => 1));
+
+// create_draft
+$dCreate = $dInvoke($dDev, 'create_draft', $dA['id']);
+$dDraft = $dCreate['draft_id'];
+$dDraftRow = $dSite->row('modResource', $dDraft);
+check('drafts: create_draft returns the draft, a preview address, the note and the base revision', is_int($dDraft) && $dDraft !== $dA['id'] && $dCreate['op'] === 'create_draft'
+    && $dCreate['preview_url'] === 'https://example.test/glavnaya-draft-' . $dDraft && strpos($dCreate['preview_note'], 'logged in to the manager') !== false && $dCreate['base_revision'] === $dABefore['revision']);
+check('drafts: the copy is unpublished, hidden, not searchable, unscheduled and has the draft alias', $dDraftRow['published'] === '0' && $dDraftRow['hidemenu'] === '1' && $dDraftRow['searchable'] === '0'
+    && (int) $dDraftRow['pub_date'] === 0 && (int) $dDraftRow['unpub_date'] === 0 && $dDraftRow['alias'] === 'glavnaya-draft-' . $dDraft && $dDraftRow['isfolder'] === '0');
+check('drafts: title, parent, template, content, class and the other fields are the original\'s', $dDraftRow['pagetitle'] === 'Главная страница' && (int) $dDraftRow['parent'] === $dSection['id']
+    && (int) $dDraftRow['template'] === 2 && $dDraftRow['content'] === "<h1>Заголовок</h1>\n<p>Старый текст</p>" && $dDraftRow['class_key'] === 'modDocument' && $dDraftRow['longtitle'] === 'Длинный' && (int) $dDraftRow['menuindex'] === 3);
+check('drafts: TV values are copied', $dTv($dDraft) === array(20 => 'Подзаголовок', 21 => 'ключевые слова'));
+check('drafts: one changeset with the draft only, the original untouched', $dChangesIn($dCreate['changeset_id']) === 1 && $dLast()['summary'] === "create draft {$dDraft} of resource {$dA['id']}"
+    && $dGet($dA['id'])['revision'] === $dABefore['revision']);
+$dLinks = $dSite->pdo->query('SELECT * FROM modx_modxmcp_drafts')->fetchAll(PDO::FETCH_ASSOC);
+check('drafts: the link row has the original, the draft, the token and the base revision', count($dLinks) === 1 && (int) $dLinks[0]['original_id'] === $dA['id'] && (int) $dLinks[0]['draft_id'] === $dDraft
+    && (int) $dLinks[0]['token_id'] === (int) $dTokenRec['id'] && $dLinks[0]['user_id'] === null && $dLinks[0]['base_revision'] === $dABefore['revision']);
+
+// refusals
+$e = throws('drafts: a second draft of the same page is refused', ApiException::class, function () use ($dInvoke, $dDev, $dA) { $dInvoke($dDev, 'create_draft', $dA['id']); });
+check('drafts: the refusal names the open draft', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), (string) $dDraft) !== false);
+$e = throws('drafts: a draft of a draft is refused', ApiException::class, function () use ($dInvoke, $dDev, $dDraft) { $dInvoke($dDev, 'create_draft', $dDraft); });
+check('drafts: a draft of a draft is validation_failed', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'itself a draft') !== false);
+$dLinkPage = $call($dDev, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Ссылка', 'class_key' => 'modWebLink')));
+$e = throws('drafts: a page of another class is refused', ApiException::class, function () use ($dInvoke, $dDev, $dLinkPage) { $dInvoke($dDev, 'create_draft', $dLinkPage['id']); });
+check('drafts: the refusal names the class', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'modWebLink') !== false && $dCount('drafts') === 1);
+$dGone = $call($dDev, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Удалённая')));
+$call($dDev, 'delete', array('kind' => 'resource', 'id' => $dGone['id']));
+$e = throws('drafts: a page in the trash is refused', ApiException::class, function () use ($dInvoke, $dDev, $dGone) { $dInvoke($dDev, 'create_draft', $dGone['id']); });
+check('drafts: a deleted original is validation_failed', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'trash') !== false);
+$e = throws('drafts: a read token cannot make a draft', ApiException::class, function () use ($dInvoke, $dActor, $dA) { $dInvoke($dActor(array('scope' => 'read')), 'create_draft', $dA['id']); });
+check('drafts: the read scope is forbidden_scope', $e && $e->errorCode === 'forbidden_scope');
+$dPlanOnly = $dInvoke($dActor(array('plan_only' => true)), 'create_draft', $dA['id']);
+check('drafts: a plan-only token only validates', !empty($dPlanOnly['dry_run']) && $dCount('drafts') === 1);
+
+// an original without an alias
+$dSite->store('modResource', array('id' => 900, 'pagetitle' => 'Без алиаса', 'alias' => '', 'uri' => '', 'context_key' => 'web', 'parent' => 0, 'template' => 0, 'content' => 'x', 'published' => 1, 'deleted' => 0,
+    'class_key' => 'modDocument', 'isfolder' => 0, 'hidemenu' => 0, 'searchable' => 1, 'richtext' => 1, 'cacheable' => 1, 'uri_override' => 0, 'menuindex' => 0, 'editedon' => 1));
+$dNoAlias = $dInvoke($dDev, 'create_draft', 900);
+check('drafts: an original without an alias gets draft-<id>', $dSite->row('modResource', $dNoAlias['draft_id'])['alias'] === 'draft-' . $dNoAlias['draft_id']);
+$dInvoke($dDev, 'discard_draft', 900, array('confirm' => true));
+
+// editing the draft: the live page is not touched
+$call($dDev, 'update', array('kind' => 'resource', 'id' => $dDraft, 'fields' => array('pagetitle' => 'Новая главная', 'longtitle' => 'Новый длинный', 'description' => 'Описание', 'introtext' => 'Кратко',
+    'menutitle' => 'Меню', 'link_attributes' => 'rel="x"', 'richtext' => false, 'menuindex' => 7, 'alias' => 'drugoy-alias', 'published' => true, 'searchable' => true), 'relations' => array('tvs' => array('subtitle' => 'Новый подзаголовок', 'seo' => ''))));
+$call($dDev, 'edit_code', array('kind' => 'resource', 'id' => $dDraft, 'edits' => array(array('start_line' => 2, 'replacement' => '<p>Новый текст</p>', 'expect' => '<p>Старый текст</p>'))));
+check('drafts: the draft can be edited with update, edit_code and its TVs', $dSite->row('modResource', $dDraft)['content'] === "<h1>Заголовок</h1>\n<p>Новый текст</p>" && $dTv($dDraft) === array(20 => 'Новый подзаголовок')
+    && $dGet($dA['id'])['revision'] === $dABefore['revision']);
+
+// the plan
+$dPlan = $dInvoke($dDev, 'apply_draft', $dA['id']);
+check('drafts: without confirm apply_draft only plans', !empty($dPlan['dry_run']) && $dPlan['performed'] === false && $dGet($dA['id'])['revision'] === $dABefore['revision'] && $dSite->row('modResource', $dDraft) !== null);
+check('drafts: the plan lists the changed fields with old and new values', $dPlan['changes']['pagetitle'] === array('old' => 'Главная страница', 'new' => 'Новая главная')
+    && $dPlan['changes']['richtext'] === array('old' => true, 'new' => false) && $dPlan['changes']['longtitle']['new'] === 'Новый длинный' && !isset($dPlan['changes']['template']) && !isset($dPlan['changes']['alias']));
+check('drafts: the plan shows content as a line diff', strpos($dPlan['changes']['content']['diff'], "-<p>Старый текст</p>\n+<p>Новый текст</p>") !== false);
+check('drafts: the plan lists the TV changes, a cleared TV is the default', $dPlan['tvs'] == array('seo' => array('old' => 'ключевые слова', 'new' => ''), 'subtitle' => array('old' => 'Подзаголовок', 'new' => 'Новый подзаголовок'))
+    && $dPlan['original_changed'] === false && $dPlan['original_changed_fields'] === array() && $dPlan['original_id'] === $dA['id'] && $dPlan['draft_id'] === $dDraft);
+$dPlanDraft = $dInvoke($dDev, 'apply_draft', $dDraft);
+check('drafts: the plan is the same when asked on the draft', $dPlanDraft['changes'] == $dPlan['changes'] && $dPlanDraft['tvs'] == $dPlan['tvs'] && $dPlanDraft['original_id'] === $dA['id']);
+$dPlanDry = $dInvoke($dDev, 'apply_draft', $dA['id'], array('confirm' => true), array('dry_run' => true));
+check('drafts: dry_run never confirms', $dPlanDry['performed'] === false && $dSite->row('modResource', $dDraft) !== null);
+$dPlanOnlyApply = $dInvoke($dActor(array('plan_only' => true)), 'apply_draft', $dA['id'], array('confirm' => true));
+check('drafts: a plan-only token never confirms', $dPlanOnlyApply['performed'] === false && $dSite->row('modResource', $dDraft) !== null);
+
+// the audit ignores a draft: an address shared with the original and a broken link in its content
+$call($dDev, 'update', array('kind' => 'resource', 'id' => $dDraft, 'fields' => array('uri_override' => true, 'uri' => 'glavnaya', 'content' => "<h1>Заголовок</h1>\n<p>Новый текст [[~9999]]</p>")));
+$dAudit = $call($dActor(array('scope' => 'read')), 'audit_site', array('checks' => array('broken_link', 'duplicate_alias', 'missing_template')));
+check('drafts: the audit does not report a draft\'s address or links', !array_filter($dAudit['findings'], function ($f) use ($dDraft) { return $f['id'] === $dDraft || (isset($f['details']['ids']) && in_array($dDraft, $f['details']['ids'], true)); }));
+$call($dDev, 'update', array('kind' => 'resource', 'id' => $dA['id'], 'fields' => array('uri_override' => true, 'uri' => 'glavnaya', 'content' => "<h1>Заголовок</h1>\n<p>Старый текст [[~9999]]</p>")));
+$dAudit = $call($dActor(array('scope' => 'read')), 'audit_site', array('checks' => array('broken_link')));
+check('drafts: the same link on a normal page is reported', count(array_filter($dAudit['findings'], function ($f) use ($dA) { return $f['id'] === $dA['id']; })) === 1);
+$call($dDev, 'update', array('kind' => 'resource', 'id' => $dA['id'], 'fields' => array('uri_override' => false, 'content' => "<h1>Заголовок</h1>\n<p>Старый текст</p>")));
+$call($dDev, 'update', array('kind' => 'resource', 'id' => $dDraft, 'fields' => array('uri_override' => false, 'content' => "<h1>Заголовок</h1>\n<p>Новый текст</p>")));
+$dABase = $dGet($dA['id']);
+$dLinkNow = $dSite->pdo->query('SELECT base_revision FROM modx_modxmcp_drafts')->fetchColumn();
+check('drafts: restoring the original\'s text gives its first revision back', $dABase['revision'] === $dLinkNow);
+
+// markers
+$dGetA = $dGet($dA['id']);
+$dGetD = $dGet($dDraft);
+check('drafts: get shows draft_id on the page and draft_of on the draft', $dGetA['draft_id'] === $dDraft && !isset($dGetA['draft_of']) && $dGetD['draft_of'] === $dA['id'] && !isset($dGetD['draft_id']));
+check('drafts: a page without a draft has no marker', !isset($dGet($dSection['id'])['draft_id']) && !isset($dGet($dSection['id'])['draft_of']));
+$dList = array_column($call($dDev, 'list', array('kind' => 'resource', 'limit' => 100))['items'], null, 'id');
+check('drafts: list shows the markers', $dList[$dA['id']]['draft_id'] === $dDraft && $dList[$dDraft]['draft_of'] === $dA['id'] && !isset($dList[$dSection['id']]['draft_id']));
+$dTree = $call($dDev, 'resource_tree', array('depth' => 3));
+$dNodes = array();
+$dWalk = function (array $nodes) use (&$dWalk, &$dNodes) { foreach ($nodes as $n) { $dNodes[$n['id']] = $n; if (isset($n['nodes'])) { $dWalk($n['nodes']); } } };
+$dWalk($dTree['nodes']);
+check('drafts: the tree marks the page and the draft', $dNodes[$dA['id']]['draft_id'] === $dDraft && $dNodes[$dDraft]['draft_of'] === $dA['id'] && !isset($dNodes[$dSection['id']]['draft_id']));
+$dListing = $dInvoke($dActor(array('scope' => 'read')), 'list_drafts', null);
+check('drafts: list_drafts lists the open draft', count($dListing['drafts']) === 1 && $dListing['drafts'][0]['original_id'] === $dA['id'] && $dListing['drafts'][0]['original_title'] === 'Главная страница'
+    && $dListing['drafts'][0]['draft_id'] === $dDraft && $dListing['drafts'][0]['author'] === 'Рабочий' && $dListing['drafts'][0]['original_changed'] === false
+    && $dListing['drafts'][0]['preview_url'] === 'https://example.test/drugoy-alias' && is_int($dListing['drafts'][0]['created_at']));
+$e = throws('drafts: list_drafts takes no id', ApiException::class, function () use ($dInvoke, $dDev, $dA) { $dInvoke($dDev, 'list_drafts', $dA['id']); });
+
+// deleting and children
+$dBlocked = function (callable $fn, $label) {
+    $e = throws($label, ApiException::class, $fn);
+    return $e && $e->errorCode === 'validation_failed';
+};
+$dDeleteOriginal = $dBlocked(function () use ($call, $dDev, $dA) { $call($dDev, 'delete', array('kind' => 'resource', 'id' => $dA['id'])); }, 'drafts: deleting a page with a draft is refused');
+$dDeleteDraft = $dBlocked(function () use ($call, $dDev, $dDraft) { $call($dDev, 'delete', array('kind' => 'resource', 'id' => $dDraft)); }, 'drafts: deleting a draft is refused');
+check('drafts: both delete refusals are validation_failed and nothing was deleted', $dDeleteOriginal && $dDeleteDraft && $dSite->getCount('modResource', array('deleted' => 1)) === $dTrashBefore + 1);
+$dBulkDelete = $dBlocked(function () use ($call, $dDev, $dA, $dSection) { $call($dDev, 'bulk_resources', array('operation' => 'delete', 'ids' => array($dSection['id'], $dA['id']))); }, 'drafts: a bulk delete of a page with a draft is refused');
+$dBulkDraft = $dBlocked(function () use ($call, $dDev, $dDraft) { $call($dDev, 'bulk_resources', array('operation' => 'delete', 'ids' => array($dDraft))); }, 'drafts: a bulk delete of a draft is refused');
+check('drafts: bulk delete refusals change nothing', $dBulkDelete && $dBulkDraft && (int) $dSite->row('modResource', $dSection['id'])['deleted'] === 0 && $dSite->row('modResource', $dA['id'])['deleted'] === '0');
+$dChildCreate = $dBlocked(function () use ($call, $dDev, $dDraft) { $call($dDev, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Ребёнок', 'parent' => $dDraft))); }, 'drafts: a page under a draft is refused on create');
+$dChildUpdate = $dBlocked(function () use ($call, $dDev, $dDraft, $dSection) { $call($dDev, 'update', array('kind' => 'resource', 'id' => $dSection['id'], 'fields' => array('parent' => $dDraft))); }, 'drafts: a page under a draft is refused on update');
+$dChildMove = $dBlocked(function () use ($call, $dDev, $dDraft, $dSection) { $call($dDev, 'bulk_resources', array('operation' => 'move', 'ids' => array($dSection['id']), 'parent' => $dDraft)); }, 'drafts: a page under a draft is refused on bulk move');
+check('drafts: nothing was put under a draft', $dChildCreate && $dChildUpdate && $dChildMove && $dSite->getCount('modResource', array('parent' => $dDraft)) === 0);
+
+// apply, asked on the draft
+$dJournalBefore = $dCount('changesets');
+$dApply = $dInvoke($dDev, 'apply_draft', $dDraft, array('confirm' => true));
+$dOrig = $dSite->row('modResource', $dA['id']);
+check('drafts: apply copies exactly the listed fields', $dApply['applied'] === true && $dApply['original_id'] === $dA['id'] && $dOrig['pagetitle'] === 'Новая главная' && $dOrig['longtitle'] === 'Новый длинный'
+    && $dOrig['description'] === 'Описание' && $dOrig['introtext'] === 'Кратко' && $dOrig['menutitle'] === 'Меню' && $dOrig['link_attributes'] === 'rel="x"' && $dOrig['richtext'] === '0'
+    && $dOrig['content'] === "<h1>Заголовок</h1>\n<p>Новый текст</p>" && (int) $dOrig['template'] === 2);
+check('drafts: alias, parent, published, menu, search flags and the schedule of the original stay', $dOrig['alias'] === 'glavnaya' && (int) $dOrig['parent'] === $dSection['id'] && $dOrig['published'] === '1'
+    && $dOrig['hidemenu'] === '0' && $dOrig['searchable'] === '1' && (int) $dOrig['menuindex'] === 3 && (int) $dOrig['pub_date'] === 0 && $dOrig['class_key'] === 'modDocument');
+check('drafts: TV values are copied and a TV the draft has no value for is cleared', $dTv($dA['id']) === array(20 => 'Новый подзаголовок'));
+check('drafts: the draft is gone completely, with nothing in the trash and no link', $dSite->row('modResource', $dDraft) === null && $dTv($dDraft) === array()
+    && $dSite->getCount('modResource', array('deleted' => 1)) === $dTrashBefore + 1 && $dCount('drafts') === 0
+);
+check('drafts: one changeset for all of it, named by the draft and the page', $dCount('changesets') === $dJournalBefore + 1 && $dLast()['summary'] === "apply draft {$dDraft} to resource {$dA['id']}"
+    && $dChangesIn($dApply['changeset_id']) === 2 && $dLast()['source'] === 'mcp');
+check('drafts: the page has no draft marker any more', !isset($dGet($dA['id'])['draft_id']) && $call($dDev, 'resource_tree', array('depth' => 3))['nodes'][0]['nodes'][0]['pagetitle'] === 'Новая главная');
+check('drafts: the link was archived under the changeset that removed the draft', $dCount('draft_archive', 'changeset_id = ? AND draft_id = ?', array($dApply['changeset_id'], $dDraft)) === 1);
+
+// undo of the apply
+$dNewRev = $dGet($dA['id'])['revision'];
+$call($dDev, 'undo', array('changeset_id' => $dApply['changeset_id'], 'confirm' => true));
+$dOrig = $dSite->row('modResource', $dA['id']);
+check('drafts: undo restores the old page and its TVs', $dOrig['pagetitle'] === 'Главная страница' && $dOrig['content'] === "<h1>Заголовок</h1>\n<p>Старый текст</p>" && $dOrig['richtext'] === '1'
+    && $dTv($dA['id']) === array(20 => 'Подзаголовок', 21 => 'ключевые слова') && $dGet($dA['id'])['revision'] === $dABase['revision']);
+check('drafts: undo brings the draft back with its edits and TVs', $dSite->row('modResource', $dDraft)['pagetitle'] === 'Новая главная' && $dSite->row('modResource', $dDraft)['alias'] === 'drugoy-alias'
+    && $dTv($dDraft) === array(20 => 'Новый подзаголовок'));
+check('drafts: undo gives the link back from the archive', $dCount('drafts', 'draft_id = ? AND original_id = ?', array($dDraft, $dA['id'])) === 1 && $dCount('draft_archive', 'draft_id = ?', array($dDraft)) === 0
+    && $dGet($dA['id'])['draft_id'] === $dDraft && $dInvoke($dDev, 'list_drafts', null)['drafts'][0]['original_changed'] === false);
+$dUndoId = $dLast()['id'];
+$call($dDev, 'undo', array('changeset_id' => $dUndoId, 'confirm' => true));
+check('drafts: undoing the undo applies again and takes the link away again', $dSite->row('modResource', $dA['id'])['pagetitle'] === 'Новая главная' && $dSite->row('modResource', $dDraft) === null
+    && $dCount('drafts') === 0 && $dCount('draft_archive', 'draft_id = ?', array($dDraft)) === 1);
+$call($dDev, 'undo', array('changeset_id' => $dLast()['id'], 'confirm' => true));
+check('drafts: and once more back', $dSite->row('modResource', $dDraft) !== null && $dCount('drafts') === 1 && $dCount('draft_archive', 'draft_id = ?', array($dDraft)) === 0);
+
+// discard, undo
+$dBeforeDiscard = $dGet($dA['id'])['revision'];
+$dDiscardPlan = $dInvoke($dDev, 'discard_draft', $dA['id']);
+check('drafts: discard_draft without confirm plans', !empty($dDiscardPlan['dry_run']) && $dDiscardPlan['performed'] === false && $dDiscardPlan['would_remove']['pagetitle'] === 'Новая главная'
+    && $dSite->row('modResource', $dDraft) !== null);
+$dDiscard = $dInvoke($dDev, 'discard_draft', $dA['id'], array('confirm' => true));
+check('drafts: discard removes the draft and the link in one changeset, the page is untouched', $dDiscard['discarded'] === true && $dSite->row('modResource', $dDraft) === null && $dCount('drafts') === 0
+    && $dChangesIn($dDiscard['changeset_id']) === 1 && $dLast()['summary'] === "discard draft {$dDraft} of resource {$dA['id']}" && $dGet($dA['id'])['revision'] === $dBeforeDiscard
+    && $dSite->getCount('modResource', array('deleted' => 1)) === $dTrashBefore + 1);
+$call($dDev, 'undo', array('changeset_id' => $dDiscard['changeset_id'], 'confirm' => true));
+check('drafts: undo of a discard brings the draft and its link back', $dSite->row('modResource', $dDraft)['pagetitle'] === 'Новая главная' && $dTv($dDraft) === array(20 => 'Новый подзаголовок')
+    && $dCount('drafts', 'draft_id = ?', array($dDraft)) === 1 && $dCount('draft_archive', 'draft_id = ?', array($dDraft)) === 0);
+$e = throws('drafts: discard on a page without a draft', ApiException::class, function () use ($dInvoke, $dDev, $dSection) { $dInvoke($dDev, 'discard_draft', $dSection['id'], array('confirm' => true)); });
+check('drafts: it is validation_failed', $e && $e->errorCode === 'validation_failed');
+$dInvoke($dDev, 'discard_draft', $dDraft, array('confirm' => true));
+check('drafts: discard works on the draft itself', $dSite->row('modResource', $dDraft) === null && $dCount('drafts') === 0);
+$call($dDev, 'undo', array('changeset_id' => $dLast()['id'], 'confirm' => true));
+// an undo of the creation removes the draft and the link
+$dCreate2 = $dInvoke($dDev, 'create_draft', $dSection['id']);
+$call($dDev, 'undo', array('changeset_id' => $dCreate2['changeset_id'], 'confirm' => true));
+check('drafts: undo of create_draft removes the draft and its link', $dSite->row('modResource', $dCreate2['draft_id']) === null && $dCount('drafts', 'draft_id = ?', array($dCreate2['draft_id'])) === 0);
+$call($dDev, 'undo', array('changeset_id' => $dLast()['id'], 'confirm' => true));
+check('drafts: and undoing that undo brings both back', $dSite->row('modResource', $dCreate2['draft_id']) !== null && $dCount('drafts', 'draft_id = ?', array($dCreate2['draft_id'])) === 1);
+$dInvoke($dDev, 'discard_draft', $dSection['id'], array('confirm' => true));
+
+// conflicts: the page changed after the draft was made
+$dConflictBefore = $dGet($dA['id']);
+$call($dDev, 'update', array('kind' => 'resource', 'id' => $dA['id'], 'fields' => array('introtext' => 'Правка живой страницы', 'description' => 'Живое описание')));
+$dPlan2 = $dInvoke($dDev, 'apply_draft', $dA['id']);
+check('drafts: the plan says the original changed, with the fields', $dPlan2['original_changed'] === true && $dPlan2['original_changed_fields'] === array('description', 'introtext') && strpos($dPlan2['warning'], 'force') !== false);
+$dBeforeConflict = $dSite->tableDump('modResource');
+$e = throws('drafts: apply over a changed page is refused', ApiException::class, function () use ($dInvoke, $dDev, $dDraft) { $dInvoke($dDev, 'apply_draft', $dDraft, array('confirm' => true)); });
+check('drafts: the refusal is revision_conflict naming the changes, and nothing changed', $e && $e->errorCode === 'revision_conflict' && $e->details['changed'] === array('description', 'introtext')
+    && $dSite->tableDump('modResource') === $dBeforeConflict && $dSite->row('modResource', $dDraft) !== null);
+$dContext = $dActor();
+$dForced = $dInvoke($dContext, 'apply_draft', $dA['id'], array('confirm' => true), array('force' => true));
+check('drafts: force applies anyway with a warning', $dForced['applied'] === true && $dSite->row('modResource', $dA['id'])['introtext'] === 'Кратко' && $dSite->row('modResource', $dDraft) === null
+    && count(array_filter($dContext->warnings, function ($w) { return strpos($w, 'changed after the draft') !== false; })) === 1);
+$call($dDev, 'undo', array('changeset_id' => $dForced['changeset_id'], 'confirm' => true));
+
+// open in the manager
+$dSite->lockResource($dA['id'], 602);
+$e = throws('drafts: applying to a page open in the manager is refused', ApiException::class, function () use ($dInvoke, $dDev, $dA) { $dInvoke($dDev, 'apply_draft', $dA['id'], array('confirm' => true), array('force' => false)); });
+check('drafts: it is locked, naming the person', $e && $e->errorCode === 'locked' && $e->details['username'] === 'Редактор');
+$e = throws('drafts: the same asked on the draft', ApiException::class, function () use ($dInvoke, $dDev, $dDraft) { $dInvoke($dDev, 'apply_draft', $dDraft, array('confirm' => true)); });
+check('drafts: the lock of the original counts whichever resource the call was made on', $e && $e->errorCode === 'locked' && $dSite->row('modResource', $dDraft) !== null);
+$dPlanOpen = $dInvoke($dDev, 'apply_draft', $dDraft);
+check('drafts: the plan shows the open page', $dPlanOpen['open_in_manager']['username'] === 'Редактор');
+$dSecond = $dInvoke($dDev, 'create_draft', $dSection['id']);
+check('drafts: a draft can be made of a page that is open (the page is not changed)', is_int($dSecond['draft_id']));
+$dInvoke($dDev, 'discard_draft', $dSection['id'], array('confirm' => true));
+$dSite->unlockResource($dA['id']);
+$dSite->lockResource($dDraft, 602);
+$e = throws('drafts: discarding a draft that is open is refused', ApiException::class, function () use ($dInvoke, $dDev, $dA) { $dInvoke($dDev, 'discard_draft', $dA['id'], array('confirm' => true)); });
+check('drafts: discarding an open draft is locked', $e && $e->errorCode === 'locked' && $dSite->row('modResource', $dDraft) !== null);
+$dSite->unlockResource($dDraft);
+
+// a change of template through a draft
+$call($dDev, 'update', array('kind' => 'resource', 'id' => $dDraft, 'fields' => array('template' => 3)));
+$dInvoke($dDev, 'apply_draft', $dDraft, array('confirm' => true), array('force' => true));
+check('drafts: the template is copied and the TVs follow it', (int) $dSite->row('modResource', $dA['id'])['template'] === 3 && $dTv($dA['id'])[20] === 'Новый подзаголовок');
+
+// the manager: DraftService
+$dB = $call($dDev, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Контакты', 'alias' => 'kontakty', 'template' => 2, 'content' => 'Адрес: старый', 'published' => true), 'relations' => array('tvs' => array('seo' => 'один'))));
+$dBDraft = $dInvoke($dDev, 'create_draft', $dB['id'])['draft_id'];
+$call($dDev, 'update', array('kind' => 'resource', 'id' => $dBDraft, 'fields' => array('content' => 'Адрес: новый')));
+$dService = new DraftService($dSite, $dSite->user);
+$dRows = $dService->drafts();
+check('drafts: the manager service lists the drafts with edit links', count($dRows) === 1 && $dRows[0]['original_title'] === 'Контакты' && $dRows[0]['edit_url'] === '/manager/?a=resource/update&id=' . $dB['id']
+    && $dRows[0]['edit_draft_url'] === '/manager/?a=resource/update&id=' . $dBDraft && $dRows[0]['author'] === 'Рабочий');
+$dManagerPlan = $dService->apply($dB['id']);
+check('drafts: the manager gets the plan first', $dManagerPlan['performed'] === false && strpos($dManagerPlan['changes']['content']['diff'], '+Адрес: новый') !== false && $dSite->row('modResource', $dBDraft) !== null);
+$dManagerApply = $dService->apply($dB['id'], true);
+$dManagerRow = $dLast();
+check('drafts: a manager apply is journaled as the manager with the user', $dManagerApply['applied'] === true && $dSite->row('modResource', $dB['id'])['content'] === 'Адрес: новый' && $dSite->row('modResource', $dBDraft) === null
+    && $dManagerRow['source'] === 'manager' && (int) $dManagerRow['user_id'] === 2 && $dManagerRow['token_id'] === null && $dManagerRow['summary'] === "apply draft {$dBDraft} to resource {$dB['id']}" && $dCount('drafts') === 0);
+$dBDraft2 = $dInvoke($dDev, 'create_draft', $dB['id'])['draft_id'];
+$dService->discard($dBDraft2, true);
+check('drafts: a manager discard is journaled as the manager', $dSite->row('modResource', $dBDraft2) === null && $dLast()['source'] === 'manager' && $dCount('drafts') === 0);
+$e = throws('drafts: the manager gets the API\'s refusals', ApiException::class, function () use ($dService, $dB) { $dService->apply($dB['id'], true); });
+check('drafts: applying a page without a draft is validation_failed', $e && $e->errorCode === 'validation_failed');
+check('drafts: no stale link or archive row of an open draft remains', $dCount('drafts') === 0 && $dCount('draft_archive', 'draft_id = ?', array($dBDraft)) === 1);
+
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));
 check('canonical: list order is kept', Kernel::canonical(array(3, 1, 2)) === array(3, 1, 2));
