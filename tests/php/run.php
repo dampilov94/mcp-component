@@ -113,14 +113,14 @@ $context = function ($scope, array $denied = array(), array $options = array()) 
 $read = $context('read');
 $tools = Manifest::tools($read);
 $names = array_column($tools, 'name');
-check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_invoke', 'modx_resource_tree', 'modx_view_code', 'modx_search', 'modx_find_usages', 'modx_dependency_graph', 'modx_list_files', 'modx_read_file', 'modx_history', 'modx_history_diff', 'modx_check_page', 'modx_request_status'));
+check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_invoke', 'modx_resource_tree', 'modx_view_code', 'modx_search', 'modx_find_usages', 'modx_dependency_graph', 'modx_list_files', 'modx_read_file', 'modx_history', 'modx_history_diff', 'modx_check_page', 'modx_audit_site', 'modx_request_status'));
 check('manifest: protocol action is not a tool', !in_array('modx_manifest', $names, true));
 check('manifest: hash is stable', Manifest::hash($tools) === Manifest::hash(Manifest::tools($context('read'))));
 foreach ($tools as $tool) {
     check("manifest: {$tool['name']} is read-only", $tool['name'] === 'modx_invoke' || ($tool['effect']['read_only'] === true && $tool['effect']['destructive'] === false));
 }
 $all = array_column(Manifest::tools($context('admin')), null, 'name');
-check('manifest: full tool count', count($all) === 34);
+check('manifest: full tool count', count($all) === 35);
 check('manifest: duplicate is a reversible write after delete', $all['modx_duplicate']['effect']['read_only'] === false
     && $all['modx_duplicate']['effect']['reversible'] === true && $all['modx_duplicate']['effect']['destructive'] === false
     && array_search('modx_duplicate', array_keys($all), true) === array_search('modx_delete', array_keys($all), true) + 1);
@@ -3713,7 +3713,7 @@ foreach (array('run_processor' => array('processor' => 'resource/getlist', 'conf
         && $xAdmin->actions->blockReason($xAdmin->actions->get($xAction), $xAdmin) === 'disabled_by_setting'
         && !in_array('modx_' . $xAction, array_column(Manifest::tools($xAdmin), 'name'), true));
 }
-check('escape: with both off the admin manifest is the old one', count(Manifest::tools($xAdmin)) === 34);
+check('escape: with both off the admin manifest is the old one', count(Manifest::tools($xAdmin)) === 35);
 $xSite->options['modxmcp.allow_run_processor'] = '0';
 check('escape: the setting as the string 0 is off', !in_array('modx_run_processor', array_column(Manifest::tools($xAdmin), 'name'), true));
 $xSite->options['modxmcp.allow_run_processor'] = '1';
@@ -3723,7 +3723,7 @@ $xSite->options['modxmcp.allow_query_db'] = true;
 
 // ---- manifest and scopes ----
 $xTools = array_column(Manifest::tools($xAdmin), null, 'name');
-check('escape: with both on the admin sees 36 tools, the two after uninstall_package', count($xTools) === 36
+check('escape: with both on the admin sees 37 tools, the two after uninstall_package', count($xTools) === 37
     && array_search('modx_run_processor', array_keys($xTools), true) === array_search('modx_uninstall_package', array_keys($xTools), true) + 1
     && array_search('modx_query_db', array_keys($xTools), true) === array_search('modx_run_processor', array_keys($xTools), true) + 1);
 check('escape: run_processor is an admin, destructive, irreversible tool of the maintenance group', $xTools['modx_run_processor']['effect'] === array('read_only' => false, 'destructive' => true, 'reversible' => false, 'open_world' => false)
@@ -6373,6 +6373,135 @@ $oFirst->releaseAll();
 $oRecorderSource = '';
 foreach (glob($oCtx()->corePath . 'src/Manager/*.php') as $oFile) { $oRecorderSource .= file_get_contents($oFile); }
 check('open: the manager recorder does not call assertNotOpen', $oRecorderSource !== '' && strpos($oRecorderSource, 'assertNotOpen') === false && strpos($oRecorderSource, 'openInManager') === false);
+
+// --- Site audit ---
+use ModxMCP\Verify\SiteAudit;
+$aDir = sys_get_temp_dir() . '/modxmcp-audit-' . bin2hex(random_bytes(6));
+mkdir($aDir . '/core/elements/chunks', 0700, true);
+$aSite = fakeSite($aDir);
+$aRead = new Context($aSite, array('scope' => 'read') + $dev->token, $dev->corePath, function () { throw new RuntimeException('no store'); });
+
+// the empty site first: no findings, zero counts
+$aEmpty = $call($aRead, 'audit_site');
+check('audit: an empty site has no findings and zero counts', $aEmpty['findings'] === array() && array_keys($aEmpty['summary']) === SiteAudit::CHECKS
+    && array_sum(array_column($aEmpty['summary'], 'count')) === 0 && array_sum(array_column($aEmpty['summary'], 'truncated')) === 0);
+
+$aEl = function ($class, array $row) use ($aSite) {
+    static $ids = array();
+    $ids[$class] = isset($ids[$class]) ? $ids[$class] + 1 : 1;
+    $aSite->store($class, $row + array('id' => $ids[$class], 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => ''));
+    return $ids[$class];
+};
+$aSite->store('modContext', array('key' => 'web', 'name' => 'Web'));
+$aSite->store('modContext', array('key' => 'second', 'name' => 'Second'));
+file_put_contents($aDir . '/core/elements/chunks/ok.tpl', 'Файл на месте');
+// templates: 1 is used by pages, 2 by none
+$aSite->store('modTemplate', array('id' => 1, 'templatename' => 'Базовый', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => '', 'icon' => '',
+    'content' => '[[$head]] [[mainMenu]] [[badsnip]] [[$gone]] [[$linkbox]] [[$staticok]] [[$staticgone]] [[*sub]]'));
+$aSite->store('modTemplate', array('id' => 2, 'templatename' => 'Пустой шаблон', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => '', 'icon' => '', 'content' => 'x'));
+// chunks
+$aEl('modChunk', array('name' => 'head', 'snippet' => '<h1>Заголовок</h1>'));
+$aEl('modChunk', array('name' => 'unusedChunk', 'snippet' => 'Никем не используется'));
+$aEl('modChunk', array('name' => 'linkbox', 'snippet' => 'Ссылка [[~6]] на удалённую страницу'));
+$aEl('modChunk', array('name' => 'staticok', 'snippet' => '', 'static' => 1, 'static_file' => '[[++core_path]]elements/chunks/ok.tpl'));
+$aEl('modChunk', array('name' => 'staticgone', 'snippet' => 'запасной', 'static' => 1, 'static_file' => '[[++core_path]]elements/chunks/gone.tpl'));
+// snippets and plugins
+$aEl('modSnippet', array('name' => 'mainMenu', 'snippet' => "return 'Привет';"));
+$aEl('modSnippet', array('name' => 'badsnip', 'snippet' => "return 'Привет' (;"));
+$aEl('modPlugin', array('name' => 'goodplugin', 'plugincode' => 'return;', 'disabled' => 0));
+$aEl('modPlugin', array('name' => 'badplugin', 'plugincode' => "\$x = ;\n", 'disabled' => 1));
+// a TV that a template has, and one nothing has
+$aSite->store('modTemplateVar', array('id' => 1, 'name' => 'sub', 'default_text' => '', 'caption' => '', 'type' => 'text', 'category' => 0, 'static' => 0, 'static_file' => ''));
+$aSite->store('modTemplateVar', array('id' => 2, 'name' => 'orphanTv', 'default_text' => '', 'caption' => '', 'type' => 'text', 'category' => 0, 'static' => 0, 'static_file' => ''));
+$aSite->store('modTemplateVarTemplate', array('tmplvarid' => 1, 'templateid' => 1, 'rank' => 0));
+// resources
+$aRes = function ($id, $title, array $more = array()) use ($aSite) {
+    $aSite->store('modResource', $more + array('id' => $id, 'pagetitle' => $title, 'context_key' => 'web', 'template' => 1, 'published' => 1, 'deleted' => 0, 'uri' => 'p' . $id . '.html', 'content' => '', 'editedon' => $id));
+};
+$aRes(1, 'Главная', array('content' => 'Ссылки: [[~2]] и [[~99? &scheme=`full`]]', 'uri' => 'index.html'));
+$aRes(2, 'О нас', array('content' => 'См. [[~5]]', 'uri' => 'about.html'));
+$aRes(3, 'Дубль А', array('uri' => 'dup.html'));
+$aRes(4, 'Дубль Б', array('uri' => 'dup.html'));
+$aRes(5, 'Скрытая', array('published' => 0, 'uri' => 'hidden.html'));
+$aRes(6, 'Удалённая страница', array('deleted' => 1, 'uri' => 'dup.html', 'template' => 78));
+$aRes(7, 'Другой контекст', array('context_key' => 'second', 'uri' => 'dup.html'));
+$aRes(8, 'Без шаблона', array('template' => 77));
+$aStateBefore = array($aSite->tableDump('modResource'), $aSite->tableDump('modChunk'), $aSite->tableDump('modSnippet'), $aSite->tableDump('modPlugin'));
+$aJournalBefore = count($call($aRead, 'history', array('limit' => 100))['changesets']);
+
+$audit = $call($aRead, 'audit_site');
+$aBy = array();
+foreach ($audit['findings'] as $finding) { $aBy[$finding['check']][] = $finding; }
+$aOne = function ($check) use ($aBy) { return isset($aBy[$check]) && count($aBy[$check]) === 1 ? $aBy[$check][0] : null; };
+check('audit: summary counts every problem exactly once', array_column($audit['summary'], 'count') === array(3, 1, 3, 1, 1, 2, 1) && array_keys($audit['summary']) === SiteAudit::CHECKS
+    && count($audit['findings']) === 12 && array_sum(array_column($audit['summary'], 'truncated')) === 0);
+check('audit: findings come in the order of the checks', array_values(array_unique(array_column($audit['findings'], 'check'))) === array('broken_link', 'missing_element', 'unused_element', 'static_file_missing', 'duplicate_alias', 'php_syntax', 'missing_template'));
+
+$aLinks = array();
+foreach ($aBy['broken_link'] as $finding) { $aLinks[$finding['kind'] . ':' . $finding['id']] = $finding; }
+check('audit: a link to a missing page is an error with the target', $aLinks['resource:1']['severity'] === 'error' && $aLinks['resource:1']['name'] === 'Главная'
+    && $aLinks['resource:1']['details'] === array('target' => 99, 'exists' => false) && strpos($aLinks['resource:1']['message'], '[[~99]]') !== false);
+check('audit: a link to an unpublished page is a warning', $aLinks['resource:2']['severity'] === 'warning' && $aLinks['resource:2']['details']['target'] === 5
+    && $aLinks['resource:2']['details']['published'] === false && $aLinks['resource:2']['details']['deleted'] === false);
+check('audit: a link in an element, to a deleted page, is a warning', $aLinks['chunk:3']['severity'] === 'warning' && $aLinks['chunk:3']['name'] === 'linkbox'
+    && $aLinks['chunk:3']['details']['deleted'] === true && $aLinks['chunk:3']['details']['target'] === 6 && !isset($aLinks['resource:3']));
+$f = $aOne('missing_element');
+check('audit: a call of a missing chunk names the caller', $f && $f['severity'] === 'error' && $f['kind'] === 'template' && $f['id'] === 1 && $f['name'] === 'Базовый'
+    && $f['details'] === array('calls' => 'chunk', 'missing' => 'gone'));
+$aUnused = array();
+foreach ($aBy['unused_element'] as $finding) { $aUnused[$finding['kind'] . ':' . $finding['name']] = $finding; }
+check('audit: unused chunk, TV and template, and nothing used', array_keys($aUnused) === array('template:Пустой шаблон', 'chunk:unusedChunk', 'tv:orphanTv')
+    && $aUnused['chunk:unusedChunk']['severity'] === 'info' && $aUnused['template:Пустой шаблон']['id'] === 2 && $aUnused['tv:orphanTv']['id'] === 2);
+$f = $aOne('static_file_missing');
+check('audit: a static element whose file is gone', $f && $f['severity'] === 'error' && $f['kind'] === 'chunk' && $f['name'] === 'staticgone'
+    && $f['details'] === array('static_file' => '[[++core_path]]elements/chunks/gone.tpl', 'reason' => 'missing') && $audit['summary']['static_file_missing']['scanned'] === 2);
+$f = $aOne('duplicate_alias');
+check('audit: a shared address is reported once with every id, deleted pages and other contexts left out', $f && $f['severity'] === 'warning' && $f['kind'] === 'resource' && $f['id'] === 3
+    && $f['details'] === array('uri' => 'dup.html', 'context' => 'web', 'ids' => array(3, 4)));
+$aSyntax = array();
+foreach ($aBy['php_syntax'] as $finding) { $aSyntax[$finding['name']] = $finding; }
+check('audit: broken snippet and disabled plugin with line and message', array_keys($aSyntax) === array('badsnip', 'badplugin') && $aSyntax['badsnip']['severity'] === 'error'
+    && $aSyntax['badsnip']['kind'] === 'snippet' && $aSyntax['badsnip']['details']['line'] === 1 && $aSyntax['badsnip']['details']['error'] !== ''
+    && $aSyntax['badplugin']['kind'] === 'plugin' && $aSyntax['badplugin']['details']['disabled'] === true && $aSyntax['badplugin']['details']['line'] === 1
+    && $audit['summary']['php_syntax']['scanned'] === 4);
+$f = $aOne('missing_template');
+check('audit: a live page with a missing template, not the deleted one', $f && $f['severity'] === 'error' && $f['id'] === 8 && $f['name'] === 'Без шаблона' && $f['details'] === array('template' => 77)
+    && $audit['summary']['missing_template']['scanned'] === 7);
+check('audit: scanned counts and the rules in the notes', $audit['summary']['broken_link']['scanned'] === 8 + (5 + 2 + 2 + 2) && $audit['summary']['unused_element']['scanned'] === 5 + 2 + 2 + 2
+    && count(array_filter($audit['notes'], function ($note) { return strpos($note, 'unused_element follows the dependency graph') === 0; })) === 1);
+check('audit: read-only, nothing changed and nothing journaled', array($aSite->tableDump('modResource'), $aSite->tableDump('modChunk'), $aSite->tableDump('modSnippet'), $aSite->tableDump('modPlugin')) === $aStateBefore
+    && count($call($aRead, 'history', array('limit' => 100))['changesets']) === $aJournalBefore);
+
+// the checks filter and the limit
+$aFilter = $call($aRead, 'audit_site', array('checks' => array('duplicate_alias', 'missing_template')));
+check('audit: checks limit what is run and reported', array_keys($aFilter['summary']) === array('duplicate_alias', 'missing_template')
+    && array_column($aFilter['findings'], 'check') === array('duplicate_alias', 'missing_template'));
+$aOnly = $call($aRead, 'audit_site', array('checks' => array('php_syntax')));
+check('audit: a single check runs only that check', array_keys($aOnly['summary']) === array('php_syntax') && count($aOnly['findings']) === 2 && $aOnly['notes'] === array());
+$aLimit = $call($aRead, 'audit_site', array('checks' => array('broken_link', 'php_syntax'), 'limit' => 1));
+check('audit: count stays real above the limit, details stop', $aLimit['summary']['broken_link']['count'] === 3 && $aLimit['summary']['php_syntax']['count'] === 2
+    && count($aLimit['findings']) === 2 && $aLimit['summary']['broken_link']['truncated'] === false
+    && count(array_filter($aLimit['notes'], function ($note) { return strpos($note, 'broken_link: 3 found, the first 1 are listed') === 0; })) === 1);
+$e = throws('audit: unknown check', ApiException::class, function () use ($call, $aRead) { $call($aRead, 'audit_site', array('checks' => array('nope'))); });
+check('audit: unknown check is validation_failed', $e && $e->errorCode === 'validation_failed');
+throws('audit: limit above 200', ApiException::class, function () use ($call, $aRead) { $call($aRead, 'audit_site', array('limit' => 201)); });
+check('audit: read scope sees the tool in its manifest', in_array('modx_audit_site', array_column(Manifest::tools($aRead), 'name'), true));
+
+// the resource cap: the most recently edited pages are scanned, and the result says so
+$cDir = sys_get_temp_dir() . '/modxmcp-audit-cap-' . bin2hex(random_bytes(6));
+mkdir($cDir . '/core', 0700, true);
+$cSite = fakeSite($cDir);
+foreach (array(1 => 400, 2 => 300, 3 => 200, 4 => 100) as $id => $edited) {
+    $cSite->store('modResource', array('id' => $id, 'pagetitle' => 'Страница ' . $id, 'context_key' => 'web', 'template' => 50, 'published' => 1, 'deleted' => 0, 'uri' => 'c' . $id, 'content' => '', 'editedon' => $edited));
+}
+$cRead = new Context($cSite, array('scope' => 'read') + $dev->token, $dev->corePath, function () { throw new RuntimeException('no store'); });
+$cUncapped = $call($cRead, 'audit_site', array('checks' => array('missing_template')));
+SiteAudit::$maxResources = 2;
+$cCapped = $call($cRead, 'audit_site', array('checks' => array('missing_template')));
+SiteAudit::$maxResources = 5000;
+check('audit: below the cap everything is scanned', $cUncapped['summary']['missing_template'] === array('count' => 4, 'truncated' => false, 'scanned' => 4));
+check('audit: above the cap the newest-edited pages are scanned and truncated is set with a note', $cCapped['summary']['missing_template'] === array('count' => 2, 'truncated' => true, 'scanned' => 2)
+    && array_column($cCapped['findings'], 'id') === array(1, 2) && count(array_filter($cCapped['notes'], function ($note) { return strpos($note, '2 most recently edited of 4 resources') !== false; })) === 1);
 
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));

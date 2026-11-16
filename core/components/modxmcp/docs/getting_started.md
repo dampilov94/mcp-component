@@ -140,6 +140,15 @@ Rules that keep a live site safe:
   `flush_permissions`, `empty_trash`. Writes already refresh the cache. `empty_trash` is
   permanent and cannot be undone.
 
+## Audit
+
+- `modx_audit_site {checks?, limit?}` lists concrete problems, each tied to an object: `broken_link`
+  (a `[[~id]]` to a missing page is an error, to a deleted or unpublished one a warning),
+  `missing_element`, `unused_element`, `static_file_missing`, `duplicate_alias`, `php_syntax`,
+  `missing_template`. `summary` gives the real `count` per check even when `limit` (default 50)
+  lists fewer; `truncated` means a scan cap was hit. Findings are candidates to look at, not
+  orders; fix them one by one with the object's own tools and run the audit again.
+
 ## Undo
 
 - `modx_checkpoint {label}` before a larger task.
