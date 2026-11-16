@@ -61,3 +61,36 @@ it; output validates against the schema. Extend the fake only as needed.
 
 `npm run check`, `npm test`. Report as usual, including what each check considers "used" and
 any difference you found between the graph's rules and this table.
+
+## Report
+
+Based on: task/27-manager-lock at 172556b
+
+Implemented:
+- `src/Verify/SiteAudit.php`: the seven checks. One pass over resources in pages of 100 ids (links, aliases and templates come from the same rows; at most `SiteAudit::$maxResources` = 5000, the most recently edited first when there are more) and one pass over every element, read 200 at a time through the kinds (links in code, static files, PHP syntax). `missing_element` and `unused_element` come from `GraphBuilder::build(['format' => 'summary'])`. Counting continues past `limit`; only the first `limit` findings of a check are kept in full.
+- `src/Graph/GraphBuilder.php`: one new public method `linkTargets($content)` that returns the `[[~id]]` targets using the graph's own private tag parser (no tag parsing was re-implemented). `build()` is untouched.
+- `src/Action/AuditSiteAction.php`: tool `modx_audit_site`, read scope, group `verify` (same as `modx_check_page`), registered right after `CheckPageAction`. Input `checks` (enum of the seven names) and `limit` (1..200, default 50).
+- Help: `docs/index.md` (quick reference line) and a new "Audit" section in `docs/getting_started.md`.
+- Tests: `tests/php/run.php` block "Site audit" (23 checks): an empty site; one seeded instance of every problem with healthy neighbours and Cyrillic titles, code and a Cyrillic static-file text; each finding's object, severity and details; scanned counts; read-only (tables and journal unchanged); `checks` filter; `limit` with `count` above it and the note; unknown check; limit 201; read token sees the tool; the resource cap (newest-edited first, `truncated: true`, note).
+
+Counts: `npm run check` passes before and after. PHP checks 4774 -> 4800 (4 of those are the changed manifest assertions below, the rest new); node tests 31 -> 31 (unchanged, all pass).
+
+Existing assertions edited (tool list/count only, as allowed):
+- `tests/php/run.php`: read-token tool list gains `modx_audit_site` before `modx_request_status`; `manifest: full tool count` 34 -> 35; `escape: ... admin manifest is the old one` 34 -> 35; `escape: with both on the admin sees 36 tools ...` 36 -> 37 (label text changed to "37 tools").
+- `tests/endpoint.test.js`: read manifest list gains `modx_audit_site`; admin manifest 34 -> 35; bridge tool list 34 -> 35; admin tools with escape hatches 36 -> 37; read tools 18 -> 19.
+
+What each check considers (and where it differs from the table):
+- `broken_link`: `[[~N]]` in the content of every resource (deleted resources included, since the table does not exclude them) and in the code of chunks, snippets, templates and plugins; one finding per object and target. Error when the target row does not exist, warning when it is deleted or unpublished (`deleted` wins in the message).
+- `missing_element`: exactly the graph's `missing` rows: explicit `[[$chunk]]` / `[[snippet]]` tags in element code, heuristic property and PHP references are not reported. Resource content is NOT scanned for it (the graph does not). A note says so.
+- `unused_element`: the graph's orphans, unchanged. A chunk/snippet/TV is used if element code, default properties, a property set, a system setting or a miniShop2 order status refers to it; a TV also if a template has it attached; chunks and TVs named in resource content count as used only when the graph verified orphans (sites with at most 5000 resources; the note says when it did not). A template is unused when no non-deleted resource uses it. Plugins are never reported. Difference from the table: the table says a TV is used when "a template has it AND a tag or value uses it"; the graph says attached OR referenced (an attached TV with no tag is used). I followed the graph, as the brief says. "Value uses it" (a TV value stored on a resource) is not considered by the graph.
+- `static_file_missing`: chunks, snippets, templates, plugins (through `effectiveContent()`: missing file, or a stream path, or unreadable file -> `reason` missing/unreadable) and TVs (file checked directly via `getSourceFile()`). Details carry the stored `static_file` value, not the absolute server path.
+- `duplicate_alias`: non-deleted resources with the same non-empty `uri` and `context_key`; compared byte-exact (no case folding, so a database with a case-insensitive collation may treat more as duplicates). One finding per group, on the lowest id, `details.ids` lists all.
+- `php_syntax`: snippets and plugins (disabled ones too), static files honoured, through `PhpLint::check` (the `modxmcp.lint_php` write-time setting is ignored here). A snippet whose static file is missing is skipped (it is reported as `static_file_missing`).
+- `missing_template`: non-deleted resources whose `template` is neither 0 nor an existing template.
+- `summary.truncated` means a scan cap was hit (per-resource checks only); findings cut off by `limit` show up as `count` above the listed number plus a note. `scanned` is the number of objects the check looked at.
+
+Deviations: none from the design. Extras: `SiteAudit::$maxResources` is a public static so the cap can be tested; `GraphBuilder::linkTargets()` as described.
+
+Verified only against the fake (check on the stand): the xPDO queries (`select()` of partial columns, `sortby('editedon','DESC')` with `limit`, `id:IN`) on real MySQL and performance of the graph build on a large site; real static-file paths and permissions; that the graph's resource-content verification (`content LIKE`) behaves on a real database collation; names with Cyrillic in tags are not recognised by the graph's tag parser (ASCII-only names), so Cyrillic element names are never "referenced" and would show up as unused: an existing graph property, not changed.
+
+Open questions: should `broken_link` skip deleted resources as sources (they are not live)? Should `duplicate_alias` compare case-insensitively?

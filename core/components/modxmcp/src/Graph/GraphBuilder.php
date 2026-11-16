@@ -487,6 +487,19 @@ final class GraphBuilder {
         return $refs;
     }
 
+    /**
+     * Ids of the resources a source string links to with [[~id]] tags (nested tags included), in order of
+     * appearance, without repeats. Uses the graph's own tag parser.
+     * @return int[]
+     */
+    public function linkTargets($content) {
+        $ids = array();
+        foreach ($this->scanModxTags($content) as $ref) {
+            if ($ref['kind'] === 'resource') { $ids[(int) $ref['name']] = true; }
+        }
+        return array_keys($ids);
+    }
+
     /** Parse one tag body (without the [[ ]]) into element references. */
     private function parseModxTag($token) {
         $refs = array();

@@ -20,7 +20,8 @@ Quick reference:
   `modx_delete_path` — files in media sources; component code read-only.
 - `modx_search`, `modx_replace`, `modx_find_usages` — find and change text across code.
 - `modx_invoke` — special operations of a kind (see `modx_describe`); `modx_dependency_graph`
-  — how elements are wired; `modx_check_page` — request a page and see what it logged.
+  — how elements are wired; `modx_check_page` — request a page and see what it logged;
+  `modx_audit_site` — a list of concrete problems of the site (broken links, missing elements, bad PHP).
 - `modx_read_log` — the MODX error log; `modx_maintenance` — cache, URIs, locks, trash.
 - `modx_history`, `modx_history_diff`, `modx_checkpoint`, `modx_undo` — the change journal.
 - `modx_request_status` — outcome of a write whose response was lost.

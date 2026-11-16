@@ -38,6 +38,7 @@ final class Registry {
         CheckpointAction::class,
         ReadLogAction::class,
         CheckPageAction::class,
+        AuditSiteAction::class,
         MaintenanceAction::class,
         InstallPackageAction::class,
         UninstallPackageAction::class,
