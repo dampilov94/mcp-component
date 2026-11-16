@@ -2,7 +2,7 @@
 /**
  * modxMCP — manager CMP controller (Components > modxMCP).
  *
- * Status dashboard: API tokens, capability groups and integrations. The class name
+ * Overview: status, recent changes, where to go, capability groups, integrations and the dangerous settings. The class name
  * MUST be Modxmcp + Index + ManagerController for MODX 2.3+ namespaced controller
  * autoloading (namespace "modxmcp", action "index").
  *
@@ -31,8 +31,15 @@ class ModxmcpIndexManagerController extends modExtraManagerController {
             $this->modx->getOption('assets_url') . 'components/modxmcp/'
         );
         $cfg = json_encode(array(
-            'connector_url'      => $assetsUrl . 'connector.php',
-        ), JSON_UNESCAPED_UNICODE);
+            'connector_url' => $assetsUrl . 'connector.php',
+            'l'             => array(
+                'copied'          => $this->modx->lexicon('modxmcp_cmp_copied'),
+                'copy_failed'     => $this->modx->lexicon('modxmcp_cmp_copy_failed'),
+                'features_saving' => $this->modx->lexicon('modxmcp_cmp_features_saving'),
+                'features_saved'  => $this->modx->lexicon('modxmcp_cmp_features_saved'),
+                'features_failed' => $this->modx->lexicon('modxmcp_cmp_features_failed'),
+            ),
+        ), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP);
         $this->addHtml('<script type="text/javascript">var Modxmcp = ' . $cfg . ';</script>');
         // Cache-bust home.js by its mtime so browsers always load the current version.
         $jsFile = $this->modx->getOption('assets_path') . 'components/modxmcp/js/home.js';
@@ -42,74 +49,84 @@ class ModxmcpIndexManagerController extends modExtraManagerController {
 
     public function process(array $scriptProperties = array()) {
         $this->modx->lexicon->load('modxmcp:default');
-        $siteUrl = rtrim((string) $this->modx->getOption('site_url'), '/');
         $corePath = $this->modx->getOption('modxmcp.core_path', null, $this->modx->getOption('core_path') . 'components/modxmcp/');
         require_once rtrim($corePath, '/\\') . '/src/autoload.php';
+        $lex = function ($key) { return $this->modx->lexicon($key); };
 
-        $tokens = array();
+        $overview = array(
+            'enabled' => (bool) $this->modx->getOption('modxmcp.enabled'), 'version' => \ModxMCP\Kernel::VERSION, 'endpoint' => '',
+            'active_tokens' => 0, 'auto_static' => (bool) $this->modx->getOption('modxmcp.auto_static'),
+            'audit_log' => (bool) $this->modx->getOption('modxmcp.audit_log'),
+            'recent' => array(), 'counts_24h' => array('mcp' => 0, 'manager' => 0, 'external' => 0), 'dangerous' => array(),
+        );
         $integrations = array();
         $components = array();
         $features = array();
         try {
-            $date = function ($time) { return $time ? date('Y-m-d H:i', $time) : ''; };
-            foreach ((new \ModxMCP\Auth\TokenStore($this->modx))->all() as $token) {
-                $tokens[] = array(
-                    'id'        => $token['id'],
-                    'label'     => $token['label'] !== '' ? $token['label'] : '—',
-                    'prefix'    => $token['prefix'],
-                    'scope'     => $token['scope'],
-                    'plan_only' => $token['plan_only'] ? 1 : 0,
-                    'created'   => $date($token['created_at']),
-                    'last_used' => $date($token['last_used_at']),
-                    'expires'   => $date($token['expires_at']),
-                    'revoked'   => $token['revoked_at'] !== null ? 1 : 0,
-                    'expired'   => ($token['expires_at'] !== null && $token['expires_at'] <= time()) ? 1 : 0,
-                );
-            }
-
+            $overview = (new \ModxMCP\Manager\Overview($this->modx, $this->modx->user))->data();
             $capabilities = new \ModxMCP\Capabilities($this->modx);
             $integrations = $capabilities->integrationsReport();
 
             // Groups the admin can switch off for the whole site, split into add-ons vs core MODX.
             $disabled = array_flip($capabilities->disabledGroups());
-            $meta = array(
-                'virtualpage'        => array('VirtualPage (роуты / события)', 'component'),
-                'minishop2'          => array('miniShop2 (товары / опции / связи / категории / заказы)', 'component'),
-                'migx'               => array('MIGX (конфигурации)', 'component'),
-                'access'             => array('Контроль доступа (пользователи, группы, роли, политики)', 'feature'),
-                'contexts'           => array('Контексты', 'feature'),
-                'property_sets'      => array('Наборы свойств элементов', 'feature'),
-                'namespaces'         => array('Пространства имён', 'feature'),
-                'lexicon'            => array('Управление словарями', 'feature'),
-                'package_management' => array('Менеджер пакетов (установка / провайдеры)', 'feature'),
-            );
+            $addons = array('virtualpage', 'minishop2', 'migx');
             foreach (\ModxMCP\Capabilities::TOGGLEABLE as $g) {
-                $label = isset($meta[$g]) ? $meta[$g][0] : $g;
-                $kind = isset($meta[$g]) ? $meta[$g][1] : 'feature';
-                $row = array('key' => $g, 'label' => $label, 'enabled' => isset($disabled[$g]) ? 0 : 1);
-                if ($kind === 'component') { $components[] = $row; } else { $features[] = $row; }
+                $row = array('key' => $g, 'label' => $lex('modxmcp_group_' . $g), 'enabled' => isset($disabled[$g]) ? 0 : 1);
+                if (in_array($g, $addons, true)) { $components[] = $row; } else { $features[] = $row; }
             }
         } catch (Throwable $e) {
             $this->modx->log(modX::LOG_LEVEL_ERROR, '[modxmcp] Manager page: ' . $e->getMessage());
         }
 
+        $recent = array();
+        foreach ($overview['recent'] as $c) {
+            $recent[] = array(
+                'id'      => $c['changeset_id'],
+                'time'    => date('Y-m-d H:i', $c['at']),
+                'source'  => $c['source'],
+                'label'   => $lex('modxmcp_history_source_' . $c['source']),
+                'author'  => $c['author'],
+                'summary' => $c['summary'],
+            );
+        }
+        $counts = array();
+        foreach ($overview['counts_24h'] as $source => $n) {
+            $counts[] = array('source' => $source, 'label' => $lex('modxmcp_history_source_' . $source), 'n' => (int) $n);
+        }
+        $dangerous = array();
+        foreach ($overview['dangerous'] as $d) {
+            $name = substr($d['key'], strlen('modxmcp.'));
+            if (!$d['exists']) { $state = $lex('modxmcp_cmp_danger_missing'); $class = 'missing'; }
+            elseif ($d['type'] === 'bool') { $state = $lex($d['on'] ? 'modxmcp_cmp_danger_on' : 'modxmcp_cmp_danger_off'); $class = $d['on'] ? 'on' : 'off'; }
+            else { $state = $d['value'] !== '' ? $d['value'] : $lex('modxmcp_cmp_danger_any_address'); $class = $d['value'] !== '' ? 'on' : 'off'; }
+            $dangerous[] = array('key' => $d['key'], 'state' => $state, 'class' => $class, 'desc' => $lex('modxmcp_cmp_danger_' . $name));
+        }
+
         $labelKeys = array(
             'intro', 'endpoint', 'enabled', 'yes', 'no', 'enable_hint', 'auto_static', 'audit_log',
             'on', 'off', 'settings_hint', 'integrations', 'integrations_intro',
-            'history_title', 'history_desc', 'history_open',
+            'heading_status', 'version', 'active_tokens', 'no_tokens', 'tokens_link', 'copy',
+            'recent_title', 'recent_empty', 'recent_24h', 'recent_all',
+            'nav_tokens_desc', 'nav_history_desc', 'nav_graph_desc', 'nav_open',
+            'features_title', 'features_intro', 'features_components', 'features_modx', 'features_save',
+            'integration_available', 'integration_files_missing', 'integration_not_installed',
+            'danger_title', 'danger_intro',
         );
         $l = array();
         foreach ($labelKeys as $k) {
             $l[$k] = $this->modx->lexicon('modxmcp_cmp_' . $k);
         }
+        $l['tokens_count'] = str_replace('{n}', (string) $overview['active_tokens'], $this->modx->lexicon('modxmcp_cmp_tokens_count'));
+        $l['nav_tokens'] = $this->modx->lexicon('modxmcp_tokens');
+        $l['nav_history'] = $this->modx->lexicon('modxmcp_history');
+        $l['nav_graph'] = $this->modx->lexicon('modxmcp_graph');
 
         $this->setPlaceholders(array(
             'l'               => $l,
-            'enabled'         => $this->modx->getOption('modxmcp.enabled') ? 1 : 0,
-            'auto_static'     => $this->modx->getOption('modxmcp.auto_static') ? 1 : 0,
-            'audit_log'       => $this->modx->getOption('modxmcp.audit_log') ? 1 : 0,
-            'endpoint'        => $siteUrl . '/assets/components/modxmcp/api.php',
-            'tokens'          => $tokens,
+            'overview'        => $overview,
+            'recent'          => $recent,
+            'counts'          => $counts,
+            'dangerous'       => $dangerous,
             'integrations'    => $integrations,
             'components'      => $components,
             'features'        => $features,

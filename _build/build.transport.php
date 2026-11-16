@@ -162,7 +162,28 @@ $menuHistoryVehicle = $builder->createVehicle($menuHistory, array(
     xPDOTransport::RELATED_OBJECTS => false,
 ));
 $builder->putVehicle($menuHistoryVehicle);
-$modx->log(modX::LOG_LEVEL_INFO, 'Packaged manager menus (Components > modxMCP, + Граф связей, + История).');
+/* Fourth screen: API tokens. */
+$menuTokens = $modx->newObject('modMenu');
+$menuTokens->fromArray(array(
+    'text'        => 'modxmcp_tokens',
+    'parent'      => 'modxmcp',
+    'description' => 'modxmcp_tokens_desc',
+    'icon'        => '',
+    'menuindex'   => 3,
+    'params'      => '',
+    'handler'     => '',
+    'action'      => 'tokens',
+    'namespace'   => PKG_NAMESPACE,
+    'permissions' => 'settings',
+), '', true, true);
+$menuTokensVehicle = $builder->createVehicle($menuTokens, array(
+    xPDOTransport::PRESERVE_KEYS => true,
+    xPDOTransport::UPDATE_OBJECT => true,
+    xPDOTransport::UNIQUE_KEY    => 'text',
+    xPDOTransport::RELATED_OBJECTS => false,
+));
+$builder->putVehicle($menuTokensVehicle);
+$modx->log(modX::LOG_LEVEL_INFO, 'Packaged manager menus (Components > modxMCP, + Граф связей, + История, + Токены).');
 
 /* ---- core files ---- */
 $coreVehicle = $builder->createVehicle(
