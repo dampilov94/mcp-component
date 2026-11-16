@@ -69,6 +69,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 30 | [Tokens page and panel](30-tokens-panel.md) | `task/30-tokens-panel` | merged |
 | 31 | [Resource drafts](31-drafts.md) | `task/31-drafts` | merged |
 | 32 | [Fenom](32-fenom.md) | `task/32-fenom` | merged |
+| 33 | [Scenarios (prompts)](33-prompts.md) | `task/33-prompts` | ready for the executor |
 
 ## Doing several briefs in a row
 
