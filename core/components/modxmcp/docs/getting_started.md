@@ -134,8 +134,11 @@ Rules that keep a live site safe:
 - **A page that a person has open in the manager is not written over.** The write is refused
   with `locked` and `details.reason: "open_in_manager"` (with the user), because their next
   save would overwrite your change. Ask them to close it; `force: true` writes anyway.
-- **PHP is checked before it is saved.** A snippet or plugin with a syntax error is
-  refused with `lint_failed` and the line number; nothing is written.
+- **PHP and Fenom are checked before they are saved.** A snippet or plugin with a syntax error
+  is refused with `lint_failed` and the line number; nothing is written. On a site with
+  pdoTools, a chunk or template that pdoTools would treat as Fenom is compiled with the site's
+  own Fenom and refused the same way; without pdoTools, or with Fenom switched off for chunks
+  (`pdotools_fenom_default`), there is no check.
 - A write returns `changeset_id`, the new `revision`, the list of `changed` fields and
   `reversible`. Keep the revision for your next write to the same object.
 - If a write times out, do not repeat it with new arguments. Check
@@ -179,7 +182,9 @@ Rules that keep a live site safe:
 - `modx_audit_site {checks?, limit?}` lists concrete problems, each tied to an object: `broken_link`
   (a `[[~id]]` to a missing page is an error, to a deleted or unpublished one a warning),
   `missing_element`, `unused_element`, `static_file_missing`, `duplicate_alias`, `php_syntax`,
-  `missing_template`. `summary` gives the real `count` per check even when `limit` (default 50)
+  `missing_template`, `fenom_syntax` (a chunk or template whose Fenom does not compile; needs
+  pdoTools). With pdoTools, Fenom calls (`{include 'chunk'}`, `{'chunk' | chunk}`,
+  `{$_modx->runSnippet('name')}`, `makeUrl`) count as references in chunks and templates. `summary` gives the real `count` per check even when `limit` (default 50)
   lists fewer; `truncated` means a scan cap was hit. Findings are candidates to look at, not
   orders; fix them one by one with the object's own tools and run the audit again.
 
@@ -199,7 +204,7 @@ themselves; to re-apply an undo, undo it by its `changeset_id`. "This session" m
 the MCP client was started. To clean up objects you created, undoing the session is simpler
 than deleting them one by one.
 
-If PHP code is refused with `lint_failed`, fix the code. `skip_lint: true` exists for
+If PHP or Fenom code is refused with `lint_failed`, fix the code. `skip_lint: true` exists for
 deliberately incomplete code and should not be used to get past an error on a live site.
 
 If an object was changed after the changeset you are undoing, the plan marks it as a

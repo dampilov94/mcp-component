@@ -58,7 +58,7 @@ $_lang['setting_modxmcp.allowed_ips'] = 'Allowed client IPs';
 $_lang['setting_modxmcp.allowed_ips_desc'] = 'Comma-separated IPs or CIDR ranges (IPv4/IPv6), matched against REMOTE_ADDR. Empty allows all peers. X-Forwarded-For is not an authorization source; invalid rules are ignored.';
 
 $_lang['setting_modxmcp.lint_php'] = 'Check PHP before saving';
-$_lang['setting_modxmcp.lint_php_desc'] = 'Snippet and plugin code is checked for syntax errors before it is written. Code with an error is not saved.';
+$_lang['setting_modxmcp.lint_php_desc'] = 'Snippet and plugin code is checked for syntax errors before it is written, and so is Fenom in chunks and templates when pdoTools is installed. Code with an error is not saved.';
 $_lang['setting_modxmcp.history_track_manager'] = 'Record manager edits in the history';
 $_lang['setting_modxmcp.history_track_manager_desc'] = 'Changes that people make in the MODX manager (saving and deleting resources, elements, users and so on) are written to the modxMCP history with their author and can be undone. Needs the plugin modxMCP, which the package installs.';
 $_lang['setting_modxmcp.history_max_blob_bytes'] = 'Maximum journal snapshot size';

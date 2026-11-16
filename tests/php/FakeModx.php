@@ -457,6 +457,8 @@ trait FakeMiniShop2 {
             if (!isset($this->services[$name])) { $this->services[$name] = new FakeMs2Service($this); }
             return $this->services[$name];
         }
+        // pdoTools: a test registers its stand-in in $services (without one the service cannot be loaded).
+        if ($name === 'pdoTools') { return isset($this->services[$name]) ? $this->services[$name] : null; }
         // VirtualPage: the service class is found through the registered package.
         if ($name === 'virtualpage' && isset($this->packages['virtualpage'])) {
             if (!isset($this->services[$name])) { $this->services[$name] = new FakeVirtualPageService(); }

@@ -24,7 +24,7 @@ final class UpdateAction extends WriteAction {
             'key'       => self::keyArgument(),
             'fields'    => Schema::obj(array(), array(), true) + array('description' => 'Fields to change.'),
             'relations' => Schema::obj(array(), array(), true) + array('description' => 'Writable relations to replace.'),
-            'skip_lint' => Schema::bool('Save PHP code even if it does not parse.'),
+            'skip_lint' => Schema::bool('Save PHP or Fenom code even if it does not pass the syntax check.'),
         ) + $this->commonInput(), array('kind'));
     }
 

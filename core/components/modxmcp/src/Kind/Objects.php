@@ -5,6 +5,7 @@ use ModxMCP\ApiException;
 use ModxMCP\Auth\Scope;
 use ModxMCP\Context;
 use ModxMCP\Journal\Snapshot;
+use ModxMCP\Code\FenomCheck;
 use ModxMCP\Lint\PhpLint;
 use ModxMCP\Write\Transaction;
 
@@ -174,18 +175,29 @@ final class Objects {
         }
     }
 
-    /** Reject code that does not parse, before anything is saved. */
-    public static function lint(Context $context, Kind $kind, array $columns, $skip = false) {
+    /**
+     * Reject code that does not parse, before anything is saved: PHP for snippets and plugins, Fenom (compiled with the site's
+     * pdoTools; no check when pdoTools or Fenom is not there) for chunks and templates. $fenom false leaves Fenom out (a copy).
+     */
+    public static function lint(Context $context, Kind $kind, array $columns, $skip = false, $fenom = true) {
         $field = $kind->codeField();
-        if ($kind->lint() !== 'php' || $field === null || !array_key_exists($kind->column($field), $columns)) { return; }
+        $language = $kind->lint();
+        if (($language !== 'php' && ($language !== 'fenom' || !$fenom)) || $field === null || !array_key_exists($kind->column($field), $columns)) { return; }
         if (!$context->modx->getOption('modxmcp.lint_php', null, true)) { return; }
-        $error = PhpLint::check($columns[$kind->column($field)]);
+        $code = $columns[$kind->column($field)];
+        if ($language === 'php') {
+            $error = PhpLint::check($code);
+            $label = 'PHP';
+        } else {
+            $error = (new FenomCheck($context->modx))->check($code, $kind->name());
+            $label = 'Fenom';
+        }
         if ($error === null) { return; }
         if ($skip) {
-            $context->warnings[] = "PHP syntax check skipped on request: {$error['message']} on line {$error['line']}.";
+            $context->warnings[] = "{$label} syntax check skipped on request: {$error['message']} on line {$error['line']}.";
             return;
         }
-        throw new ApiException('lint_failed', "PHP syntax error on line {$error['line']}: {$error['message']}. Nothing was saved.", $error);
+        throw new ApiException('lint_failed', "{$label} syntax error on line {$error['line']}: {$error['message']}. Nothing was saved.", $error);
     }
 
     /** Fail with revision_conflict when the caller's revision is not the current one. */

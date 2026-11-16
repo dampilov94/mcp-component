@@ -82,7 +82,7 @@ final class DuplicateAction extends WriteAction {
         }
         if ($notCopied) { $context->warnings[] = 'Not copied: ' . implode(', ', $notCopied); }
         Objects::assertWritableRelations($kind, $relations, $context);
-        Objects::lint($context, $kind, $columns);
+        Objects::lint($context, $kind, $columns, false, false);
         if ($this->isDryRun($args, $context)) {
             return $this->plan($context, array(
                 'kind' => $kind->name(), 'source_' . $kind->keyField() => $sourceId, 'would_create' => $kind->hasNames() ? array('name' => $newName) : new \stdClass(),
