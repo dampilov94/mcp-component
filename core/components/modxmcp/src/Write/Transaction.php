@@ -144,10 +144,13 @@ final class Transaction {
         if (!$rows && !$informational) { return array('changeset_id' => null, 'changes' => array()); }
 
         $journal = $this->context->journal();
-        $id = $journal->commit(array(
-            'source' => 'mcp', 'token_id' => $this->context->token['id'], 'session_id' => $this->context->sessionId,
-            'request_id' => $this->context->requestId, 'tool' => $this->tool, 'summary' => $summary, 'undoes' => $undoes,
-        ), $rows);
+        $meta = array('tool' => $this->tool, 'summary' => $summary, 'undoes' => $undoes);
+        if ($this->context->managerUserId !== null) {
+            $meta += array('source' => 'manager', 'token_id' => null, 'user_id' => $this->context->managerUserId, 'session_id' => null, 'request_id' => null);
+        } else {
+            $meta += array('source' => 'mcp', 'token_id' => $this->context->token['id'], 'session_id' => $this->context->sessionId, 'request_id' => $this->context->requestId);
+        }
+        $id = $journal->commit($meta, $rows);
         if ($undoes) { $journal->setUndone($undoes, $id); }
         $this->maybePrune();
         return array('changeset_id' => $id, 'changes' => $changes);

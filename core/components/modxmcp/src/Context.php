@@ -30,6 +30,9 @@ final class Context {
     /** @var \ModxMCP\Write\Transaction|null The write transaction in progress, for kinds whose writes change other objects. */
     public $transaction = null;
 
+    /** @var int|null Set only by forManager(): the manager user on whose behalf changes are made. The HTTP kernel never sets it. */
+    public $managerUserId = null;
+
     /** @var string[] Warnings returned in meta.warnings. */
     public $warnings = array();
 
@@ -44,6 +47,24 @@ final class Context {
         $this->actions = new Registry();
         $this->kinds = new KindRegistry($this);
         $this->requestStoreFactory = $requestStoreFactory;
+    }
+
+    /**
+     * A context for a person working in the MODX manager (the history page). It has the full admin scope of
+     * a token, but its changes are journaled as source "manager" with the user, not as an MCP token's.
+     * Only manager code calls this; no request of the API can reach it.
+     * @param \modX $modx
+     * @param \modUser $user the manager user
+     */
+    public static function forManager(\modX $modx, $user, $corePath) {
+        $token = array(
+            'id' => null, 'label' => 'manager: ' . (string) $user->get('username'), 'prefix' => '', 'scope' => 'admin',
+            'plan_only' => false, 'denied_groups' => array(), 'expires_at' => null, 'last_used_at' => null,
+            'created_by' => 0, 'created_at' => 0, 'revoked_at' => null,
+        );
+        $context = new self($modx, $token, $corePath, function () { throw new \RuntimeException('There is no request store in the manager.'); });
+        $context->managerUserId = (int) $user->get('id');
+        return $context;
     }
 
     /** Private runtime state of the component, outside the MODX cache and the component files. */

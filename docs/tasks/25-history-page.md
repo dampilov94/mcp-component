@@ -104,3 +104,42 @@ JavaScript and the template have no automated tests; keep the JS small and reada
 `src/Write/Transaction.php`, `src/Action/HistoryAction.php` (author), the four processors,
 the controller, template, JS, lexicons, `_build/build.transport.php`, `templates/home.tpl`,
 tests.
+
+## Report
+
+Based on: main at 65cbd42
+
+### Implemented
+
+- `src/Context.php`: `Context::forManager($modx, $user, $corePath)` (token record `{id: null, label: "manager: <username>", scope: admin, plan_only: false, denied_groups: []}`) and the public `managerUserId`.
+- `src/Write/Transaction.php`: with `managerUserId` set, `commit()` journals `source: manager`, `user_id`, `token_id`/`session_id`/`request_id` null. Nothing else changed.
+- `src/Journal/Journal.php`: `changesets()` now sits on a shared filter builder; new filters `until`, `tool`, `query` (LIKE on summary or an object's label, wildcards escaped) and `object_key` without `kind`; new `page($filter, $limit, $start)` (rows plus total) and `checkpoints($limit)`.
+- `src/Journal/Authors.php` (new): author name of a changeset (token label / manager username / `unknown`; token row missing: `(revoked token)`).
+- `src/Action/HistoryAction.php`: entries now carry `author`; formatting moved to `HistoryAction::entries()`, reused by the service.
+- `src/Manager/HistoryService.php` (new): `changesets`, `changeset`, `undo` (runs `UndoAction` itself), `checkpoints`, `errorReport`.
+- `processors/mgr/history/{getlist,get,undo,checkpoints}.class.php`; `controllers/history.class.php`; `templates/history.tpl`; `assets/components/modxmcp/js/history.js`; lexicon keys `modxmcp_history*` and `modxmcp_cmp_history_*` (ru, en); `templates/home.tpl` + `controllers/index.class.php` (home block); `_build/build.transport.php` (menu `modxmcp_history`).
+- `tests/php/run.php`: block "Manager history page" (about 61 checks, 4632 -> 4693).
+
+### Counts
+
+Before: `npm run check` ok, `npm test` 30 pass, PHP 4632 checks. After: check ok, 30 pass, PHP 4693 checks. No existing assertion changed. The only visible change to old behaviour is `author` in `modx_history` entries (no assertion compared the full key set).
+
+### Deviations / conservative readings
+
+- Revoked tokens: a token whose row still exists (revoked) shows its label; `(revoked token)` is used only when the row is gone, as the brief says ("if it is gone").
+- `changeset()` returns `modx_history_diff` plus `author`, `reversible`, `undone_by`, `undoes`, and for non-reversible ones `not_reversible` (`no_changes` | `blocked`) and `notes`; the page needs these. The tool `modx_history_diff` itself is unchanged.
+- `checkpoints()` returns `after` (all MCP changesets after the point) and `undoable_after` (what a rollback would select: committed, not an undo, with changes). The page shows `undoable_after`. Checkpoints only have `token_id`, so their author is a token label.
+- The manager user's own MODX permissions apply to the processors that perform an undo (the page does not switch to the sudo service user as the kernel does). A user with only `settings` may be refused by a processor for an object kind they cannot edit; the error is shown. Say if the page should elevate instead.
+- The `id`/`key` filter compares the stored object key; without `kind` it matches any kind. After a performed undo the page resets all filters so the new changeset is at the top.
+- Text search is `LIKE`: case-insensitive on MySQL utf8mb4 collations, but SQLite (tests) only folds ASCII, so tests use the same case.
+- Kind-level guard observed (not changed): undo of the creation of a user group named `Administrator` is not refused by `assertUndoable` (only rules/policies of that group are); I tested the Administrator-group rule guard instead.
+- MODx.Ajax shows its own error dialog on a failed request in addition to the inline message of the page.
+
+### Verified only against the fake
+
+Everything PHP (SQLite fake; real MySQL LIKE/ESCAPE and OFFSET syntax unverified). The controller, template, JS, connector routing of `mgr/history/*`, `fetch()` of lexicon keys, menu registration, grid response of `getlist`, and the page's layout need a look in a real manager (including `?a=history&namespace=modxmcp`).
+
+### Open questions
+
+- Should the page undo with the manager user's permissions (current) or as the service user?
+- Do we want status/tool filters in the UI (the service supports them)?

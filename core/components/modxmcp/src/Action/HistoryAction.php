@@ -2,6 +2,7 @@
 namespace ModxMCP\Action;
 
 use ModxMCP\Context;
+use ModxMCP\Journal\Authors;
 use ModxMCP\Journal\Subjects;
 use ModxMCP\Schema;
 
@@ -37,15 +38,20 @@ final class HistoryAction extends Action {
             if (isset($args[$key])) { $filter[$key] = $args[$key]; }
         }
         if (isset($args['kind'], $args['id'])) { $filter['object_key'] = (string) $args['id']; }
-        $journal = $context->journal();
-        $changesets = $journal->changesets($filter, isset($args['limit']) ? $args['limit'] : 20);
+        $changesets = $context->journal()->changesets($filter, isset($args['limit']) ? $args['limit'] : 20);
+        return array('changesets' => self::entries($context, $changesets));
+    }
+
+    /** Journal changesets in the shape this tool returns them (also used by the manager's history page). */
+    public static function entries(Context $context, array $changesets) {
         $byChangeset = array();
-        foreach ($journal->changes(array_column($changesets, 'id')) as $change) {
+        foreach ($context->journal()->changes(array_column($changesets, 'id')) as $change) {
             $byChangeset[$change['changeset_id']][] = array(
                 'kind' => $change['kind'], Subjects::keyField($context, $change['kind']) => Subjects::publicKey($context, $change['kind'], $change['object_key']),
                 'name' => $change['label'], 'op' => $change['op'],
             );
         }
+        $authors = new Authors($context->modx);
         $out = array();
         foreach ($changesets as $changeset) {
             $out[] = array(
@@ -53,6 +59,7 @@ final class HistoryAction extends Action {
                 'at'           => $changeset['created_at'],
                 'time'         => date('c', $changeset['created_at']),
                 'source'       => $changeset['source'],
+                'author'       => $authors->name($changeset),
                 'tool'         => $changeset['tool'],
                 'summary'      => $changeset['summary'],
                 'status'       => $changeset['status'],
@@ -62,6 +69,6 @@ final class HistoryAction extends Action {
             ) + ($changeset['undoes'] ? array('undoes' => $changeset['undoes']) : array())
               + ($changeset['undone_by'] !== null ? array('undone_by' => $changeset['undone_by']) : array());
         }
-        return array('changesets' => $out);
+        return $out;
     }
 }
