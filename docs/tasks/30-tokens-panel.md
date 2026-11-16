@@ -127,3 +127,51 @@ Templates and JS: `node --check` only; keep them readable.
 
 `npm run check`, `npm test`. Report as usual; list every UI string you added and anything that
 needs a look in a real manager (layout, clipboard on the stand, which runs on plain HTTP).
+
+## Report
+
+Based on: main at 66e0902
+
+### Implemented
+
+- `src/Auth/TokenStore.php`: `get($id)`, `update($id, $changes)` (label, plan_only, denied_groups, expires_at; unknown keys, scope, hash, revoked or unknown token, bad values refused with `InvalidArgumentException`), `create()` validates `denied_groups`.
+- `src/Manager/TokenService.php`: `tokens()` (status, `created_by_name`, `changesets` in one grouped query; a site without journal tables gets zeros), `create()` (+ `token`, `config`), `update()`, `revoke()`, `endpoint()`, `config()`; manager actions `modxmcp_create_token` / `_update_token` / `_revoke_token` with the token id only.
+- `src/Manager/Overview.php` (new, not named in the brief): the overview data for the panel and for `getstatus` (status, version, endpoint, active tokens, five newest changesets, 24-hour counts by source, the seven dangerous settings with a missing one reported as `exists: false`).
+- `processors/mgr/tokens/{getlist,create,update,revoke}.class.php`; removed `createtoken` and `revoketoken`; `getstatus` now returns the overview. Errors go through `HistoryService::errorReport` (reused, not moved).
+- Page: `controllers/tokens.class.php`, `templates/tokens.tpl`, `js/tokens.js`, menu `modxmcp_tokens` (menuindex 3) in `_build/build.transport.php`.
+- Panel: `controllers/index.class.php`, `templates/home.tpl`, `js/home.js` rewritten (the token block and its JS are gone; group labels come from the lexicon `modxmcp_group_<key>`).
+- Lexicon ru and en: `modxmcp_tokens*`, `modxmcp_group_*`, new `modxmcp_cmp_*` keys (about 120 per language).
+- Tests: block "Tokens page" in `tests/php/run.php` (66 new checks). `tests/php/FakeModx.php`: `modX::logManagerAction()` (records to `$managerActions`) and `modX::log()` also records to `$logLines`.
+
+### Deviations and decisions
+
+- `Overview` is an extra class; the brief names only `TokenService`.
+- The endpoint is built from `site_url` and the assets URL (`modxmcp.assets_url`, else `assets_url` + `components/modxmcp/`): an `assets_url` starting with `/` is joined to the scheme and host of `site_url`, an absolute one is used as is. On a standard site it gives the same address as the old home page (`<site_url>assets/components/modxmcp/api.php`).
+- `json_encode` pretty-prints with 4 spaces; `config` is re-indented to 2 spaces.
+- `expires_days` outside 0..3650 or not a whole number is refused (the old processor silently clamped).
+- The history link per token was not made (the brief says to show the number only). The number counts journal changesets with that `token_id`.
+- The "dangerous" states are neutral: bold when on, plain when off (no red/green, since "on" is good for `lint_php`).
+- Old `modxmcp_cmp_*` keys that the panel no longer uses (`history_*`, `token*`, `regenerate*`) are left in the lexicons.
+- `TokenStore::insert()` still cuts a label with `substr()` at 190 bytes; the service refuses labels over 190 characters first, so it never happens through the page. Not changed.
+- README, DEVELOPMENT.md, spec and CHANGELOG were not touched.
+
+### Existing assertions
+
+None changed or removed. The old processors had no tests.
+
+### Verified only against the fake / needs a look in a real manager
+
+- Smarty template `home.tpl`, the controllers, `lexicon->fetch` for the two prefixes, the connector routing to `mgr/tokens/*` and the menu entry (after a package build; on the file-by-file stand the menu item must be created by hand).
+- Layout of both pages, the inline edit form under a row, the `<details>` for groups, the confirm text.
+- Clipboard: `navigator.clipboard` is used only in a secure context, otherwise the text is selected and `document.execCommand('copy')` is tried; check on the plain-HTTP stand.
+- How `MODx.Ajax` shows `failure()` messages (the pages show `r.message` in the form, but MODX may also show its own dialog).
+- Real MODX `getOption` for a setting that does not exist returns null with a null default (relied on for "не создана"); the fake behaves so.
+
+### UI strings added
+
+All in `lexicon/{ru,en}/default.inc.php`: menu `modxmcp_tokens`, `modxmcp_tokens_desc`; page `modxmcp_tokens_*` (title, heading, intro, scope names and one-line explanations, plan-only text, column titles, statuses, buttons, form labels and placeholders, expiry options, group hint, error and confirm texts, result box texts); panel `modxmcp_cmp_*` (status, version, tokens, copy, recent changes, tiles, capabilities, integrations states, dangerous capabilities with one sentence per setting); group labels `modxmcp_group_*`.
+
+### Open questions
+
+- Should the old unused `modxmcp_cmp_*` keys be deleted?
+- The dangerous list is read from options at page load; a value changed in System settings shows after a page reload (the config is not cached beyond the request).
