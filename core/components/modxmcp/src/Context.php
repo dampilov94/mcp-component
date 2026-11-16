@@ -33,6 +33,14 @@ final class Context {
     /** @var int|null Set only by forManager(): the manager user on whose behalf changes are made. The HTTP kernel never sets it. */
     public $managerUserId = null;
 
+    /**
+     * @var bool Set only by the manager recorder, and only while it handles an event that has no before-event
+     * (publishing from the tree, a save whose before-event was not seen): then the difference between the
+     * journal's last state and the current one IS what the person just did. Everywhere else such a difference
+     * was made earlier by somebody unknown.
+     */
+    public $outsideChangeIsManagers = false;
+
     /** @var string[] Warnings returned in meta.warnings. */
     public $warnings = array();
 

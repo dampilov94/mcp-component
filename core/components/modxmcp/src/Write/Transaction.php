@@ -18,11 +18,21 @@ final class Transaction {
     private $tool;
     private $lock;
     private $touched = array();
+    private $released = false;
+
+    /** @var int Transactions open in this process: the manager recorder stays silent while one that is not its own is. */
+    private static $open = 0;
 
     public function __construct(Context $context, $tool) {
         $this->context = $context;
         $this->tool = $tool;
         $this->lock = new Lock($context->dataDir() . '/locks');
+        self::$open++;
+    }
+
+    /** How many transactions are open (created and not yet released) in this process. */
+    public static function depth() {
+        return self::$open;
     }
 
     /** Take a lock that is not tied to an object (e.g. the package workspace), released with the transaction. */
@@ -61,15 +71,25 @@ final class Transaction {
         $blobs = $this->context->blobs();
         $reversible = $last['after_revision'] === null || $blobs->has($last['after_revision']);
         if ($current !== null && $blobs->put(Snapshot::encode($current)) === null) { $reversible = false; }
-        $journal->commit(array(
-            'source' => 'external', 'tool' => '', 'summary' => "{$subject->kindName()} {$subject->key()} was changed outside the journal",
-        ), array(array(
+        // Only the recorder's after-only events know the author: the change was made by the person acting now.
+        // A difference found before a save (or during an undo from the history page) was made earlier, by someone unknown.
+        if ($this->context->managerUserId !== null && $this->context->outsideChangeIsManagers) {
+            $meta = array(
+                'source' => 'manager', 'tool' => 'manager', 'user_id' => $this->context->managerUserId,
+                'summary' => "{$subject->kindName()} {$subject->key()} was changed in the manager",
+            );
+            $note = '';
+        } else {
+            $meta = array('source' => 'external', 'tool' => '', 'summary' => "{$subject->kindName()} {$subject->key()} was changed outside the journal");
+            $note = 'Detected at the next write to the object; author and exact time are unknown.';
+        }
+        $journal->commit($meta, array(array(
             'kind' => $subject->kindName(), 'object_key' => $subject->key(),
             'label' => $current !== null ? $subject->label($current) : $last['label'],
             'op' => $last['after_revision'] === null ? 'create' : ($current === null ? 'delete' : 'update'),
             'before_revision' => $last['after_revision'], 'after_revision' => $revision,
             'reversible' => $reversible,
-            'note' => 'Detected at the next MCP write; author and exact time are unknown.',
+            'note' => $note,
         )));
     }
 
@@ -197,5 +217,9 @@ final class Transaction {
 
     public function release() {
         $this->lock->releaseAll();
+        if (!$this->released) {
+            $this->released = true;
+            self::$open--;
+        }
     }
 }

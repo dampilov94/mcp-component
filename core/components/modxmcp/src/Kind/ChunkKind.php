@@ -11,7 +11,10 @@ final class ChunkKind extends Kind {
     public function processorPath() { return 'element/chunk/'; }
 
     public function eventNames() {
-        return array('save' => 'OnChunkFormSave', 'delete' => 'OnChunkFormDelete', 'param' => 'chunk');
+        return array(
+            'before_save' => 'OnBeforeChunkFormSave', 'save' => 'OnChunkFormSave',
+            'before_delete' => 'OnBeforeChunkFormDelete', 'delete' => 'OnChunkFormDelete', 'param' => 'chunk',
+        );
     }
 
     public function fields() {

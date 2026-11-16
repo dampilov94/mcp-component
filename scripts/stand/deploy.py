@@ -94,18 +94,53 @@ delete = sorted(p for p in deployed if p not in local)
 order = lambda p: (2 if p.endswith('assets/components/modxmcp/api.php') else 0 if '/src/' in p else 1, p)
 ftp, host, mode = connect()
 print('host:', host, '| mode:', mode, '| upload:', len(upload), '| delete:', len(delete))
+ftp.close()
+
+def transfer(path, data):
+    """Upload one file so that the live file is never left truncated.
+
+    The stand's FTP server sometimes hangs on a transfer (seen 2026-11-16: every second transfer in
+    one session). A hang in the middle of STOR leaves a zero-length file, which takes the site
+    down. So: a fresh connection for every file, upload under a temporary name, verify that
+    copy byte for byte, and only then rename it over the live file.
+    """
+    target = SITE + '/' + path
+    temp = target + '.deploy-tmp'
+    last = None
+    for attempt in range(4):
+        try:
+            c, _, _ = connect()
+            mkdirs(c, SITE + '/' + os.path.dirname(path))
+            put(c, temp, data)
+            c.close()
+            c, _, _ = connect()
+            ok = get(c, temp) == data
+            c.close()
+            c, _, _ = connect()
+            if not ok:
+                c.delete(temp); c.close()
+                last = 'verification failed'
+                continue
+            c.rename(temp, target)
+            c.close()
+            return
+        except Exception as err:   # timeouts and dropped connections: try again on a new connection
+            last = '%s: %s' % (type(err).__name__, err)
+    try:
+        c, _, _ = connect(); c.delete(temp); c.close()
+    except Exception:
+        pass
+    sys.exit('Upload failed for %s (%s). The live file was not touched.' % (path, last))
+
 for path in sorted(upload, key=order):
-    data = open(os.path.join(REPO, path), 'rb').read()
-    mkdirs(ftp, SITE + '/' + os.path.dirname(path))
-    put(ftp, SITE + '/' + path, data)
-    if get(ftp, SITE + '/' + path) != data:
-        print('VERIFY FAILED', path); sys.exit(1)
+    transfer(path, open(os.path.join(REPO, path), 'rb').read())
     deployed[path] = local[path]
     json.dump(deployed, open(STATE, 'w'))
+    print('uploaded', path)
 for path in delete:
-    try: ftp.delete(SITE + '/' + path)
+    try:
+        c, _, _ = connect(); c.delete(SITE + '/' + path); c.close()
     except Exception as e: print('delete failed', path, e)
     deployed.pop(path, None)
 json.dump(deployed, open(STATE, 'w'))
 print('done')
-ftp.quit()

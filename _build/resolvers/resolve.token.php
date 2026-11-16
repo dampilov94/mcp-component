@@ -37,6 +37,8 @@ if ($action === xPDOTransport::ACTION_INSTALL || $action === xPDOTransport::ACTI
         $store = new \ModxMCP\Auth\TokenStore($modx);
         $store->install();
         (new \ModxMCP\Journal\Journal($modx))->install();
+        // The plugin that records manager edits; an upgrade that adds kinds also adds their events.
+        \ModxMCP\Manager\Recorder::syncPlugin($modx);
         if (!$store->all()) {
             $modx->log(modX::LOG_LEVEL_INFO, '[modxMCP] No API tokens yet. Create one in Components > modxMCP and put it into your MCP client.');
         }

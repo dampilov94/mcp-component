@@ -549,12 +549,24 @@ trait FakeResourceProcessors {
         if ($action === 'delete' || $action === 'undelete') {
             $resource = $this->getObject('modResource', array('id' => $data['id']));
             if (!$resource) { return new FakeResponse('Resource not found.'); }
-            foreach (array_merge(array($data['id']), $this->descendantIds($data['id'])) as $id) {
+            $children = $this->descendantIds($data['id']);
+            if ($action === 'delete') { $this->invokeEvent('OnBeforeDocFormDelete', array('id' => $resource->get('id'), 'resource' => &$resource, 'children' => $children)); }
+            foreach (array_merge(array($data['id']), $children) as $id) {
                 $item = $this->getObject('modResource', array('id' => $id));
                 $item->set('deleted', $action === 'delete' ? 1 : 0);
                 $item->set('deletedon', $action === 'delete' ? 1700000000 : 0);
                 $item->save();
             }
+            $resource = $this->getObject('modResource', array('id' => $data['id']));
+            $this->invokeEvent($action === 'delete' ? 'OnDocFormDelete' : 'OnResourceUndelete', array('id' => $resource->get('id'), 'resource' => &$resource, 'children' => $children));
+            return new FakeResponse(null, array('id' => $data['id']));
+        }
+        if ($action === 'publish' || $action === 'unpublish') {
+            $resource = $this->getObject('modResource', array('id' => $data['id']));
+            if (!$resource) { return new FakeResponse('Resource not found.'); }
+            $resource->set('published', $action === 'publish' ? 1 : 0);
+            $resource->save();
+            $this->invokeEvent($action === 'publish' ? 'OnDocPublished' : 'OnDocUnPublished', array('docid' => $resource->get('id'), 'id' => $resource->get('id'), 'resource' => &$resource));
             return new FakeResponse(null, array('id' => $data['id']));
         }
         if (!isset($data['pagetitle']) || $data['pagetitle'] === '') { return new FakeResponse('Please specify a title.'); }
@@ -601,6 +613,8 @@ trait FakeResourceProcessors {
         $data['editedon'] = ((int) $resource->get('editedon')) + 1;   // changes on every save
         if (empty($data['uri_override'])) { $data['uri'] = isset($data['alias']) ? $data['alias'] : $resource->get('alias'); }
         $resource->fromArray($data, '', false, true);
+        $this->invokeEvent('OnBeforeDocFormSave', array('mode' => $action === 'create' ? 'new' : 'upd', 'id' => $action === 'create' ? 0 : $resource->get('id'), 'resource' => &$resource));
+        if ($this->failBeforeSave === $path) { return new FakeResponse('Prevented by a plugin.'); }
         $resource->save();
         if ($dataProps) {
             $product = $this->getObject('msProductData', array('id' => $resource->get('id')));
@@ -610,6 +624,7 @@ trait FakeResourceProcessors {
         $this->fixFolder((int) $resource->get('parent'));
         if ($oldParent !== (int) $resource->get('parent')) { $this->fixFolder($oldParent); }
         if ($syncsite) { $this->getCacheManager()->refresh(); }
+        $this->invokeEvent('OnDocFormSave', array('mode' => $action === 'create' ? 'new' : 'upd', 'id' => $resource->get('id'), 'resource' => &$resource));
         if ($this->failProcessor === $path) { throw new RuntimeException('Simulated failure after save.'); }
         return new FakeResponse(null, array('id' => $resource->get('id')));
     }
@@ -977,7 +992,21 @@ class modX extends xPDO {
         foreach ($this->match($class, $criteria) as $row) { $this->drop($class, $row); }
         return true;
     }
-    public function invokeEvent($name, array $params = array()) { $this->events[] = $name; }
+    /** Plugin stand-ins: callables ($eventName, $params) that every invoked event is passed to (like a plugin on all events). */
+    public $listeners = array();
+    public function invokeEvent($name, array $params = array()) {
+        $this->events[] = $name;
+        foreach ($this->listeners as $listener) { call_user_func($listener, $name, $params); }
+    }
+    /** Set to a processor path: the processor fires its before-event and then refuses, like a plugin that prevents the save. */
+    public $failBeforeSave = null;
+    private static $elementEvents = array(
+        'modChunk' => array('OnBeforeChunkFormSave', 'OnChunkFormSave', 'OnBeforeChunkFormDelete', 'OnChunkFormDelete', 'chunk'),
+        'modSnippet' => array('OnBeforeSnipFormSave', 'OnSnipFormSave', 'OnBeforeSnipFormDelete', 'OnSnipFormDelete', 'snippet'),
+        'modTemplate' => array('OnBeforeTempFormSave', 'OnTempFormSave', 'OnBeforeTempFormDelete', 'OnTempFormDelete', 'template'),
+        'modPlugin' => array('OnBeforePluginFormSave', 'OnPluginFormSave', 'OnBeforePluginFormDelete', 'OnPluginFormDelete', 'plugin'),
+        'modTemplateVar' => array('OnBeforeTVFormSave', 'OnTVFormSave', 'OnBeforeTVFormDelete', 'OnTVFormDelete', 'tv'),
+    );
     public function makeUrl($id, $context = '', $args = '', $scheme = -1) {
         $urls = $this->getOption('fake_urls', null, array());
         if (array_key_exists($id, $urls)) { return $urls[$id]; }
@@ -1391,12 +1420,14 @@ class modX extends xPDO {
             $this->maintenanceProcessors[] = $path;
             if ($this->failProcessor === $path) { return new FakeResponse('Maintenance processor refused.'); }
             if ($path === 'resource/emptyrecyclebin') {
-                $this->invokeEvent('OnBeforeEmptyTrash');
+                $trashed = array();
+                foreach ($this->getCollection('modResource', array('deleted' => 1)) as $resource) { $trashed[] = $resource->get('id'); }
+                $this->invokeEvent('OnBeforeEmptyTrash', array('ids' => &$trashed));
                 foreach ($this->getCollection('modResource', array('deleted' => 1)) as $resource) {
                     $this->removeCollection('modResourceGroupResource', array('document' => $resource->get('id')));
                     $resource->remove();
                 }
-                $this->invokeEvent('OnEmptyTrash');
+                $this->invokeEvent('OnEmptyTrash', array('ids' => &$trashed, 'num_deleted' => count($trashed)));
             }
             return new FakeResponse(null);
         }
@@ -1427,10 +1458,13 @@ class modX extends xPDO {
             unset($data['input_properties']);
             if ($options || $action === 'create') { $data['input_properties'] = json_encode($options); }
         }
+        $events = isset(self::$elementEvents[$class]) ? self::$elementEvents[$class] : null;
         if ($action === 'remove') {
             $object = $this->getObject($class, array('id' => $data['id']));
             if (!$object) { return new FakeResponse('Object not found.'); }
+            if ($events) { $this->invokeEvent($events[2], array('id' => $object->get('id'), $events[4] => &$object, 'object' => &$object)); }
             $object->remove();
+            if ($events) { $this->invokeEvent($events[3], array('id' => $data['id'], $events[4] => &$object, 'object' => &$object)); }
             return new FakeResponse(null, array('id' => $data['id']));
         }
         if (!isset($data[$nameColumn]) || $data[$nameColumn] === '') { return new FakeResponse('Please specify a name.'); }
@@ -1448,8 +1482,12 @@ class modX extends xPDO {
             $data += $defaults;
         }
         $object->fromArray($data, '', false, true);
+        // Like the real processors: the fields are already set in memory when the before-event fires.
+        if ($events) { $this->invokeEvent($events[0], array('mode' => $action === 'create' ? 'new' : 'upd', 'data' => $object->toArray(), 'id' => $action === 'create' ? 0 : $object->get('id'), $events[4] => &$object, 'object' => &$object)); }
+        if ($this->failBeforeSave === $path) { return new FakeResponse('Prevented by a plugin.'); }
         $object->save();
         $this->cache->refresh();
+        if ($events) { $this->invokeEvent($events[1], array('mode' => $action === 'create' ? 'new' : 'upd', 'id' => $object->get('id'), $events[4] => &$object, 'object' => &$object)); }
         if ($this->failProcessor === $path) { throw new RuntimeException('Simulated failure after save.'); }
         return new FakeResponse(null, array('id' => $object->get('id')));
     }

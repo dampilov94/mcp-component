@@ -187,6 +187,38 @@ $assetsVehicle->resolve('php', array('source' => $sources['resolvers'] . 'resolv
 $builder->putVehicle($assetsVehicle);
 $modx->log(modX::LOG_LEVEL_INFO, 'Packaged core + assets files and the install resolvers.');
 
+/* ---- the plugin that records manager edits into the journal (events come from the kinds) ---- */
+require_once $sources['source_core'] . '/src/autoload.php';
+$plugin = $modx->newObject('modPlugin');
+$plugin->fromArray(array(
+    'name'        => \ModxMCP\Manager\Recorder::PLUGIN_NAME,
+    'description' => \ModxMCP\Manager\Recorder::PLUGIN_DESCRIPTION,
+    'plugincode'  => \ModxMCP\Manager\Recorder::pluginCode($sources['source_core']),
+    'category'    => 0,
+), '', true, true);
+$pluginEvents = array();
+foreach (\ModxMCP\Manager\Recorder::events() as $eventName) {
+    $pluginEvent = $modx->newObject('modPluginEvent');
+    $pluginEvent->fromArray(array('event' => $eventName, 'priority' => 0, 'propertyset' => 0), '', true, true);
+    $pluginEvents[] = $pluginEvent;
+}
+$plugin->addMany($pluginEvents, 'PluginEvents');
+$pluginVehicle = $builder->createVehicle($plugin, array(
+    xPDOTransport::PRESERVE_KEYS   => false,
+    xPDOTransport::UPDATE_OBJECT   => true,
+    xPDOTransport::UNIQUE_KEY      => 'name',
+    xPDOTransport::RELATED_OBJECTS => true,
+    xPDOTransport::RELATED_OBJECT_ATTRIBUTES => array(
+        'PluginEvents' => array(
+            xPDOTransport::PRESERVE_KEYS => true,
+            xPDOTransport::UPDATE_OBJECT => true,
+            xPDOTransport::UNIQUE_KEY    => array('pluginid', 'event'),
+        ),
+    ),
+));
+$builder->putVehicle($pluginVehicle);
+$modx->log(modX::LOG_LEVEL_INFO, 'Packaged the manager recorder plugin with ' . count($pluginEvents) . ' events.');
+
 /* ---- package attributes ---- */
 $builder->setPackageAttributes(array(
     'license'   => file_exists($sources['docs'] . 'LICENSE') ? file_get_contents($sources['docs'] . 'LICENSE') : 'MIT',

@@ -383,6 +383,18 @@ abstract class Kind {
     }
 
     /**
+     * Events the manager recorder (Manager\Recorder) listens to besides eventNames(), as event name =>
+     * ['role' => ..., 'param' => name of the object parameter (default: that of eventNames() or the kind name)].
+     * Roles: before_save, save, before_delete, delete (as the keys of eventNames()); touch (an event after a change
+     * with no before-event: the object is compared with the journal; 'cascade' => 'undelete' includes the descendants);
+     * before_sort / sort and before_trash / trash (many resources at once). Unlike eventNames(), these events are not
+     * fired when an object is restored, so they may name events the model fires by itself.
+     */
+    public function managerEvents() {
+        return array();
+    }
+
+    /**
      * Related rows that belong to the object: name => spec.
      *   class        xPDO class of the rows
      *   fk           column that holds this object's id

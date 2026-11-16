@@ -4,6 +4,8 @@
     font-size:13px; color:var(--ink); background:#fff; padding:0 0 24px; }
 #mcph * { box-sizing:border-box; }
 #mcph .h-link { color:#2563eb; cursor:pointer; text-decoration:none; }
+#mcph tr.h-detailrow > td { padding:0; background:#fff; cursor:default; }
+#mcph tr.h-detailrow:hover > td { background:#fff; }
 #mcph .h-link:hover { text-decoration:underline; }
 #mcph .h-bar { display:flex; align-items:flex-end; gap:12px; padding:10px 14px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
 #mcph .h-bar h2 { margin:0 8px 4px 0; font-size:16px; font-weight:600; }
@@ -45,8 +47,7 @@
 #mcph .h-undone { color:#92400e; }
 #mcph .h-pager { display:flex; align-items:center; gap:10px; padding:10px 14px; }
 
-#mcph .h-detail { padding:0 14px; }
-#mcph .h-detail:not(:empty) { border-top:2px solid var(--line); padding-top:12px; }
+#mcph .h-detail { padding:12px 16px 16px; border-left:3px solid #2563eb; }
 #mcph .h-dhead { display:flex; align-items:center; }
 #mcph .h-dhead h3 { margin:0; font-size:15px; }
 #mcph .h-obj { border:1px solid var(--line); border-radius:6px; margin:10px 0; padding:8px 10px; }

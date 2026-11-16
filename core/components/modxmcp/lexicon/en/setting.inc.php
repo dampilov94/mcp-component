@@ -56,6 +56,8 @@ $_lang['setting_modxmcp.allowed_ips_desc'] = 'Comma-separated IPs or CIDR ranges
 
 $_lang['setting_modxmcp.lint_php'] = 'Check PHP before saving';
 $_lang['setting_modxmcp.lint_php_desc'] = 'Snippet and plugin code is checked for syntax errors before it is written. Code with an error is not saved.';
+$_lang['setting_modxmcp.history_track_manager'] = 'Record manager edits in the history';
+$_lang['setting_modxmcp.history_track_manager_desc'] = 'Changes that people make in the MODX manager (saving and deleting resources, elements, users and so on) are written to the modxMCP history with their author and can be undone. Needs the plugin modxMCP, which the package installs.';
 $_lang['setting_modxmcp.history_max_blob_bytes'] = 'Maximum journal snapshot size';
 $_lang['setting_modxmcp.history_max_blob_bytes_desc'] = 'A change to an object whose snapshot is larger than this size (in bytes) is carried out but cannot be undone.';
 $_lang['setting_modxmcp.history_retention_days'] = 'Journal retention in days';
