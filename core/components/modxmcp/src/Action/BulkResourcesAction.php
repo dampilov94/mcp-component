@@ -3,6 +3,7 @@ namespace ModxMCP\Action;
 
 use ModxMCP\ApiException;
 use ModxMCP\Context;
+use ModxMCP\Draft\DraftStore;
 use ModxMCP\Kind\Objects;
 use ModxMCP\Schema;
 use ModxMCP\Write\Writer;
@@ -54,6 +55,10 @@ final class BulkResourcesAction extends WriteAction {
         if ($operation === 'move' && !isset($args['parent'])) { throw new ApiException('validation_failed', 'move needs `parent`.'); }
         $dry = $this->isDryRun($args, $context);
         $modx = $context->modx;
+        // A draft never has children.
+        if ($operation === 'move' && $args['parent'] > 0 && (new DraftStore($modx))->isDraft($args['parent'])) {
+            throw new ApiException('validation_failed', "Resource {$args['parent']} is a draft and cannot be the parent of a page.");
+        }
 
         list($result, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $modx, $kind, $operation, $ids, $args, $dry) {
             $plan = array();
@@ -79,6 +84,8 @@ final class BulkResourcesAction extends WriteAction {
             foreach ($ids as $position => $id) {
                 $before = $tx->touch($kind, $id);
                 if ($before === null) { throw new ApiException('not_found', "No resource with id {$id}. Nothing was changed."); }
+                // A page with an open draft, and a draft, are not deleted around their draft (nothing was changed yet).
+                if ($operation === 'delete') { $kind->assertObjectWritable($modx, Objects::resolveKey($context, $kind, $id), 'delete'); }
                 $fields = $before['fields'];
                 $columns = array();
                 switch ($operation) {

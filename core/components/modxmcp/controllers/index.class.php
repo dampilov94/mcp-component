@@ -10,6 +10,9 @@
  */
 class ModxmcpIndexManagerController extends modExtraManagerController {
 
+    /** @var array the open drafts of resources, read in process() for the page's script block */
+    private $drafts = array();
+
     /** The component exposes administrative tools and the API token. */
     public function checkPermissions() {
         return $this->modx->hasPermission('settings');
@@ -32,6 +35,8 @@ class ModxmcpIndexManagerController extends modExtraManagerController {
         );
         $cfg = json_encode(array(
             'connector_url' => $assetsUrl . 'connector.php',
+            'drafts'        => $this->drafts,
+            'dl'            => $this->modx->lexicon->fetch('modxmcp_drafts_', true),
             'l'             => array(
                 'copied'          => $this->modx->lexicon('modxmcp_cmp_copied'),
                 'copy_failed'     => $this->modx->lexicon('modxmcp_cmp_copy_failed'),
@@ -60,6 +65,11 @@ class ModxmcpIndexManagerController extends modExtraManagerController {
             'recent' => array(), 'counts_24h' => array('mcp' => 0, 'manager' => 0, 'external' => 0), 'dangerous' => array(),
         );
         $integrations = array();
+        try {
+            $this->drafts = (new \ModxMCP\Manager\DraftService($this->modx, $this->modx->user))->drafts();
+        } catch (Throwable $e) {
+            $this->modx->log(modX::LOG_LEVEL_ERROR, '[modxmcp] Manager page, drafts: ' . $e->getMessage());
+        }
         $components = array();
         $features = array();
         try {
@@ -120,6 +130,7 @@ class ModxmcpIndexManagerController extends modExtraManagerController {
         $l['nav_tokens'] = $this->modx->lexicon('modxmcp_tokens');
         $l['nav_history'] = $this->modx->lexicon('modxmcp_history');
         $l['nav_graph'] = $this->modx->lexicon('modxmcp_graph');
+        $l['drafts_title'] = $this->modx->lexicon('modxmcp_drafts_title');
 
         $this->setPlaceholders(array(
             'l'               => $l,

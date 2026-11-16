@@ -37,6 +37,7 @@ if ($action === xPDOTransport::ACTION_INSTALL || $action === xPDOTransport::ACTI
         $store = new \ModxMCP\Auth\TokenStore($modx);
         $store->install();
         (new \ModxMCP\Journal\Journal($modx))->install();
+        (new \ModxMCP\Draft\DraftStore($modx))->install();
         // The plugin that records manager edits; an upgrade that adds kinds also adds their events.
         \ModxMCP\Manager\Recorder::syncPlugin($modx);
         if (!$store->all()) {

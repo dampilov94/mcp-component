@@ -300,6 +300,10 @@ abstract class Kind {
     public function afterWrite(\modX $modx) {
     }
 
+    /** Called by modx_invoke after a committed operation of this kind (not for plans); $result is what the handler returned. */
+    public function afterInvoke(Context $context, $op, array $result, array $info) {
+    }
+
     /**
      * Columns whose values a diff must hide for this state, or null to use the generic column-name pattern.
      * @return string[]|null

@@ -76,6 +76,9 @@ class FakeObject {
     }
     public function setTVValue($tvId, $value) {
         $this->modx->removeCollection('modTemplateVarResource', array('tmplvarid' => $tvId, 'contentid' => $this->fields['id']));
+        // Like modTemplateVar::setValue(): a value equal to the TV's default is not stored, and a stored row is removed.
+        $tv = $this->modx->getObject('modTemplateVar', array('id' => $tvId));
+        if ($tv && (string) $value === (string) $tv->get('default_text')) { return true; }
         $this->modx->store('modTemplateVarResource', array(
             'id' => $this->modx->nextId('modTemplateVarResource'), 'tmplvarid' => $tvId, 'contentid' => $this->fields['id'], 'value' => $value,
         ));
@@ -1646,6 +1649,10 @@ function fakeSchema(PDO $pdo) {
         . ' reversible INTEGER DEFAULT 1, note TEXT)');
     $pdo->exec('CREATE TABLE IF NOT EXISTS modx_modxmcp_checkpoints (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER, token_id INTEGER,'
         . ' session_id TEXT, label TEXT, last_changeset_id INTEGER DEFAULT 0)');
+    $pdo->exec('CREATE TABLE IF NOT EXISTS modx_modxmcp_drafts (id INTEGER PRIMARY KEY AUTOINCREMENT, original_id INTEGER, draft_id INTEGER UNIQUE,'
+        . ' created_at INTEGER, token_id INTEGER, user_id INTEGER, base_revision TEXT, base_state TEXT)');
+    $pdo->exec('CREATE TABLE IF NOT EXISTS modx_modxmcp_draft_archive (changeset_id INTEGER, draft_id INTEGER, original_id INTEGER,'
+        . ' created_at INTEGER, token_id INTEGER, user_id INTEGER, base_revision TEXT, base_state TEXT, PRIMARY KEY (changeset_id, draft_id))');
 }
 
 /** A fake site rooted in $dir: objects in objects.json, component tables in site.sqlite. */

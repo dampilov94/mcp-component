@@ -2,6 +2,7 @@
 namespace ModxMCP\Action;
 
 use ModxMCP\Context;
+use ModxMCP\Draft\DraftStore;
 use ModxMCP\Kind\Objects;
 use ModxMCP\Schema;
 
@@ -15,7 +16,7 @@ final class ResourceTreeAction extends Action {
 
     public function description() {
         return 'Resource tree below a parent (default: the top level), up to `depth` levels and ' . self::NODE_LIMIT
-            . ' nodes. Each node has id, title, alias, template, published/deleted flags and its child count, so a '
+            . ' nodes. Each node has id, title, alias, template, published/deleted flags, its child count and draft_of / draft_id for a draft or a page that has one, so a '
             . 'branch that was cut off can be expanded with another call. Use modx_list to search or filter resources.';
     }
 
@@ -44,11 +45,16 @@ final class ResourceTreeAction extends Action {
         $depth = isset($args['depth']) ? $args['depth'] : 2;
         $count = 0;
         $truncated = false;
-        $nodes = $this->level($context->modx, $kind, $parent, $contextKey, $depth, $count, $truncated);
+        try {
+            $marks = (new DraftStore($context->modx))->marks();
+        } catch (\Throwable $e) {
+            $marks = array();   // the markers are a convenience; the tree never fails because of them
+        }
+        $nodes = $this->level($context->modx, $kind, $parent, $contextKey, $depth, $count, $truncated, $marks);
         return array('parent' => $parent, 'context' => $contextKey, 'nodes' => $nodes, 'returned' => $count, 'truncated' => $truncated);
     }
 
-    private function level(\modX $modx, $kind, $parent, $contextKey, $depth, &$count, &$truncated) {
+    private function level(\modX $modx, $kind, $parent, $contextKey, $depth, &$count, &$truncated, array $marks) {
         $query = $modx->newQuery('modResource');
         $query->where(array('parent' => $parent, 'context_key' => $contextKey));
         $query->sortby('menuindex', 'ASC');
@@ -64,11 +70,12 @@ final class ResourceTreeAction extends Action {
                 'template' => (int) $resource->get('template'), 'published' => (bool) $resource->get('published'),
                 'children' => $children,
             );
+            if (isset($marks[$id])) { $node += $marks[$id]; }
             if ($resource->get('deleted')) { $node['deleted'] = true; }
             if ($resource->get('hidemenu')) { $node['hidemenu'] = true; }
             if ((string) $resource->get('class_key') !== 'modDocument') { $node['class_key'] = (string) $resource->get('class_key'); }
             if ($children > 0 && $depth > 1) {
-                $node['nodes'] = $this->level($modx, $kind, $id, $contextKey, $depth - 1, $count, $truncated);
+                $node['nodes'] = $this->level($modx, $kind, $id, $contextKey, $depth - 1, $count, $truncated, $marks);
             }
             $nodes[] = $node;
         }

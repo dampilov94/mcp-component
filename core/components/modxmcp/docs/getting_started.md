@@ -61,6 +61,33 @@ New chunks, snippets, templates and plugins are static by default, with files un
 - New pages are created with the site's defaults; pass `published: false` to keep a page
   hidden until it is ready.
 
+## Drafts
+
+Use a draft when a change of a live page is visible to visitors and should be looked at first.
+A draft is an unpublished copy of a `modDocument` page (other classes, such as miniShop2
+products, are refused); a page has at most one open draft, and the live page stays as it is
+until the draft is applied.
+
+1. `modx_invoke {kind: "resource", id, op: "create_draft"}` — returns `draft_id` and
+   `preview_url`. MODX shows the unpublished draft only to a person logged in to the manager,
+   so give the link to the owner.
+2. Edit the draft like any page: `modx_update` / `modx_edit_code` / the `tvs` relation on
+   `draft_id`. A draft cannot have children or its own draft.
+3. `op: "apply_draft"` (on the page or on the draft) without `args.confirm` shows the plan:
+   changed fields (content as a line diff), TV values, and `original_changed` with the fields,
+   when the live page was edited after the draft was made.
+4. `op: "apply_draft", args: {confirm: true}` puts `pagetitle`, `longtitle`, `description`,
+   `introtext`, `content`, `menutitle`, `link_attributes`, `template`, `richtext` and the TV
+   values of the draft on the page and removes the draft, as one changeset (`modx_undo` brings
+   back the old page and the draft). If the page changed meanwhile it answers
+   `revision_conflict`; `force: true` overwrites. Alias, parent, publication and schedule of the
+   page are never copied. `op: "discard_draft", args: {confirm: true}` throws a draft away.
+
+`op: "list_drafts"` lists the open drafts; `modx_get` and `modx_list` show `draft_id` on a page
+and `draft_of` on a draft. A page with a draft, and a draft, cannot be deleted until the draft
+is applied or discarded. A person can apply or discard a draft from the Drafts block on the
+component's page in the manager, which shows the same plan first.
+
 ## Files
 
 - Files live in media sources: `modx_list {kind: "media_source"}` shows their ids and

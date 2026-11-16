@@ -39,6 +39,21 @@
 #mcpo .o-state-missing { color:var(--muted); }
 #mcpo .o-integrations { width:100%; border-collapse:collapse; margin:6px 0; }
 #mcpo .o-integrations td { padding:6px; }
+#mcpo .d-intro { margin:0 0 6px; color:#666; }
+#mcpo .d-table { width:100%; border-collapse:collapse; margin:6px 0; }
+#mcpo .d-table th { text-align:left; font-weight:normal; color:var(--muted); padding:4px 6px; border-bottom:1px solid var(--line); }
+#mcpo .d-table td { padding:6px; border-bottom:1px solid #eef1f5; vertical-align:top; }
+#mcpo .d-actions button, #mcpo .d-actions a { margin:0 6px 4px 0; }
+#mcpo .d-plan { margin:6px 0 10px; padding:10px 12px; border:1px solid var(--line); border-radius:5px; background:#fbfcfd; }
+#mcpo .d-plan h4 { margin:0 0 6px; }
+#mcpo .d-change { margin:6px 0; }
+#mcpo .d-change b { font-weight:bold; }
+#mcpo .d-old { color:#92400e; white-space:pre-wrap; }
+#mcpo .d-new { color:#166534; white-space:pre-wrap; }
+#mcpo .d-diff { margin:4px 0; padding:6px 8px; background:#fff; border:1px solid var(--line); border-radius:3px; white-space:pre-wrap; font-family:monospace; font-size:12px; max-height:260px; overflow:auto; }
+#mcpo .d-warn { margin:6px 0; padding:6px 8px; background:#fff3d6; color:#92400e; border-radius:4px; }
+#mcpo .d-error { margin:6px 0; color:var(--bad); }
+#mcpo .d-ok { margin:6px 0; color:var(--ok); }
 </style>
 {/literal}
 <div id="mcpo">
@@ -54,6 +69,11 @@
         <tr><td>{$l.auto_static} (<code>modxmcp.auto_static</code>)</td><td>{if $overview.auto_static}{$l.on}{else}{$l.off}{/if}</td></tr>
         <tr><td>{$l.audit_log} (<code>modxmcp.audit_log</code>)</td><td>{if $overview.audit_log}{$l.on}{else}{$l.off}{/if}</td></tr>
     </table>
+
+    <div id="modxmcp-drafts" style="display:none;">
+        <h3>{$l.drafts_title}</h3>
+        <div id="modxmcp-drafts-body"></div>
+    </div>
 
     <h3>{$l.recent_title}</h3>
     {if $recent}
