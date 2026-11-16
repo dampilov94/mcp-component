@@ -52,6 +52,7 @@ final class EditCodeAction extends WriteAction {
             $before = $tx->touch($kind, $id);
             if ($before === null) { throw new ApiException('not_found', "No {$kind->name()} with " . Objects::keyText($kind, $id) . '.'); }
             Objects::assertRevision($context, $kind, $id, $before, $args);
+            if (!$dry) { Objects::assertNotOpen($context, $kind, $id, $args); }
             if (!empty($before['static_file_missing'])) {
                 throw new ApiException('validation_failed', 'The static file of this element is missing. Restore it before editing.');
             }
@@ -63,7 +64,7 @@ final class EditCodeAction extends WriteAction {
                 return array('result' => array(
                     'kind' => $kind->name(), $kind->keyField() => $id, 'revision' => Snapshot::revision($before),
                     'would_change' => $content === $before['fields'][$column] ? array() : array($field), 'reversible' => true,
-                ) + $lines);
+                ) + Objects::openPlan($context, $kind, $id) + $lines);
             }
             if ($content !== $before['fields'][$column]) {
                 Objects::save($context, $tx, $kind, $id, array($column => $content), array());

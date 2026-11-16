@@ -3,6 +3,7 @@
 // (tests/php/FakeModx.php). Used by tests/endpoint.test.js; never deployed.
 //
 //   php tests/php/endpoint.php setup <dir>     prepare the site and print test tokens
+//   php tests/php/endpoint.php lock <dir> <resource id> <user id> <username>   mark a resource as open in the manager
 //   MODXMCP_TEST_DIR=<dir> php -S 127.0.0.1:<port> tests/php/endpoint.php
 
 require_once __DIR__ . '/FakeModx.php';
@@ -54,6 +55,14 @@ function testSiteOptions($dir) {
         'modxmcp.allow_run_processor' => (bool) getenv('MODXMCP_TEST_ALLOW_ESCAPE'),
         'modxmcp.allow_query_db' => (bool) getenv('MODXMCP_TEST_ALLOW_ESCAPE'),
     ));
+}
+
+if (PHP_SAPI === 'cli' && isset($argv[1]) && $argv[1] === 'lock') {
+    // lock <dir> <resource id> <user id> <username>: a person opens the resource in the manager (the fake's lock registry).
+    $modx = testSite($argv[2]);
+    $modx->store('modUser', array('id' => (int) $argv[4], 'username' => $argv[5], 'primary_group' => 0));
+    $modx->lockResource((int) $argv[3], (int) $argv[4]);
+    exit(0);
 }
 
 if (PHP_SAPI === 'cli') {

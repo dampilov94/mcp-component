@@ -203,6 +203,30 @@ final class Objects {
         throw new ApiException('revision_conflict', "{$kind->name()} {$key} has changed since it was read. Read it again and retry.", $details);
     }
 
+    /** The open-in-the-manager marker of an object for a dry-run plan: an empty array, or ['open_in_manager' => {...}]. */
+    public static function openPlan(Context $context, Kind $kind, $key) {
+        $open = $kind->openInManager($context->modx, $key);
+        return $open ? array('open_in_manager' => $open) : array();
+    }
+
+    /**
+     * Refuse to change an object that a person has open in the manager: their next save would overwrite the change.
+     * force:true goes on with a warning. A lock found here is always a person's, even when it belongs to the service
+     * user: the processors the API runs take and release their own lock inside the call, after this check.
+     */
+    public static function assertNotOpen(Context $context, Kind $kind, $key, array $args) {
+        $open = $kind->openInManager($context->modx, $key);
+        if (!$open) { return; }
+        $label = $kind->name() . ' ' . $key;
+        if (!empty($args['force'])) {
+            $context->warnings[] = "{$label} is open in the manager by {$open['username']}; written anyway because force is set.";
+            return;
+        }
+        throw new ApiException('locked', "{$label} is open in the manager by {$open['username']}. Their next save would overwrite this change. "
+            . 'Ask them to close it, or repeat with force:true.',
+            array('reason' => 'open_in_manager', 'user_id' => $open['user_id'], 'username' => $open['username']));
+    }
+
     /** Refuse create, update, delete and duplicate for a kind that is not written through the generic tools. */
     public static function assertGenericWrites(Kind $kind) {
         if (!$kind->genericWrites()) { throw new ApiException('validation_failed', $kind->genericWritesMessage()); }

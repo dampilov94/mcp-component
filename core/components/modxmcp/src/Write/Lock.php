@@ -22,7 +22,7 @@ final class Lock {
         if (!$handle) { throw new \RuntimeException('Cannot open an object lock.'); }
         if (!flock($handle, LOCK_EX | LOCK_NB)) {
             fclose($handle);
-            throw new ApiException('locked', "{$key} is being changed by another MCP request. Read it again and retry.");
+            throw new ApiException('locked', "{$key} is being changed by another MCP request. Read it again and retry.", array('reason' => 'mcp_request'));
         }
         $this->handles[$key] = $handle;
     }

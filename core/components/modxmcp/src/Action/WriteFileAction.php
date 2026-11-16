@@ -27,7 +27,7 @@ final class WriteFileAction extends FileWriteAction {
             'encoding'  => array('type' => 'string', 'enum' => array('utf8', 'base64'), 'description' => 'How content is encoded; default utf8.'),
             'must_be_new' => Schema::bool('Fail if the file already exists.'),
             'skip_lint' => Schema::bool('Save a PHP file even if it does not parse.'),
-        ) + $this->commonInput(), array('source', 'path', 'content'));
+        ) + array_diff_key($this->commonInput(), array('force' => 1)), array('source', 'path', 'content'));
     }
 
     public function run(array $args, Context $context) {

@@ -31,6 +31,7 @@ final class BulkResourcesAction extends WriteAction {
             'template'  => Schema::int('For set_template: template id, 0 for none.', array('minimum' => 0)),
             'parent'    => Schema::int('For move: new parent id, 0 for the top level.', array('minimum' => 0)),
             'dry_run'   => Schema::bool('Report what would change without changing anything.'),
+            'force'     => Schema::bool('Write even though a resource is open in the manager.'),
         ), array('operation', 'ids'));
     }
 
@@ -56,6 +57,25 @@ final class BulkResourcesAction extends WriteAction {
 
         list($result, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $modx, $kind, $operation, $ids, $args, $dry) {
             $plan = array();
+            // All of it or none: one resource that a person has open stops the whole operation, naming every such resource.
+            $open = array();
+            if (!$dry) {
+                foreach ($ids as $id) {
+                    $who = $kind->openInManager($modx, $id);
+                    if ($who) { $open[$id] = $who; }
+                }
+                if ($open && empty($args['force'])) {
+                    $first = reset($open);
+                    $items = array();
+                    foreach ($open as $id => $who) { $items[] = array('id' => $id, 'user_id' => $who['user_id'], 'username' => $who['username']); }
+                    throw new ApiException('locked', 'Resource ' . implode(', ', array_keys($open)) . ' is open in the manager by ' . $first['username']
+                        . '. Their next save would overwrite this change. Nothing was changed. Ask them to close it, or repeat with force:true.',
+                        array('reason' => 'open_in_manager', 'user_id' => $first['user_id'], 'username' => $first['username'], 'items' => $items));
+                }
+                foreach ($open as $id => $who) {
+                    $context->warnings[] = "resource {$id} is open in the manager by {$who['username']}; written anyway because force is set.";
+                }
+            }
             foreach ($ids as $position => $id) {
                 $before = $tx->touch($kind, $id);
                 if ($before === null) { throw new ApiException('not_found', "No resource with id {$id}. Nothing was changed."); }
@@ -74,7 +94,7 @@ final class BulkResourcesAction extends WriteAction {
                 }
                 if ($operation === 'delete' && $fields['deleted'] !== '1') { $would[] = 'deleted'; }
                 if ($operation === 'undelete' && $fields['deleted'] === '1') { $would[] = 'deleted'; }
-                $plan[] = array('id' => $id, 'pagetitle' => $fields['pagetitle'], 'would_change' => $would);
+                $plan[] = array('id' => $id, 'pagetitle' => $fields['pagetitle'], 'would_change' => $would) + ($dry ? Objects::openPlan($context, $kind, $id) : array());
                 if ($dry || !$would) { continue; }
 
                 if ($operation === 'delete' || $operation === 'undelete') {

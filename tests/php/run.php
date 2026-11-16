@@ -6233,6 +6233,147 @@ $rRan = (function ($modx, $scriptProperties) use ($rPluginCode) { eval($rPluginC
 check('plugin file: runs against the component and is a few lines', $rRan === true && substr_count($rPluginCode, "\n") <= 6);
 unset($rSite->event);
 
+// --- Open in the manager ---
+$oDir = sys_get_temp_dir() . '/modxmcp-open-' . bin2hex(random_bytes(6));
+mkdir($oDir . '/core', 0700, true);
+$oSite = fakeSite($oDir);
+$oSite->options['modxmcp.auto_static'] = false;
+$oSite->store('modUser', array('id' => 601, 'username' => 'Редактор', 'primary_group' => 0));
+$oSite->store('modUser', array('id' => 602, 'username' => 'service', 'primary_group' => 0));
+$oSite->store('modResource', array('id' => 9, 'pagetitle' => 'placeholder', 'context_key' => 'web'));
+$oCtx = function ($scope = 'develop') use ($oSite, $dev) { return new Context($oSite, array('scope' => $scope) + $dev->token, $dev->corePath, function () { throw new RuntimeException('no store'); }); };
+$oText = "Текст страницы\nвторая строка";
+$oMake = function ($title) use ($call, $oCtx, $oText) { return $call($oCtx(), 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => $title, 'content' => $oText)))['id']; };
+$oChunk = $call($oCtx(), 'create', array('kind' => 'chunk', 'fields' => array('name' => 'блок', 'content' => 'один')))['id'];
+$oA = $oMake('Страница А');
+$oB = $oMake('Страница Б');
+$oC = $oMake('Страница В');
+$oD = $oMake('Страница Г');
+check('open: the chunk id is not a resource id', $oChunk === 1 && $oSite->getCount('modResource', array('id' => $oChunk)) === 0);
+$oContent = function ($id) use ($oSite) { return $oSite->getObject('modResource', $id)->get('content'); };
+$oLocked = function ($label, callable $fn) {
+    $e = throws($label, ApiException::class, $fn);
+    check($label . ': locked, 409, open_in_manager with the person', $e && $e->errorCode === 'locked' && $e->httpStatus === 409 && $e->details['reason'] === 'open_in_manager'
+        && $e->details['user_id'] === 601 && $e->details['username'] === 'Редактор' && strpos($e->getMessage(), 'Редактор') !== false && strpos($e->getMessage(), 'force:true') !== false);
+    return $e;
+};
+
+// a lock is only read: the kind leaves it in place and unlocked resources answer null
+$oSite->lockResource($oA, 601);
+$oKind = $oCtx()->kinds->get('resource');
+check('open: openInManager reads twice and leaves the lock', $oKind->openInManager($oSite, $oA) === array('user_id' => 601, 'username' => 'Редактор')
+    && $oKind->openInManager($oSite, $oA) === array('user_id' => 601, 'username' => 'Редактор') && $oSite->resourceLock($oA) === 601
+    && $oKind->openInManager($oSite, $oB) === null && $oCtx()->kinds->get('chunk')->openInManager($oSite, $oChunk) === null);
+
+// update
+$oLocked('open: update', function () use ($call, $oCtx, $oA) { $call($oCtx(), 'update', array('kind' => 'resource', 'id' => $oA, 'fields' => array('longtitle' => 'Новый'))); });
+check('open: refused update changed nothing', $oSite->getObject('modResource', $oA)->get('longtitle') !== 'Новый');
+$call($oCtx(), 'update', array('kind' => 'resource', 'id' => $oB, 'fields' => array('longtitle' => 'Новый')));
+check('open: an unlocked resource is updated', $oSite->getObject('modResource', $oB)->get('longtitle') === 'Новый');
+$oForce = $oCtx();
+$oForced = $call($oForce, 'update', array('kind' => 'resource', 'id' => $oA, 'fields' => array('longtitle' => 'Новый'), 'force' => true));
+check('open: force writes with a warning', $oForced['changed'] === array('longtitle') && count($oForce->warnings) === 1 && strpos($oForce->warnings[0], 'Редактор') !== false);
+$oDry = $call($oCtx(), 'update', array('kind' => 'resource', 'id' => $oA, 'fields' => array('longtitle' => 'Другой'), 'dry_run' => true));
+check('open: a dry run reports and does not throw', $oDry['dry_run'] === true && $oDry['open_in_manager'] === array('user_id' => 601, 'username' => 'Редактор')
+    && $oSite->getObject('modResource', $oA)->get('longtitle') === 'Новый'
+    && !isset($call($oCtx(), 'update', array('kind' => 'resource', 'id' => $oB, 'fields' => array('longtitle' => 'Другой'), 'dry_run' => true))['open_in_manager']));
+
+// edit_code
+$oLocked('open: edit_code', function () use ($call, $oCtx, $oA) { $call($oCtx(), 'edit_code', array('kind' => 'resource', 'id' => $oA, 'edits' => array(array('start_line' => 1, 'replacement' => 'Правка')))); });
+check('open: refused edit_code changed nothing', $oContent($oA) === $oText);
+check('open: edit_code passes unlocked, with force, and the dry run reports',
+    $call($oCtx(), 'edit_code', array('kind' => 'resource', 'id' => $oB, 'edits' => array(array('start_line' => 1, 'replacement' => 'Правка'))))['changed'] === array('content')
+    && $call($oCtx(), 'edit_code', array('kind' => 'resource', 'id' => $oA, 'edits' => array(array('start_line' => 1, 'replacement' => 'Правка')), 'force' => true))['changed'] === array('content')
+    && $call($oCtx(), 'edit_code', array('kind' => 'resource', 'id' => $oA, 'edits' => array(array('start_line' => 2, 'replacement' => 'ещё')), 'dry_run' => true))['open_in_manager']['username'] === 'Редактор'
+    && $oContent($oA) === "Правка\nвторая строка");
+
+// delete
+$oLocked('open: delete', function () use ($call, $oCtx, $oA) { $call($oCtx(), 'delete', array('kind' => 'resource', 'id' => $oA)); });
+$oDelDry = $call($oCtx(), 'delete', array('kind' => 'resource', 'id' => $oA, 'dry_run' => true));
+check('open: refused delete left the page, the dry run reports', $oSite->getObject('modResource', $oA)->get('deleted') != 1 && $oDelDry['open_in_manager']['user_id'] === 601 && isset($oDelDry['would_delete']));
+$call($oCtx(), 'delete', array('kind' => 'resource', 'id' => $oD));
+check('open: delete passes unlocked', $oSite->getObject('modResource', $oD)->get('deleted') == 1);
+$oD = $oMake('Страница Д');
+
+// replace (one changeset: an open object stops all of it)
+$oReplace = array('find' => 'Текст', 'replacement' => 'Текстик', 'kinds' => array('resource'));
+$oSite->unlockResource($oA);
+$oSite->lockResource($oC, 601);
+$oPlan = $call($oCtx(), 'replace', $oReplace + array('dry_run' => true));
+$oOpenRows = array();
+foreach ($oPlan['objects'] as $row) { $oOpenRows[$row['id']] = isset($row['open_in_manager']); }
+check('open: the replace dry run marks the open page only', $oOpenRows[$oC] === true && $oOpenRows[$oD] === false && count($oPlan['objects']) >= 2);
+$oLocked('open: replace', function () use ($call, $oCtx, $oReplace, $oPlan) { $call($oCtx(), 'replace', $oReplace + array('expected_revisions' => (array) $oPlan['revisions'])); });
+check('open: refused replace changed no page', $oContent($oC) === $oText && $oContent($oD) === $oText);
+$oRepForce = $oCtx();
+$oRep = $call($oRepForce, 'replace', $oReplace + array('expected_revisions' => (array) $oPlan['revisions'], 'force' => true));
+check('open: replace with force goes through with a warning', $oRep['total_occurrences'] >= 2 && strpos($oContent($oC), 'Текстик') === 0 && count($oRepForce->warnings) === 1);
+$oSite->unlockResource($oC);
+
+// bulk: all or nothing, so one open page stops the whole operation and names it
+$oSite->lockResource($oC, 601);
+$oLocked('open: bulk_resources', function () use ($call, $oCtx, $oB, $oC) { $call($oCtx(), 'bulk_resources', array('operation' => 'publish', 'ids' => array($oB, $oC))); });
+check('open: refused bulk changed nothing, not even the unlocked page', $oSite->getObject('modResource', $oB)->get('published') != 1 && $oSite->getObject('modResource', $oC)->get('published') != 1);
+$oBulkErr = throws('open: bulk names every open page', ApiException::class, function () use ($call, $oCtx, $oB, $oC) { $call($oCtx(), 'bulk_resources', array('operation' => 'publish', 'ids' => array($oB, $oC))); });
+check('open: bulk details list the open pages', $oBulkErr->details['items'] === array(array('id' => $oC, 'user_id' => 601, 'username' => 'Редактор')));
+$oBulkDry = $call($oCtx(), 'bulk_resources', array('operation' => 'publish', 'ids' => array($oB, $oC), 'dry_run' => true));
+check('open: bulk dry run marks the open page', !isset($oBulkDry['objects'][0]['open_in_manager']) && $oBulkDry['objects'][1]['open_in_manager']['user_id'] === 601);
+$oBulkForce = $oCtx();
+$call($oBulkForce, 'bulk_resources', array('operation' => 'publish', 'ids' => array($oB, $oC), 'force' => true));
+check('open: bulk with force publishes both and warns', $oSite->getObject('modResource', $oB)->get('published') == 1 && $oSite->getObject('modResource', $oC)->get('published') == 1 && count($oBulkForce->warnings) === 1);
+$oSite->unlockResource($oC);
+$call($oCtx(), 'bulk_resources', array('operation' => 'unpublish', 'ids' => array($oB, $oC)));
+check('open: bulk passes when nothing is open', $oSite->getObject('modResource', $oB)->get('published') != 1);
+
+// the kind chunk is never affected, and a lock owned by the service user still blocks
+$oSite->lockResource($oChunk, 601);
+$oChunkDry = $call($oCtx(), 'delete', array('kind' => 'chunk', 'id' => $oChunk, 'dry_run' => true));
+check('open: a chunk is never refused', $call($oCtx(), 'update', array('kind' => 'chunk', 'id' => $oChunk, 'fields' => array('description' => 'ok')))['changed'] === array('description')
+    && $oChunkDry['dry_run'] === true && !isset($oChunkDry['open_in_manager']));
+$oSite->unlockResource($oChunk);
+$oSite->user = $oSite->getObject('modUser', 602);
+$oSite->lockResource($oB, 602);
+$e = throws('open: a lock of the service user itself', ApiException::class, function () use ($call, $oCtx, $oB) { $call($oCtx(), 'update', array('kind' => 'resource', 'id' => $oB, 'fields' => array('longtitle' => 'Сервис'))); });
+check('open: the service user\'s lock still blocks', $e && $e->errorCode === 'locked' && $e->details['user_id'] === 602 && $e->details['username'] === 'service');
+$oSite->unlockResource($oB);
+$call($oCtx(), 'update', array('kind' => 'resource', 'id' => $oB, 'fields' => array('longtitle' => 'Сервис')));
+$oSite->user = null;
+
+// undo: a conflict in the plan, refused without force, done with it
+$oEdit = $call($oCtx(), 'update', array('kind' => 'resource', 'id' => $oB, 'fields' => array('longtitle' => 'До отмены')));
+$oSite->lockResource($oB, 601);
+$oUndoPlan = $call($oCtx(), 'undo', array('changeset_id' => $oEdit['changeset_id']));
+check('open: undo plans a conflict that names the person', $oUndoPlan['conflicts'] === 1 && $oUndoPlan['performed'] === false && $oUndoPlan['objects'][0]['conflict'] === 'open in the manager by Редактор');
+$e = throws('open: undo confirm without force', ApiException::class, function () use ($call, $oCtx, $oEdit) { $call($oCtx(), 'undo', array('changeset_id' => $oEdit['changeset_id'], 'confirm' => true)); });
+check('open: undo is refused with undo_conflict and nothing changed', $e && $e->errorCode === 'undo_conflict' && $oSite->getObject('modResource', $oB)->get('longtitle') === 'До отмены');
+$oUndoForce = $oCtx();
+$oDone = $call($oUndoForce, 'undo', array('changeset_id' => $oEdit['changeset_id'], 'confirm' => true, 'force' => true));
+check('open: undo with force is done, with a warning', $oDone['performed'] === true && $oSite->getObject('modResource', $oB)->get('longtitle') === 'Сервис' && count($oUndoForce->warnings) === 1);
+$oSite->unlockResource($oB);
+$oEdit2 = $call($oCtx(), 'update', array('kind' => 'resource', 'id' => $oB, 'fields' => array('longtitle' => 'Ещё раз')));
+check('open: undo of an unlocked page has no conflict', $call($oCtx(), 'undo', array('changeset_id' => $oEdit2['changeset_id']))['conflicts'] === 0);
+
+// the force argument: on the write tools that can meet an open page, with the old meaning on undo, and not on file tools
+$oForceTools = array();
+foreach (array('update', 'edit_code', 'delete', 'replace', 'bulk_resources', 'invoke', 'undo', 'write_file') as $oTool) {
+    $oForceTools[$oTool] = isset($oCtx()->actions->get($oTool)->inputSchema()['properties']['force']);
+}
+check('open: force is accepted exactly where it applies', $oForceTools === array('update' => true, 'edit_code' => true, 'delete' => true, 'replace' => true, 'bulk_resources' => true, 'invoke' => true, 'undo' => true, 'write_file' => false));
+check('open: undo keeps the meaning of its own force', strpos($oCtx()->actions->get('undo')->inputSchema()['properties']['force']['description'], 'Undo even over later changes') === 0);
+
+// the lock between two MCP requests keeps its code and says why
+$oLockDir = $oDir . '/locks';
+$oFirst = new \ModxMCP\Write\Lock($oLockDir);
+$oFirst->acquire('resource:1');
+$e = throws('open: a second MCP request on the same object', ApiException::class, function () use ($oLockDir) { (new \ModxMCP\Write\Lock($oLockDir))->acquire('resource:1'); });
+check('open: the MCP lock is locked with reason mcp_request', $e && $e->errorCode === 'locked' && $e->details['reason'] === 'mcp_request');
+$oFirst->releaseAll();
+
+// the manager recorder never asks whether a page is open
+$oRecorderSource = '';
+foreach (glob($oCtx()->corePath . 'src/Manager/*.php') as $oFile) { $oRecorderSource .= file_get_contents($oFile); }
+check('open: the manager recorder does not call assertNotOpen', $oRecorderSource !== '' && strpos($oRecorderSource, 'assertNotOpen') === false && strpos($oRecorderSource, 'openInManager') === false);
+
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));
 check('canonical: list order is kept', Kernel::canonical(array(3, 1, 2)) === array(3, 1, 2));

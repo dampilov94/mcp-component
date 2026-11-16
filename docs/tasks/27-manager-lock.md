@@ -58,3 +58,37 @@ kernel (`tests/endpoint.test.js`): HTTP 409, code `locked`, `details.reason`.
 
 `npm run check`, `npm test`. Report as usual; state exactly how the real `getLock()` treats an
 expired lock (read the registry code) since the fake cannot show it.
+
+## Report
+
+Based on: main at c07fa20
+
+Implemented:
+- `src/Kind/Kind.php`: `openInManager(\modX, $key)`, default `null`.
+- `src/Kind/ResourceKind.php`: `openInManager()` reads `getLock()` (never adds or removes a lock) and resolves the username (empty string if the user row is gone).
+- `src/Kind/Objects.php`: `assertNotOpen()` (throws `locked` with `details.reason = open_in_manager`, `user_id`, `username`; `force` adds a warning and continues) and a helper `openPlan()` that gives `['open_in_manager' => {...}]` for dry-run plans.
+- `src/Action/WriteAction.php`: `force` added to `commonInput()`. `WriteFileAction` removes it again (file tools are not concerned); `UndoAction` keeps its own `force`.
+- `UpdateAction`, `EditCodeAction`, `DeleteAction`: `assertNotOpen()` right after `assertRevision()` (skipped in a dry run, which reports `open_in_manager` in the plan instead).
+- `ReplaceAction`: `force` argument; after the revision check every selected object is checked (the tool is one changeset, so one open page stops everything); the dry run marks open objects.
+- `BulkResourcesAction`: `force` argument; see deviations.
+- `InvokeAction`: `force` argument; the guard runs in both write branches (normal and `informational`) when the operation has an object, and in plans/dry runs.
+- `src/Journal/Undo.php`: an existing object that is open in the manager gets the conflict `open in the manager by <username>` (appended with `; ` to any other conflict); items carry `open`. `UndoAction` adds a warning per such object when it is undone with `force`.
+- `src/Write/Lock.php`: the MCP-request `locked` error gets `details.reason = "mcp_request"`.
+- `docs/getting_started.md`: one rule bullet (two sentences).
+- Tests: `tests/php/FakeModx.php` (`FakeObject::getLock()`, `modX::lockResource/unlockResource/resourceLock`, a lock registry that is persisted like other rows); `tests/php/run.php` block "Open in the manager" (42 checks); `tests/php/endpoint.php` (`lock` CLI command) and `tests/endpoint.test.js` (one subtest: HTTP 409, `locked`, `details.reason`, then `force` with a warning).
+
+Checks: `npm run check` passes before and after. PHP checks 4732 -> 4774; node tests 30 -> 31 (all pass). No existing assertion was edited.
+
+Deviations / readings:
+- Bulk: `bulk_resources` is all-or-nothing today, so an open resource refuses the whole call (nothing changed, not even the unlocked ones) with `details.items` listing every open resource, instead of "refused item, others done". The test asserts this.
+- Duplicate: no guard added. Duplicate only creates a new object and never overwrites a target, so there is nothing to protect.
+- `force` is not offered on `modx_write_file` (it inherits `commonInput()`), because the brief says file tools are not concerned.
+- Invoke: ResourceKind declares no operations, so the invoke guard cannot be exercised on a resource in the fake; only that the argument exists and that other kinds are unaffected is tested. It is the same one-line call as elsewhere.
+- The recorder test is a source check (the `Manager/` classes contain neither `assertNotOpen` nor `openInManager`), not a behavioural one.
+- Existing warning for `undo`: warnings for a forced undo are added inside the write closure.
+
+Real `getLock()` and expired locks (read in `modresource.class.php` and `registry/moddbregister.class.php`): `getLock()` subscribes to `/resource/<md5(id)>` in the `locks` register and reads one message with `remove_read => false`. The message payload is executable PHP that begins with `if (time() > <expires>) return null;`, where `expires = send time + lock_ttl` (default 360 s). An expired lock therefore evaluates to null, `intval(null)` is 0, so it counts as no lock. Side effects of that read: `_readMessage()` deletes a message whose `expires` is in the past even with `remove_read => false`, and a "Message was null or expired" line is logged at INFO level. A live lock is left in place. `getValidMessages` only filters on `valid <= now`, not on expiry.
+
+Verified only against the fake (check on the stand): the real `getLock()` and the lock registry (the fake has no TTL); that a manager-opened resource really shows up as a lock for the person's user id; that the processors the API runs (which call `addLock`/`removeLock` themselves) do not leave a lock that this check then reads as a person's on the next call; the username resolution from `modUser`.
+
+Open questions: should a no-op update (nothing really changes) on an open page also be refused? It is today, because the check runs before anything is compared.

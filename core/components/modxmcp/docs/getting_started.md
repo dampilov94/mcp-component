@@ -104,6 +104,9 @@ Rules that keep a live site safe:
   object again and apply your change to the current state; never overwrite blindly.
 - **Use `dry_run: true`** before a delete or a risky change: it validates everything and
   reports what would change without changing anything.
+- **A page that a person has open in the manager is not written over.** The write is refused
+  with `locked` and `details.reason: "open_in_manager"` (with the user), because their next
+  save would overwrite your change. Ask them to close it; `force: true` writes anyway.
 - **PHP is checked before it is saved.** A snippet or plugin with a syntax error is
   refused with `lint_failed` and the line number; nothing is written.
 - A write returns `changeset_id`, the new `revision`, the list of `changed` fields and

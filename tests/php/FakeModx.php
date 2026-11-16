@@ -49,6 +49,8 @@ class FakeObject {
         if ($this->class === 'modUser' && $alias === 'Profile') { return $this->modx->getObject('modUserProfile', array('internalKey' => $this->fields['id'])); }
         return null;
     }
+    /** modResource::getLock(): the id of the user who has the resource open in the manager, or 0. Only reads. */
+    public function getLock() { return $this->class === 'modResource' ? $this->modx->resourceLock($this->fields['id']) : 0; }
     public function getBasePath() { return (string) $this->get('basePath'); }
     public function getSourceFile() { return !empty($this->fields['static']) ? str_replace('[[++core_path]]', $this->modx->getOption('core_path'), (string) $this->fields['static_file']) : false; }
     public function joinGroup($id) {
@@ -881,6 +883,13 @@ class modX extends xPDO {
         }
         ksort($saved);
         return array_values($saved);
+    }
+    /** The manager lock registry of the fake: a resource id to the user id that has it open. A real lock expires after lock_ttl; the fake's does not. */
+    public function lockResource($id, $userId) { $this->store('FakeResourceLock', array('id' => $id, 'user' => $userId)); }
+    public function unlockResource($id) { $this->drop('FakeResourceLock', array('id' => $id)); }
+    public function resourceLock($id) {
+        $row = $this->row('FakeResourceLock', $id);
+        return $row ? (int) $row['user'] : 0;
     }
     public function row($class, $id) {
         $key = 'pk:' . implode("\x1f", array_map('strval', (array) $id));

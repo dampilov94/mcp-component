@@ -213,6 +213,22 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
     assert.equal((await call(admin, "list", { kind: "chunk" })).body.result.total, 0);
   });
 
+  await t.test("a resource open in the manager is not written over", async () => {
+    const page = await call(admin, "create", { kind: "resource", fields: { pagetitle: "Страница", content: "текст" } });
+    assert.equal(page.status, 200);
+    const lock = spawnSync(php, [harness, "lock", site.dir, String(page.body.result.id), "77", "Редактор"], { encoding: "utf8" });
+    assert.equal(lock.status, 0, lock.stderr);
+    const refused = await call(admin, "update", { kind: "resource", id: page.body.result.id, fields: { longtitle: "x" } });
+    assert.equal(refused.status, 409);
+    assert.equal(refused.body.error.code, "locked");
+    assert.equal(refused.body.error.details.reason, "open_in_manager");
+    assert.equal(refused.body.error.details.user_id, 77);
+    assert.equal(refused.body.error.details.username, "Редактор");
+    const forced = await call(admin, "update", { kind: "resource", id: page.body.result.id, fields: { longtitle: "x" }, force: true });
+    assert.equal(forced.status, 200);
+    assert.equal(forced.body.meta.warnings.length, 1);
+  });
+
   await t.test("request and session IDs are accepted on reads and echoed", async () => {
     const response = await call(read, "site_info", {}, { request_id: "read-request-000001", session_id: "session-0000000001" });
     assert.equal(response.status, 200);
