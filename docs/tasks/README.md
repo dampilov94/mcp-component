@@ -66,7 +66,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 27 | [Open in the manager](27-manager-lock.md) | `task/27-manager-lock` | merged |
 | 28 | [modx_audit_site](28-audit-site.md) | `task/28-audit-site` | merged |
 | 29 | [modx_run](29-run.md) | `task/29-run` | merged |
-| 30 | [Tokens page and panel](30-tokens-panel.md) | `task/30-tokens-panel` | ready for the executor |
+| 30 | [Tokens page and panel](30-tokens-panel.md) | `task/30-tokens-panel` | merged |
 
 ## Doing several briefs in a row
 
