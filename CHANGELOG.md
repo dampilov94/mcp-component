@@ -176,6 +176,12 @@ Stage 4 — checking the result:
   new values and coloured code diffs; undo of one changeset or back to a checkpoint with a plan,
   conflicts and an explicit forced variant. An undo made here is journaled as `manager` with the
   user. `modx_history` entries carry `author` (token label, manager username or `unknown`).
+- Tokens page (Components > modxMCP > Токены): tokens with scope, author, last use, expiry and
+  number of changesets; create with a ready `.mcp.json` for the site, copy buttons; change label,
+  plan-only, expiry and denied groups (the scope never changes: create a new token); revoke.
+- The component's main page is an overview: status, version, endpoint, active tokens, recent
+  changes with 24-hour counts by source, links to the pages, capability groups, integrations and
+  the state of the risky settings (read-only).
 - Edits made in the manager are journaled when they are saved: the plugin `modxMCP` passes the
   save/delete events of elements, categories, resources (also publishing, sorting, the trash),
   users, media sources and contexts to a recorder that reuses the write transaction, so such a

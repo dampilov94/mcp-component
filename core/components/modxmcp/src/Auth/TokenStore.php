@@ -116,6 +116,7 @@ final class TokenStore {
      */
     public function create($label, $scope, $planOnly = false, array $deniedGroups = array(), $expiresAt = null, $createdBy = 0) {
         if (!Scope::valid($scope)) { throw new \InvalidArgumentException('Unknown token scope.'); }
+        self::checkGroups($deniedGroups);
         if ($expiresAt !== null && (int) $expiresAt <= time()) { throw new \InvalidArgumentException('Expiry must be in the future.'); }
         $this->runInstalled('SELECT 1 FROM ' . $this->table() . ' LIMIT 1');
         $token = self::TOKEN_PREFIX . bin2hex(random_bytes(32));
@@ -158,6 +159,62 @@ final class TokenStore {
             array(time(), (int) $id)
         );
         return $statement->rowCount() > 0;
+    }
+
+    /** One token's public record, or null. */
+    public function get($id) {
+        $row = $this->runInstalled('SELECT * FROM ' . $this->table() . ' WHERE `id` = ? LIMIT 1', array((int) $id))->fetch(\PDO::FETCH_ASSOC);
+        return $row ? $this->publicRecord($row) : null;
+    }
+
+    /**
+     * Change what a token may be used for besides its scope: label, plan_only, denied_groups, expires_at. The scope and
+     * the hash never change (rights are raised or lowered by creating a new token); a revoked token cannot be changed.
+     * @param array $changes label (string, up to 190 characters), plan_only (bool), denied_groups (string[] of toggleable groups),
+     *                       expires_at (a future unix time, or null for no expiry)
+     * @return array the public record after the change
+     * @throws \InvalidArgumentException for an unknown key, an invalid value, an unknown or revoked token
+     */
+    public function update($id, array $changes) {
+        $sets = array();
+        $params = array();
+        foreach ($changes as $key => $value) {
+            if ($key === 'label') {
+                if (!is_string($value) || (function_exists('mb_strlen') ? mb_strlen($value, 'UTF-8') : strlen($value)) > 190) {
+                    throw new \InvalidArgumentException('The label must be a string of up to 190 characters.');
+                }
+                $params[] = $value;
+            } elseif ($key === 'plan_only') {
+                if (!is_bool($value)) { throw new \InvalidArgumentException('plan_only must be true or false.'); }
+                $params[] = $value ? 1 : 0;
+            } elseif ($key === 'denied_groups') {
+                self::checkGroups($value);
+                $params[] = implode(',', array_values(array_unique($value)));
+            } elseif ($key === 'expires_at') {
+                if ($value !== null && (!is_int($value) || $value <= time())) { throw new \InvalidArgumentException('Expiry must be in the future.'); }
+                $params[] = $value;
+            } else {
+                throw new \InvalidArgumentException('A token field cannot be changed: ' . $key);
+            }
+            $sets[] = '`' . $key . '` = ?';
+        }
+        $token = $this->get($id);
+        if (!$token) { throw new \InvalidArgumentException('Token not found.'); }
+        if ($token['revoked_at'] !== null) { throw new \InvalidArgumentException('A revoked token cannot be changed.'); }
+        if ($sets) {
+            $params[] = (int) $id;
+            $this->runInstalled('UPDATE ' . $this->table() . ' SET ' . implode(', ', $sets) . ' WHERE `id` = ? AND `revoked_at` IS NULL', $params);
+        }
+        return $this->get($id);
+    }
+
+    private static function checkGroups($groups) {
+        if (!is_array($groups)) { throw new \InvalidArgumentException('denied_groups must be a list of group names.'); }
+        foreach ($groups as $group) {
+            if (!is_string($group) || !in_array($group, \ModxMCP\Capabilities::TOGGLEABLE, true)) {
+                throw new \InvalidArgumentException('Unknown group: ' . (is_scalar($group) ? $group : gettype($group)));
+            }
+        }
     }
 
     private function publicRecord(array $row) {

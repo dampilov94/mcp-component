@@ -1,66 +1,47 @@
+/**
+ * modxMCP - the component's main page (Components > modxMCP): copying the endpoint and saving the capability toggles.
+ * The rest of the page is rendered on the server. Plain ES5 and MODx.Ajax; texts come from the lexicon (Modxmcp.l),
+ * values from the site are put into the page with textContent only.
+ */
 Ext.onReady(function () {
     if (typeof MODx === 'undefined' || !MODx.Ajax) {
         return;
     }
     var cfg = (typeof Modxmcp !== 'undefined') ? Modxmcp : {};
+    var L = cfg.l || {};
 
-    var createBtn = document.getElementById('modxmcp-create-token');
-    if (createBtn) {
-        createBtn.addEventListener('click', function () {
-            createBtn.disabled = true;
-            MODx.Ajax.request({
-                url: cfg.connector_url,
-                params: {
-                    action: 'mgr/createtoken',
-                    label: document.getElementById('modxmcp-token-label').value,
-                    scope: document.getElementById('modxmcp-token-scope').value,
-                    plan_only: document.getElementById('modxmcp-token-plan').checked ? '1' : '0'
-                },
-                listeners: {
-                    success: {
-                        fn: function (r) {
-                            createBtn.disabled = false;
-                            var token = (r && r.object && r.object.token) ? r.object.token : '';
-                            if (token) {
-                                // The table is refreshed on the next page load; the token itself is shown only now.
-                                document.getElementById('modxmcp-token-value').textContent = token;
-                                document.getElementById('modxmcp-token-result').style.display = 'block';
-                            }
-                        }
-                    },
-                    failure: {
-                        fn: function () {
-                            createBtn.disabled = false;
-                            alert('Не удалось создать токен. См. журнал ошибок менеджера.');
-                        }
-                    }
-                }
-            });
+    // ---- copy the endpoint --------------------------------------------------------------
+    var copyBtn = document.getElementById('modxmcp-copy-endpoint');
+    var endpoint = document.getElementById('modxmcp-endpoint');
+    var copyStatus = document.getElementById('modxmcp-copy-status');
+    function selectText(node) {
+        var range = document.createRange();
+        range.selectNodeContents(node);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+    }
+    if (copyBtn && endpoint) {
+        copyBtn.addEventListener('click', function () {
+            var text = endpoint.textContent;
+            function fallback() {
+                // Plain-HTTP sites have no clipboard API: select the text so that Ctrl+C works.
+                selectText(endpoint);
+                var done = false;
+                try { done = document.execCommand && document.execCommand('copy'); } catch (e) { done = false; }
+                if (copyStatus) { copyStatus.textContent = done ? (L.copied || '') : (L.copy_failed || ''); }
+            }
+            if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) {
+                navigator.clipboard.writeText(text).then(function () {
+                    if (copyStatus) { copyStatus.textContent = L.copied || ''; }
+                }, fallback);
+            } else {
+                fallback();
+            }
         });
     }
 
-    Array.prototype.slice.call(document.querySelectorAll('.modxmcp-revoke')).forEach(function (button) {
-        button.addEventListener('click', function () {
-            if (!confirm('Отозвать токен? Клиенты с этим токеном сразу перестанут работать. Отменить отзыв нельзя.')) {
-                return;
-            }
-            button.disabled = true;
-            MODx.Ajax.request({
-                url: cfg.connector_url,
-                params: { action: 'mgr/revoketoken', id: button.getAttribute('data-id') },
-                listeners: {
-                    success: { fn: function () { window.location.reload(); } },
-                    failure: {
-                        fn: function () {
-                            button.disabled = false;
-                            alert('Не удалось отозвать токен. См. журнал ошибок менеджера.');
-                        }
-                    }
-                }
-            });
-        });
-    });
-
+    // ---- capability toggles -------------------------------------------------------------
     var saveBtn = document.getElementById('modxmcp-savegroups');
     if (saveBtn) {
         var boxes = function () { return Array.prototype.slice.call(document.querySelectorAll('.modxmcp-grp')); };
@@ -79,7 +60,7 @@ Ext.onReady(function () {
         saveBtn.addEventListener('click', function () {
             var disabled = boxes().filter(function (b) { return !b.checked; }).map(function (b) { return b.getAttribute('data-group'); });
             saveBtn.disabled = true;
-            if (status) { status.textContent = 'Сохраняю…'; }
+            if (status) { status.textContent = L.features_saving || ''; }
             MODx.Ajax.request({
                 url: cfg.connector_url,
                 params: { action: 'mgr/savegroups', disabled: disabled.join(',') },
@@ -88,13 +69,13 @@ Ext.onReady(function () {
                         fn: function () {
                             savedState = stateKey();
                             saveBtn.disabled = true;
-                            if (status) { status.textContent = 'Сохранено. Применится автоматически при следующем действии ИИ.'; }
+                            if (status) { status.textContent = L.features_saved || ''; }
                         }
                     },
                     failure: {
                         fn: function () {
                             saveBtn.disabled = false;
-                            if (status) { status.textContent = 'Ошибка сохранения. См. журнал ошибок менеджера.'; }
+                            if (status) { status.textContent = L.features_failed || ''; }
                         }
                     }
                 }

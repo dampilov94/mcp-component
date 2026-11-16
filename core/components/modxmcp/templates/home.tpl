@@ -1,107 +1,139 @@
-<div class="container" style="padding:18px;max-width:840px;">
-    <h2 style="margin-top:0;">modxMCP</h2>
-    <p style="color:#666;">{$l.intro}</p>
+{literal}
+<style>
+#mcpo { --line:#e3e8ee; --ink:#1f2937; --muted:#7b8794; --soft:#f7f9fb; --ok:#2e7d32; --bad:#c62828;
+    max-width:900px; padding:18px; font-size:13px; color:var(--ink); }
+#mcpo * { box-sizing:border-box; }
+#mcpo h2 { margin:0 0 4px; font-size:20px; }
+#mcpo h3 { margin:22px 0 6px; font-size:15px; }
+#mcpo h4 { margin:12px 0 4px; color:#555; }
+#mcpo .o-muted { color:var(--muted); }
+#mcpo .o-lead { color:#666; margin:0 0 6px; }
+#mcpo code { background:var(--soft); padding:1px 4px; border-radius:3px; }
+#mcpo .o-status { width:100%; border-collapse:collapse; margin:10px 0; }
+#mcpo .o-status td { padding:6px; border-bottom:1px solid #eef1f5; vertical-align:top; }
+#mcpo .o-status td:first-child { width:200px; color:var(--muted); }
+#mcpo .o-ok { color:var(--ok); font-weight:bold; }
+#mcpo .o-bad { color:var(--bad); font-weight:bold; }
+#mcpo .o-link { color:#2563eb; text-decoration:none; }
+#mcpo .o-link:hover { text-decoration:underline; }
+#mcpo .o-btn { display:inline-block; padding:5px 12px; border:1px solid var(--line); background:#fff; border-radius:5px; cursor:pointer; font-size:12px; color:var(--ink); text-decoration:none; }
+#mcpo .o-btn:hover { background:var(--soft); }
+#mcpo .o-recent { width:100%; border-collapse:collapse; margin:6px 0; }
+#mcpo .o-recent td { padding:5px 6px; border-bottom:1px solid #eef1f5; vertical-align:top; }
+#mcpo .o-src { font-size:11px; padding:1px 6px; border-radius:9px; background:#eef2f7; white-space:nowrap; }
+#mcpo .o-src-mcp { background:#e0ecff; color:#1d4ed8; }
+#mcpo .o-src-manager { background:#e3f6e8; color:#166534; }
+#mcpo .o-src-external { background:#fff3d6; color:#92400e; }
+#mcpo .o-counts { margin:6px 0; color:#555; }
+#mcpo .o-counts span { margin-right:14px; }
+#mcpo .o-tiles { display:flex; flex-wrap:wrap; gap:12px; margin:16px 0; }
+#mcpo .o-tile { flex:1 1 240px; padding:14px 16px; border:1px solid var(--line); border-radius:6px; background:#fbfcfd; }
+#mcpo .o-tile b { display:block; margin-bottom:3px; font-size:14px; }
+#mcpo .o-tile p { margin:0 0 10px; color:#666; }
+#mcpo .o-warn { color:var(--bad); }
+#mcpo .o-danger { width:100%; border-collapse:collapse; margin:6px 0; }
+#mcpo .o-danger td { padding:6px; border-bottom:1px solid #eef1f5; vertical-align:top; }
+#mcpo .o-danger td:first-child { width:240px; }
+#mcpo .o-state-on { font-weight:bold; }
+#mcpo .o-state-off { color:#555; }
+#mcpo .o-state-missing { color:var(--muted); }
+#mcpo .o-integrations { width:100%; border-collapse:collapse; margin:6px 0; }
+#mcpo .o-integrations td { padding:6px; }
+</style>
+{/literal}
+<div id="mcpo">
+    <h2>modxMCP</h2>
+    <p class="o-lead">{$l.intro}</p>
 
-    <table class="modxmcp-status" cellpadding="6" style="border-collapse:collapse;width:100%;margin:14px 0;">
-        <tr><td style="width:240px;color:#888;">{$l.endpoint}</td><td><code>{$endpoint}</code></td></tr>
-        <tr><td style="color:#888;">{$l.enabled}</td><td>{if $enabled}<span style="color:#2e7d32;font-weight:bold;">{$l.yes}</span>{else}<span style="color:#c62828;font-weight:bold;">{$l.no}</span> &mdash; {$l.enable_hint}{/if}</td></tr>
-        <tr><td style="color:#888;">{$l.auto_static} (<code>modxmcp.auto_static</code>)</td><td>{if $auto_static}{$l.on}{else}{$l.off}{/if}</td></tr>
-        <tr><td style="color:#888;">{$l.audit_log} (<code>modxmcp.audit_log</code>)</td><td>{if $audit_log}{$l.on}{else}{$l.off}{/if}</td></tr>
+    <h3>{$l.heading_status}</h3>
+    <table class="o-status">
+        <tr><td>{$l.enabled}</td><td>{if $overview.enabled}<span class="o-ok">{$l.yes}</span>{else}<span class="o-bad">{$l.no}</span> &mdash; {$l.enable_hint}{/if}</td></tr>
+        <tr><td>{$l.version}</td><td><code>{$overview.version|escape}</code></td></tr>
+        <tr><td>{$l.endpoint}</td><td><code id="modxmcp-endpoint">{$overview.endpoint|escape}</code> <button type="button" class="o-btn" id="modxmcp-copy-endpoint">{$l.copy}</button> <span class="o-muted" id="modxmcp-copy-status"></span></td></tr>
+        <tr><td>{$l.active_tokens}</td><td>{if $overview.active_tokens > 0}{$l.tokens_count|escape} &mdash; <a class="o-link" href="?a=tokens&amp;namespace=modxmcp">{$l.tokens_link}</a>{else}<span class="o-warn">{$l.no_tokens}</span> &mdash; <a class="o-link" href="?a=tokens&amp;namespace=modxmcp">{$l.tokens_link}</a>{/if}</td></tr>
+        <tr><td>{$l.auto_static} (<code>modxmcp.auto_static</code>)</td><td>{if $overview.auto_static}{$l.on}{else}{$l.off}{/if}</td></tr>
+        <tr><td>{$l.audit_log} (<code>modxmcp.audit_log</code>)</td><td>{if $overview.audit_log}{$l.on}{else}{$l.off}{/if}</td></tr>
     </table>
 
-    <h3 style="margin:18px 0 6px;">Токены</h3>
-    <p style="color:#666;margin-top:0;">Каждому клиенту — свой токен со своим уровнем доступа. Токен показывается один раз при создании; хранится только его хеш.</p>
-    {if $tokens}
-    <table class="modxmcp-tokens" cellpadding="6" style="border-collapse:collapse;width:100%;margin:6px 0 12px;">
-        <tr style="color:#888;text-align:left;">
-            <th>Название</th><th>Начало</th><th>Доступ</th><th>Создан</th><th>Использован</th><th>Истекает</th><th></th>
-        </tr>
-        {foreach $tokens as $t}
-        <tr{if $t.revoked || $t.expired} style="color:#aaa;"{/if}>
-            <td>{$t.label|escape}</td>
-            <td><code>{$t.prefix|escape}…</code></td>
-            <td>{$t.scope}{if $t.plan_only} <span style="color:#888;">(только план)</span>{/if}</td>
-            <td>{$t.created}</td>
-            <td>{if $t.last_used}{$t.last_used}{else}—{/if}</td>
-            <td>{if $t.expires}{$t.expires}{else}—{/if}</td>
-            <td>{if $t.revoked}отозван{elseif $t.expired}истёк{else}<button class="x-btn modxmcp-revoke" data-id="{$t.id}" style="padding:3px 10px;cursor:pointer;">Отозвать</button>{/if}</td>
+    <h3>{$l.recent_title}</h3>
+    {if $recent}
+    <table class="o-recent">
+        {foreach $recent as $c}
+        <tr>
+            <td style="white-space:nowrap;" class="o-muted">{$c.time}</td>
+            <td><span class="o-src o-src-{$c.source|escape}">{$c.label|escape}</span></td>
+            <td>{$c.author|escape}</td>
+            <td>{$c.summary|escape}</td>
         </tr>
         {/foreach}
     </table>
     {else}
-    <p style="color:#c62828;">Токенов нет — создайте первый, чтобы подключить клиент.</p>
+    <p class="o-muted">{$l.recent_empty}</p>
     {/if}
+    <div class="o-counts"><span class="o-muted">{$l.recent_24h}:</span>{foreach $counts as $c}<span>{$c.label|escape}: <b>{$c.n}</b></span>{/foreach}</div>
+    <a class="o-link" href="?a=history&amp;namespace=modxmcp">{$l.recent_all} &rarr;</a>
 
-    <div style="margin:8px 0 4px;">
-        <input type="text" id="modxmcp-token-label" placeholder="Название, например «Claude Code»" maxlength="190" style="padding:6px 8px;width:260px;">
-        <select id="modxmcp-token-scope" style="padding:6px 8px;">
-            <option value="read">read — только чтение</option>
-            <option value="content">content — ресурсы и файлы</option>
-            <option value="develop" selected>develop — элементы, код, настройки</option>
-            <option value="admin">admin — всё, включая доступ и пакеты</option>
-        </select>
-        <label style="margin-left:8px;cursor:pointer;"><input type="checkbox" id="modxmcp-token-plan"> только план</label>
-        <button id="modxmcp-create-token" class="x-btn" style="padding:7px 16px;margin-left:8px;cursor:pointer;">Создать токен</button>
-    </div>
-    <div id="modxmcp-token-result" style="display:none;margin-top:12px;padding:12px;border:1px solid #cfe3cf;background:#f3faf3;border-radius:4px;">
-        <strong>Новый токен (скопируйте сейчас — показывается один раз):</strong>
-        <pre id="modxmcp-token-value" style="white-space:pre-wrap;word-break:break-all;margin:6px 0 0;user-select:all;"></pre>
-    </div>
-
-    <div style="margin:18px 0;padding:14px 16px;border:1px solid #dfe3e8;border-radius:6px;background:#fbfcfd;">
-        <div style="font-weight:bold;margin-bottom:3px;">Граф связей</div>
-        <p style="color:#666;margin:0 0 11px;">Карта того, как связаны элементы сайта: что чем используется,
-            какие ссылки битые и какие элементы никто не использует. Открывается отдельной страницей.</p>
-        <a href="?a=graph&amp;namespace=modxmcp" class="x-btn" style="display:inline-block;padding:8px 16px;cursor:pointer;text-decoration:none;">Открыть граф связей &rarr;</a>
-    </div>
-
-    <div style="margin:18px 0;padding:14px 16px;border:1px solid #dfe3e8;border-radius:6px;background:#fbfcfd;">
-        <div style="font-weight:bold;margin-bottom:3px;">{$l.history_title}</div>
-        <p style="color:#666;margin:0 0 11px;">{$l.history_desc}</p>
-        <a href="?a=history&amp;namespace=modxmcp" class="x-btn" style="display:inline-block;padding:8px 16px;cursor:pointer;text-decoration:none;">{$l.history_open} &rarr;</a>
+    <div class="o-tiles">
+        <div class="o-tile"><b>{$l.nav_tokens}</b><p>{$l.nav_tokens_desc}</p><a class="o-btn" href="?a=tokens&amp;namespace=modxmcp">{$l.nav_open} &rarr;</a></div>
+        <div class="o-tile"><b>{$l.nav_history}</b><p>{$l.nav_history_desc}</p><a class="o-btn" href="?a=history&amp;namespace=modxmcp">{$l.nav_open} &rarr;</a></div>
+        <div class="o-tile"><b>{$l.nav_graph}</b><p>{$l.nav_graph_desc}</p><a class="o-btn" href="?a=graph&amp;namespace=modxmcp">{$l.nav_open} &rarr;</a></div>
     </div>
 
     {if $components || $features}
-    <h3 style="margin:18px 0 6px;">Возможности</h3>
-    <p style="color:#666;margin-top:0;">Выключенные группы не передаются ИИ (экономия токенов) и блокируются на сервере. Изменения применяются автоматически при следующем действии ИИ (переподключение не требуется).</p>
+    <h3>{$l.features_title}</h3>
+    <p class="o-lead">{$l.features_intro}</p>
 
     {if $components}
-    <h4 style="margin:12px 0 4px;color:#555;">Компоненты</h4>
-    <div class="modxmcp-groups" style="margin:2px 0 8px;">
+    <h4>{$l.features_components}</h4>
+    <div style="margin:2px 0 8px;">
         {foreach $components as $g}
         <label style="display:block;margin:4px 0;cursor:pointer;">
-            <input type="checkbox" class="modxmcp-grp" data-group="{$g.key}"{if $g.enabled} checked{/if}> {$g.label} <span style="color:#bbb;">(<code>{$g.key}</code>)</span>
+            <input type="checkbox" class="modxmcp-grp" data-group="{$g.key|escape}"{if $g.enabled} checked{/if}> {$g.label|escape} <span style="color:#bbb;">(<code>{$g.key|escape}</code>)</span>
         </label>
         {/foreach}
     </div>
     {/if}
 
     {if $features}
-    <h4 style="margin:12px 0 4px;color:#555;">Возможности MODX</h4>
-    <div class="modxmcp-groups" style="margin:2px 0 8px;">
+    <h4>{$l.features_modx}</h4>
+    <div style="margin:2px 0 8px;">
         {foreach $features as $g}
         <label style="display:block;margin:4px 0;cursor:pointer;">
-            <input type="checkbox" class="modxmcp-grp" data-group="{$g.key}"{if $g.enabled} checked{/if}> {$g.label} <span style="color:#bbb;">(<code>{$g.key}</code>)</span>
+            <input type="checkbox" class="modxmcp-grp" data-group="{$g.key|escape}"{if $g.enabled} checked{/if}> {$g.label|escape} <span style="color:#bbb;">(<code>{$g.key|escape}</code>)</span>
         </label>
         {/foreach}
     </div>
     {/if}
 
     <p>
-        <button id="modxmcp-savegroups" class="x-btn" style="padding:8px 16px;cursor:pointer;" disabled>Сохранить возможности</button>
+        <button id="modxmcp-savegroups" class="x-btn" style="padding:8px 16px;cursor:pointer;" disabled>{$l.features_save}</button>
         <span id="modxmcp-groups-status" style="margin-left:10px;color:#888;"></span>
     </p>
     {/if}
 
     {if $integrations}
-    <h3 style="margin:18px 0 6px;">{$l.integrations}</h3>
-    <p style="color:#666;margin-top:0;">{$l.integrations_intro}</p>
-    <table class="modxmcp-integrations" cellpadding="6" style="border-collapse:collapse;width:100%;margin:6px 0 14px;">
+    <h3>{$l.integrations}</h3>
+    <p class="o-lead">{$l.integrations_intro}</p>
+    <table class="o-integrations">
         {foreach $integrations as $i}
         <tr>
-            <td style="width:160px;font-weight:bold;">{$i.label}</td>
-            <td style="width:90px;">{if $i.installed}<span style="color:#2e7d32;">✓ {if $i.version}{$i.version}{else}{$l.yes}{/if}</span>{else}<span style="color:#bbb;">—</span>{/if}</td>
-            <td style="color:#666;">{if $i.available}доступно{elseif $i.installed}файлы дополнения не найдены{else}не установлено{/if}</td>
+            <td style="width:160px;font-weight:bold;">{$i.label|escape}</td>
+            <td style="width:90px;">{if $i.installed}<span style="color:#2e7d32;">✓ {if $i.version}{$i.version|escape}{else}{$l.yes}{/if}</span>{else}<span style="color:#bbb;">—</span>{/if}</td>
+            <td style="color:#666;">{if $i.available}{$l.integration_available}{elseif $i.installed}{$l.integration_files_missing}{else}{$l.integration_not_installed}{/if}</td>
+        </tr>
+        {/foreach}
+    </table>
+    {/if}
+
+    {if $dangerous}
+    <h3>{$l.danger_title}</h3>
+    <p class="o-lead">{$l.danger_intro}</p>
+    <table class="o-danger">
+        {foreach $dangerous as $d}
+        <tr>
+            <td><code>{$d.key|escape}</code></td>
+            <td style="width:150px;"><span class="o-state-{$d.class|escape}">{$d.state|escape}</span></td>
+            <td style="color:#666;">{$d.desc|escape}</td>
         </tr>
         {/foreach}
     </table>

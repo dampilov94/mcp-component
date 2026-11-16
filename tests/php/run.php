@@ -6697,6 +6697,195 @@ throws('run: text longer than 20000 characters', ApiException::class, function (
 check('run: text of exactly 20000 characters is accepted', $call($uCtx(), 'run', array('text' => str_repeat('я', 20000), 'max_output' => 10))['truncated'] === true);
 check('run: none of the failed validations ran anything or left state behind', $uState() === $uBefore);
 
+// --- Tokens page: TokenStore::update, TokenService and the overview of the main page ---
+use ModxMCP\Manager\TokenService;
+use ModxMCP\Manager\Overview;
+$tkCore = dirname(dirname(__DIR__)) . '/core/components/modxmcp/';
+$tkDir = sys_get_temp_dir() . '/modxmcp-tokens-' . bin2hex(random_bytes(6));
+mkdir($tkDir . '/core', 0700, true);
+$tkSite = fakeSite($tkDir, array('site_url' => 'https://example.test/', 'assets_url' => '/assets/', 'base_url' => '/'));
+$tkSite->store('modUser', array('id' => 1, 'username' => 'admin', 'primary_group' => 0));
+$tkSite->store('modUser', array('id' => 2, 'username' => 'Иванов', 'primary_group' => 0));
+$tkSite->user = $tkSite->getObject('modUser', 2);
+$tkStore = new TokenStore($tkSite);
+$tkService = new TokenService($tkSite, $tkSite->user);
+$tkRow = function ($id) use ($tkSite) { return $tkSite->pdo->query('SELECT * FROM modx_modxmcp_tokens WHERE id = ' . (int) $id)->fetch(PDO::FETCH_ASSOC); };
+$tkThrows = function ($label, callable $fn) {
+    try { $fn(); check($label, false); return null; }
+    catch (Throwable $e) { check($label, $e instanceof InvalidArgumentException || $e instanceof ApiException); return $e; }
+};
+
+// TokenStore::update
+$tkA = $tkStore->create('Старый токен', 'develop', false, array(), null, 2);
+$tkHash = $tkRow($tkA['id'])['hash'];
+$tkGet = $tkStore->get($tkA['id']);
+check('tokens page: get returns the public record without hash or token', $tkGet['label'] === 'Старый токен' && !isset($tkGet['hash']) && !isset($tkGet['token']) && $tkStore->get(9999) === null);
+$tkU = $tkStore->update($tkA['id'], array('label' => 'Новое имя «тест»'));
+check('tokens page: update the label (Cyrillic) and nothing else', $tkU['label'] === 'Новое имя «тест»' && $tkU['scope'] === 'develop' && $tkU['plan_only'] === false && $tkU['denied_groups'] === array());
+$tkU = $tkStore->update($tkA['id'], array('plan_only' => true));
+check('tokens page: update plan_only', $tkU['plan_only'] === true && $tkU['label'] === 'Новое имя «тест»');
+$tkU = $tkStore->update($tkA['id'], array('denied_groups' => array('migx', 'access', 'migx')));
+check('tokens page: update denied_groups (duplicates dropped)', $tkU['denied_groups'] === array('migx', 'access'));
+$tkAt = time() + 5000;
+$tkU = $tkStore->update($tkA['id'], array('expires_at' => $tkAt));
+check('tokens page: update expires_at', $tkU['expires_at'] === $tkAt);
+$tkU = $tkStore->update($tkA['id'], array('expires_at' => null));
+check('tokens page: null clears the expiry', $tkU['expires_at'] === null);
+$tkU = $tkStore->update($tkA['id'], array('denied_groups' => array()));
+check('tokens page: an empty denied_groups clears them', $tkU['denied_groups'] === array());
+$tkU = $tkStore->update($tkA['id'], array('label' => 'Один', 'plan_only' => false, 'denied_groups' => array('lexicon')));
+check('tokens page: several fields at once', $tkU['label'] === 'Один' && $tkU['denied_groups'] === array('lexicon'));
+$tkThrows('tokens page: scope cannot be changed', function () use ($tkStore, $tkA) { $tkStore->update($tkA['id'], array('scope' => 'admin')); });
+$tkThrows('tokens page: the hash cannot be changed', function () use ($tkStore, $tkA) { $tkStore->update($tkA['id'], array('hash' => str_repeat('a', 64))); });
+$tkThrows('tokens page: an unknown key is refused', function () use ($tkStore, $tkA) { $tkStore->update($tkA['id'], array('label' => 'x', 'created_by' => 1)); });
+$tkThrows('tokens page: an unknown group is refused', function () use ($tkStore, $tkA) { $tkStore->update($tkA['id'], array('denied_groups' => array('nope'))); });
+$tkThrows('tokens page: a group that is not toggleable is refused', function () use ($tkStore, $tkA) { $tkStore->update($tkA['id'], array('denied_groups' => array('resources'))); });
+$tkThrows('tokens page: an expiry in the past is refused', function () use ($tkStore, $tkA) { $tkStore->update($tkA['id'], array('expires_at' => time() - 10)); });
+$tkThrows('tokens page: a non-integer expiry is refused', function () use ($tkStore, $tkA) { $tkStore->update($tkA['id'], array('expires_at' => '2030-01-01')); });
+$tkThrows('tokens page: a label over 190 characters is refused', function () use ($tkStore, $tkA) { $tkStore->update($tkA['id'], array('label' => str_repeat('я', 191))); });
+$tkThrows('tokens page: plan_only must be a boolean', function () use ($tkStore, $tkA) { $tkStore->update($tkA['id'], array('plan_only' => 'yes')); });
+$tkThrows('tokens page: an unknown token is refused', function () use ($tkStore) { $tkStore->update(9999, array('label' => 'x')); });
+$tkU = $tkStore->update($tkA['id'], array('label' => str_repeat('я', 190)));
+check('tokens page: a label of exactly 190 characters is accepted', mb_strlen($tkU['label'], 'UTF-8') === 190);
+$tkAfter = $tkRow($tkA['id']);
+check('tokens page: refused changes left the scope and the hash alone', $tkAfter['scope'] === 'develop' && $tkAfter['hash'] === $tkHash && $tkAfter['denied_groups'] === 'lexicon');
+$tkThrows('tokens page: create refuses an unknown group', function () use ($tkStore) { $tkStore->create('x', 'read', false, array('nope')); });
+$tkRev = $tkStore->create('Отозванный', 'read', false, array(), null, 2);
+$tkStore->revoke($tkRev['id']);
+$tkThrows('tokens page: a revoked token cannot be updated', function () use ($tkStore, $tkRev) { $tkStore->update($tkRev['id'], array('label' => 'x')); });
+check('tokens page: a revoked token is unchanged after the refusal', $tkRow($tkRev['id'])['label'] === 'Отозванный');
+
+// TokenService::tokens
+$tkExp = $tkStore->create('Истёкший', 'content', true, array('migx'), time() + 100, 1);
+$tkSite->pdo->exec('UPDATE modx_modxmcp_tokens SET expires_at = ' . (time() - 50) . ' WHERE id = ' . (int) $tkExp['id']);
+$tkOld = $tkStore->create('Импортированный', 'admin', false, array(), null, 0);
+$tkGone = $tkStore->create('Автор удалён', 'read', false, array(), null, 77);
+$tkCtx = Context::forManager($tkSite, $tkSite->user, $tkCore);
+$tkMeta = function ($tokenId, $source = 'mcp') { return array('source' => $source, 'token_id' => $tokenId, 'session_id' => null, 'request_id' => null, 'tool' => 'update', 'summary' => 'правка'); };
+$tkCtx->journal()->commit($tkMeta($tkA['id']), array());
+$tkCtx->journal()->commit($tkMeta($tkA['id']), array());
+$tkCtx->journal()->commit($tkMeta($tkExp['id']), array());
+$tkCtx->journal()->commit($tkMeta(null, 'manager'), array());
+$tkList = $tkService->tokens();
+$tkBy = array();
+foreach ($tkList as $tk) { $tkBy[$tk['label']] = $tk; }
+check('tokens page: tokens are listed newest first, without hashes', array_column($tkList, 'id') === array($tkGone['id'], $tkOld['id'], $tkExp['id'], $tkRev['id'], $tkA['id'])
+    && !isset($tkList[0]['hash']) && !isset($tkList[0]['token']));
+check('tokens page: status of an active, an expired and a revoked token', $tkBy[str_repeat('я', 190)]['status'] === 'active' && $tkBy['Истёкший']['status'] === 'expired' && $tkBy['Отозванный']['status'] === 'revoked');
+check('tokens page: created_by_name is the user name, a dash, or a deleted user', $tkBy[str_repeat('я', 190)]['created_by_name'] === 'Иванов' && $tkBy['Истёкший']['created_by_name'] === 'admin'
+    && $tkBy['Импортированный']['created_by_name'] === '—' && $tkBy['Автор удалён']['created_by_name'] === '(deleted user #77)');
+check('tokens page: changesets are counted per token, tokens with none have 0, manager changesets are no one\'s',
+    $tkBy[str_repeat('я', 190)]['changesets'] === 2 && $tkBy['Истёкший']['changesets'] === 1 && $tkBy['Отозванный']['changesets'] === 0 && $tkBy['Импортированный']['changesets'] === 0);
+check('tokens page: the record keeps the rights of the token', $tkBy['Истёкший']['scope'] === 'content' && $tkBy['Истёкший']['plan_only'] === true && $tkBy['Истёкший']['denied_groups'] === array('migx'));
+
+// TokenService::create
+$tkFail = function ($label, array $input) use ($tkService) {
+    try { $tkService->create($input); check($label, false); }
+    catch (ApiException $e) { check($label, $e->errorCode === 'validation_failed'); }
+};
+$tkFail('tokens page: create needs a label', array('label' => '', 'scope' => 'read'));
+$tkFail('tokens page: a blank label is no label', array('label' => " \t ", 'scope' => 'read'));
+$tkFail('tokens page: a label over 190 characters is refused by create', array('label' => str_repeat('я', 191), 'scope' => 'read'));
+$tkFail('tokens page: create refuses an unknown scope', array('label' => 'x', 'scope' => 'root'));
+$tkFail('tokens page: create refuses more than 3650 days', array('label' => 'x', 'scope' => 'read', 'expires_days' => 3651));
+$tkFail('tokens page: create refuses negative days', array('label' => 'x', 'scope' => 'read', 'expires_days' => '-1'));
+$tkFail('tokens page: create refuses days that are not a number', array('label' => 'x', 'scope' => 'read', 'expires_days' => 'abc'));
+$tkFail('tokens page: create refuses an unknown group', array('label' => 'x', 'scope' => 'read', 'denied_groups' => 'migx,nope'));
+$tkCount = (int) $tkSite->pdo->query('SELECT COUNT(*) FROM modx_modxmcp_tokens')->fetchColumn();
+$tkNew = $tkService->create(array('label' => '  Claude Code на ноутбуке  ', 'scope' => 'develop', 'plan_only' => 'true', 'expires_days' => '30', 'denied_groups' => 'migx,access'));
+check('tokens page: create trims the label and stores the choices', $tkNew['label'] === 'Claude Code на ноутбуке' && $tkNew['scope'] === 'develop' && $tkNew['plan_only'] === true
+    && $tkNew['denied_groups'] === array('migx', 'access') && abs($tkNew['expires_at'] - (time() + 30 * 86400)) < 5 && $tkNew['created_by'] === 2 && (int) $tkSite->pdo->query('SELECT COUNT(*) FROM modx_modxmcp_tokens')->fetchColumn() === $tkCount + 1);
+$tkConfig = json_decode($tkNew['config'], true);
+check('tokens page: config is valid JSON with the exact structure and the site URL', $tkConfig === array('mcpServers' => array('modx' => array(
+    'command' => 'npx', 'args' => array('-y', 'github:dampilov94/mcp-component'),
+    'env' => array('MODX_MCP_SITE_URL' => 'https://example.test/assets/components/modxmcp/api.php', 'MODX_MCP_TOKEN' => $tkNew['token'])))));
+check('tokens page: config is pretty-printed with 2 spaces and slashes unescaped', strpos($tkNew['config'], "{\n  \"mcpServers\": {\n    \"modx\": {\n      \"command\": \"npx\"") === 0 && strpos($tkNew['config'], '\\/') === false);
+$tkAuth = $tkStore->authenticate($tkConfig['mcpServers']['modx']['env']['MODX_MCP_TOKEN']);
+check('tokens page: the token in the config authenticates as the new record', $tkAuth && $tkAuth['id'] === $tkNew['id'] && $tkAuth['label'] === 'Claude Code на ноутбуке');
+$tkOff = $tkService->create(array('label' => 'Без срока', 'scope' => 'read', 'plan_only' => 'false'));
+check('tokens page: no expiry, and "false" from a checkbox is not true', $tkOff['expires_at'] === null && $tkOff['plan_only'] === false && $tkOff['denied_groups'] === array());
+$tkSite->options['site_url'] = 'https://example.test/sub/';
+$tkSite->options['assets_url'] = '/sub/assets/';
+check('tokens page: a site in a folder keeps the folder in the URL', $tkService->endpoint() === 'https://example.test/sub/assets/components/modxmcp/api.php');
+$tkSite->options['assets_url'] = 'https://cdn.example.test/assets/';
+check('tokens page: an absolute assets_url is used as it is', $tkService->endpoint() === 'https://cdn.example.test/assets/components/modxmcp/api.php');
+$tkSite->options['site_url'] = 'https://example.test/';
+$tkSite->options['assets_url'] = '/assets/';
+check('tokens page: the endpoint is the one of a standard site', $tkService->endpoint() === 'https://example.test/assets/components/modxmcp/api.php');
+
+// TokenService::update
+$tkU = $tkService->update($tkNew['id'], array('label' => 'Переименован', 'expires_days' => ''));
+check('tokens page: an empty expires_days keeps the expiry', $tkU['label'] === 'Переименован' && $tkU['expires_at'] === $tkNew['expires_at']);
+$tkU = $tkService->update($tkNew['id'], array('expires_days' => '0'));
+check('tokens page: expires_days 0 removes the expiry', $tkU['expires_at'] === null);
+$tkU = $tkService->update($tkNew['id'], array('expires_days' => '90', 'plan_only' => 'false', 'denied_groups' => ''));
+check('tokens page: expires_days N sets the expiry, a checkbox "false" and an empty list clear the rest', abs($tkU['expires_at'] - (time() + 90 * 86400)) < 5 && $tkU['plan_only'] === false && $tkU['denied_groups'] === array());
+$tkU = $tkService->update($tkNew['id'], array('plan_only' => '1', 'denied_groups' => 'contexts,lexicon'));
+check('tokens page: update by CSV of groups', $tkU['plan_only'] === true && $tkU['denied_groups'] === array('contexts', 'lexicon') && $tkU['label'] === 'Переименован');
+foreach (array(array('label' => ''), array('expires_days' => '4000'), array('denied_groups' => 'nope')) as $tkBad) {
+    try { $tkService->update($tkNew['id'], $tkBad); check('tokens page: update refuses ' . json_encode($tkBad), false); }
+    catch (ApiException $e) { check('tokens page: update refuses ' . json_encode($tkBad, JSON_UNESCAPED_UNICODE), $e->errorCode === 'validation_failed'); }
+}
+check('tokens page: refused updates changed nothing', $tkStore->get($tkNew['id'])['label'] === 'Переименован' && $tkStore->get($tkNew['id'])['denied_groups'] === array('contexts', 'lexicon'));
+
+// revoke
+$tkService->revoke($tkOff['id']);
+check('tokens page: revoke marks the token revoked and it no longer authenticates', $tkStore->get($tkOff['id'])['revoked_at'] !== null && $tkStore->authenticate($tkNew['token']) !== null
+    && array_column(array_filter($tkService->tokens(), function ($t) use ($tkOff) { return $t['id'] === $tkOff['id']; }), 'status') === array('revoked'));
+$e = null;
+try { $tkService->revoke($tkOff['id']); } catch (ApiException $e) {}
+check('tokens page: revoking twice, or an unknown token, is validation_failed', $e && $e->errorCode === 'validation_failed');
+$e = null;
+try { $tkService->update($tkOff['id'], array('label' => 'x')); } catch (ApiException $e) {}
+check('tokens page: a revoked token cannot be updated through the service', $e && $e->errorCode === 'validation_failed');
+
+// no secret in any log
+$tkLogged = json_encode(array($tkSite->managerActions, $tkSite->logLines), JSON_UNESCAPED_UNICODE);
+$tkSecrets = true;
+foreach (array($tkNew, $tkOff) as $tkRec) { $tkSecrets = $tkSecrets && strpos($tkLogged, $tkRec['token']) === false && strpos($tkLogged, TokenStore::hashToken($tkRec['token'])) === false; }
+check('tokens page: no token value or hash in the manager actions or the log', $tkSecrets && $tkLogged !== '' );
+check('tokens page: manager actions name the token id', $tkSite->managerActions[count($tkSite->managerActions) - 1] === array('action' => 'modxmcp_revoke_token', 'class' => 'modxmcp_token', 'pk' => $tkOff['id'])
+    && count(array_filter($tkSite->managerActions, function ($a) { return $a['action'] === 'modxmcp_create_token'; })) === 2
+    && count(array_filter($tkSite->managerActions, function ($a) { return $a['action'] === 'modxmcp_update_token'; })) === 4);
+
+// the overview of the main page
+$ovDir = sys_get_temp_dir() . '/modxmcp-overview-' . bin2hex(random_bytes(6));
+mkdir($ovDir . '/core', 0700, true);
+$ovSite = fakeSite($ovDir, array('site_url' => 'https://example.test/', 'assets_url' => '/assets/', 'modxmcp.allow_run' => '1', 'modxmcp.allow_run_processor' => '0',
+    'modxmcp.history_track_manager' => 1, 'modxmcp.lint_php' => '0', 'modxmcp.allowed_ips' => ' 10.0.0.1, 10.0.0.2 ', 'modxmcp.audit_log' => true));
+$ovSite->store('modUser', array('id' => 2, 'username' => 'Иванов', 'primary_group' => 0));
+$ovSite->user = $ovSite->getObject('modUser', 2);
+$ovOverview = new Overview($ovSite, $ovSite->user);
+$ovEmpty = $ovOverview->data();
+check('overview: a fresh site has no tokens and no changes, and says so', $ovEmpty['active_tokens'] === 0 && $ovEmpty['recent'] === array() && $ovEmpty['counts_24h'] === array('mcp' => 0, 'manager' => 0, 'external' => 0));
+$ovDanger = array();
+foreach ($ovEmpty['dangerous'] as $d) { $ovDanger[$d['key']] = $d; }
+check('overview: the dangerous settings come in a fixed order', array_keys($ovDanger) === array('modxmcp.allow_run', 'modxmcp.allow_run_processor', 'modxmcp.allow_query_db', 'modxmcp.history_track_manager', 'modxmcp.lint_php', 'modxmcp.require_https', 'modxmcp.allowed_ips'));
+check('overview: on, off and a setting that does not exist', $ovDanger['modxmcp.allow_run']['on'] === true && $ovDanger['modxmcp.allow_run']['exists'] === true && $ovDanger['modxmcp.allow_run_processor']['on'] === false
+    && $ovDanger['modxmcp.history_track_manager']['on'] === true && $ovDanger['modxmcp.lint_php']['on'] === false
+    && $ovDanger['modxmcp.allow_query_db']['exists'] === false && $ovDanger['modxmcp.allow_query_db']['on'] === false && $ovDanger['modxmcp.require_https']['exists'] === false);
+check('overview: allowed_ips shows the list trimmed, a missing one is empty and does not exist', $ovDanger['modxmcp.allowed_ips']['value'] === '10.0.0.1, 10.0.0.2' && $ovDanger['modxmcp.allowed_ips']['type'] === 'text');
+$ovSite->options['modxmcp.allowed_ips'] = '';
+check('overview: an empty allowed_ips exists and means any address', array_column($ovOverview->dangerous(), null, 'key')['modxmcp.allowed_ips']['value'] === '' && array_column($ovOverview->dangerous(), null, 'key')['modxmcp.allowed_ips']['exists'] === true);
+$ovStore = new TokenStore($ovSite);
+$ovOne = $ovStore->create('Рабочий', 'develop');
+$ovTwo = $ovStore->create('Второй', 'read');
+$ovStore->create('Короткий', 'read', false, array(), time() + 100);
+$ovStore->revoke($ovTwo['id']);
+$ovJournal = Context::forManager($ovSite, $ovSite->user, $tkCore)->journal();
+$ovIds = array();
+foreach (array(array('mcp', 'первое'), array('mcp', 'второе'), array('manager', 'третье'), array('external', 'четвёртое'), array('mcp', 'пятое'), array('mcp', 'шестое'), array('manager', 'седьмое')) as $i => $ovC) {
+    $ovIds[] = $ovJournal->commit(array('source' => $ovC[0], 'token_id' => $ovC[0] === 'mcp' ? $ovOne['id'] : null, 'user_id' => $ovC[0] === 'manager' ? 2 : null, 'session_id' => null, 'request_id' => null, 'tool' => 'update', 'summary' => $ovC[1]), array());
+}
+$ovSite->pdo->exec('UPDATE modx_modxmcp_changesets SET created_at = ' . (time() - 90000) . ' WHERE id IN (' . $ovIds[0] . ',' . $ovIds[3] . ')');
+$ovData = $ovOverview->data();
+check('overview: five newest changesets with their authors and summaries', array_column($ovData['recent'], 'summary') === array('седьмое', 'шестое', 'пятое', 'четвёртое', 'третье')
+    && $ovData['recent'][0]['author'] === 'Иванов' && $ovData['recent'][1]['author'] === 'Рабочий' && $ovData['recent'][0]['source'] === 'manager' && $ovData['recent'][3]['source'] === 'external');
+check('overview: counts of the last 24 hours by source leave out older changesets', $ovData['counts_24h'] === array('mcp' => 3, 'manager' => 2, 'external' => 0));
+check('overview: active tokens leave out revoked ones, the rest of the status', $ovData['active_tokens'] === 2 && $ovData['enabled'] === true && $ovData['version'] === Kernel::VERSION
+    && $ovData['endpoint'] === 'https://example.test/assets/components/modxmcp/api.php' && $ovData['audit_log'] === true && $ovData['auto_static'] === true);
+check('overview: the result is plain JSON data without secrets', strpos(json_encode($ovData), 'mcp_') === false && json_decode(json_encode($ovData), true) === $ovData);
+
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));
 check('canonical: list order is kept', Kernel::canonical(array(3, 1, 2)) === array(3, 1, 2));

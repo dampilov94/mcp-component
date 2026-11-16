@@ -1180,7 +1180,11 @@ class modX extends xPDO {
         $this->placeholders = $saved;
         return $output;
     }
-    public function log($level, $message) { error_log($message); }
+    /** Everything written to the MODX log and to the manager action log (logManagerAction), for tests that look for leaked secrets. */
+    public $logLines = array();
+    public $managerActions = array();
+    public function log($level, $message) { $this->logLines[] = (string) $message; error_log($message); }
+    public function logManagerAction($action, $class, $pk) { $this->managerActions[] = array('action' => $action, 'class' => $class, 'pk' => $pk); }
     public function getVersionData() { return array('full_version' => '2.8.8-pl'); }
 
     /** Security processors: model defaults and core refusals from MODX 2.8.8. */
