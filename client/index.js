@@ -10,6 +10,8 @@ const {
   ListToolsRequestSchema,
   ListResourcesRequestSchema,
   ReadResourceRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
 } = require("@modelcontextprotocol/sdk/types.js");
 const { AjvJsonSchemaValidator } = require("@modelcontextprotocol/sdk/validation/ajv");
 const { randomUUID } = require("node:crypto");
@@ -71,7 +73,10 @@ let validators = new Map();
 function noteManifestHash(hash) {
   if (!manifest || manifest.hash === hash) return;
   manifest.stale = true;
-  if (server) Promise.resolve(server.sendToolListChanged()).catch(() => {});
+  if (server) {
+    Promise.resolve(server.sendToolListChanged()).catch(() => {});
+    Promise.resolve(server.sendPromptListChanged()).catch(() => {});
+  }
 }
 
 const api = new ModxApiClient(MODX_SITE_URL, API_TOKEN, { sessionId: randomUUID(), onManifestHash: noteManifestHash });
@@ -133,6 +138,28 @@ function validManifestTool(tool) {
     && tool.effect && typeof tool.effect === "object";
 }
 
+function validManifestPrompt(prompt) {
+  return prompt && typeof prompt === "object"
+    && typeof prompt.name === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(prompt.name)
+    && typeof prompt.description === "string"
+    && (prompt.title === undefined || typeof prompt.title === "string")
+    && Array.isArray(prompt.arguments ?? [])
+    && (prompt.arguments ?? []).every((argument) => argument && typeof argument.name === "string");
+}
+
+function toMcpPrompt(prompt) {
+  return {
+    name: prompt.name,
+    ...(prompt.title ? { title: prompt.title } : {}),
+    description: prompt.description,
+    arguments: (prompt.arguments ?? []).map((argument) => ({
+      name: argument.name,
+      ...(typeof argument.description === "string" ? { description: argument.description } : {}),
+      required: argument.required === true,
+    })),
+  };
+}
+
 async function loadManifest(context = {}) {
   const { result } = await api.call("manifest", {}, context);
   if (result.protocol !== PROTOCOL) {
@@ -141,10 +168,16 @@ async function loadManifest(context = {}) {
   if (typeof result.hash !== "string" || !Array.isArray(result.tools) || !result.tools.every(validManifestTool)) {
     throw new ModxApiError("Endpoint returned an invalid manifest.", undefined, "invalid_response");
   }
+  // Sites older than the scenarios send no prompts.
+  const prompts = result.prompts ?? [];
+  if (!Array.isArray(prompts) || !prompts.every(validManifestPrompt)) {
+    throw new ModxApiError("Endpoint returned an invalid manifest.", undefined, "invalid_response");
+  }
   manifest = {
     hash: result.hash,
     instructions: typeof result.instructions === "string" ? result.instructions : undefined,
     tools: new Map(result.tools.map((tool) => [tool.name, { ...tool, mcp: toMcpTool(tool) }])),
+    prompts: prompts.map(toMcpPrompt),
     stale: false,
   };
   validators = new Map();
@@ -239,6 +272,13 @@ async function readResource(request, extra) {
   return { contents: [{ uri, mimeType: "text/markdown", text: String(result.content ?? "") }] };
 }
 
+async function getPrompt(request, extra) {
+  const { name } = request.params;
+  const supplied = request.params.arguments ?? {};
+  const { result } = await api.call("prompt", { name, arguments: supplied }, { signal: extra.signal });
+  return { description: result.description, messages: result.messages };
+}
+
 async function main() {
   // Load the manifest first so the host gets the site's own instructions. A site that is
   // down now must not prevent the bridge from starting; the next tools/list retries.
@@ -250,7 +290,7 @@ async function main() {
   server = new Server(
     { name: pkgInfo.name || "modx-mcp", version: pkgInfo.version || "0.0.0" },
     {
-      capabilities: { tools: { listChanged: true }, resources: {} },
+      capabilities: { tools: { listChanged: true }, resources: {}, prompts: { listChanged: true } },
       ...(manifest?.instructions ? { instructions: manifest.instructions } : {}),
     },
   );
@@ -258,6 +298,11 @@ async function main() {
     const current = await loadManifest({ signal: extra.signal });
     return { tools: [...current.tools.values()].map((tool) => tool.mcp) };
   });
+  server.setRequestHandler(ListPromptsRequestSchema, async (_request, extra) => {
+    const current = await loadManifest({ signal: extra.signal });
+    return { prompts: current.prompts };
+  });
+  server.setRequestHandler(GetPromptRequestSchema, getPrompt);
   server.setRequestHandler(CallToolRequestSchema, callTool);
   server.setRequestHandler(ListResourcesRequestSchema, (_request, extra) => listResources(extra));
   server.setRequestHandler(ReadResourceRequestSchema, readResource);

@@ -17,7 +17,10 @@ const tool = (action, extra = {}) => ({
 });
 
 function mockSite() {
-  const state = { requests: [], hash: "h1", revision: "r1", tools: [
+  const state = { requests: [], hash: "h1", revision: "r1", prompts: [
+    { name: "study_site", title: "Изучить сайт", description: "Карта сайта.", arguments: [] },
+    { name: "audit", title: "Провести аудит", description: "Аудит.", arguments: [{ name: "focus", description: "Фокус", required: false }] },
+  ], tools: [
     tool("site_info"),
     tool("help", { inputSchema: object({ topic: { type: "string" } }) }),
     tool("describe", { inputSchema: object({ kind: { type: "string", pattern: "^[a-z]+$" } }) }),
@@ -43,7 +46,15 @@ function mockSite() {
       const ok = (result) => reply(200, { ok: true, result, meta });
       switch (body.action) {
         case "manifest":
-          return ok({ protocol: 2, server_version: "2.0.0", hash: state.hash, instructions: "Mock site.", tools: state.tools });
+          return ok({ protocol: 2, server_version: "2.0.0", hash: state.hash, instructions: "Mock site.", tools: state.tools, prompts: state.prompts });
+        case "prompt":
+          if (!state.prompts.some((item) => item.name === body.args.name)) {
+            return reply(404, { ok: false, error: { code: "not_found", message: `Unknown prompt '${body.args.name}'.` }, meta });
+          }
+          if (body.args.arguments?.focus === "too long") {
+            return reply(400, { ok: false, error: { code: "validation_failed", message: "arguments.focus is too long." }, meta });
+          }
+          return ok({ description: "Аудит.", messages: [{ role: "user", content: { type: "text", text: `Аудит: ${JSON.stringify(body.args.arguments ?? {})}` } }] });
         case "site_info":
           return ok({ site_name: "Mock", counts: { chunks: 3 } });
         case "help":
@@ -222,6 +233,36 @@ test("bridge serves the site's manifest and proxies calls", async (t) => {
     assert.ok(!tools.some((item) => item.name === "modx_update"));
     const gone = await client.callTool({ name: "modx_update", arguments: { kind: "chunk" } });
     assert.equal(gone.isError, true);
+  });
+
+  await t.test("prompts come from the manifest and a hash change announces them", async () => {
+    const { prompts } = await client.listPrompts();
+    assert.deepEqual(prompts.map((item) => item.name), ["study_site", "audit"]);
+    assert.equal(prompts[1].title, "Провести аудит");
+    assert.deepEqual(prompts[1].arguments, [{ name: "focus", description: "Фокус", required: false }]);
+    assert.ok(client.getServerCapabilities().prompts.listChanged);
+    const changed = new Promise((resolve) => {
+      client.fallbackNotificationHandler = async (notification) => {
+        if (notification.method === "notifications/prompts/list_changed") resolve();
+      };
+    });
+    site.state.hash = "h3";
+    site.state.prompts = site.state.prompts.filter((item) => item.name !== "study_site");
+    await client.callTool({ name: "modx_site_info", arguments: {} });
+    await changed;
+    assert.deepEqual((await client.listPrompts()).prompts.map((item) => item.name), ["audit"]);
+  });
+
+  await t.test("a prompt is rendered by the site and its errors surface as MCP errors", async () => {
+    const result = await client.getPrompt({ name: "audit", arguments: { focus: "ссылки" } });
+    assert.equal(result.description, "Аудит.");
+    assert.equal(result.messages[0].role, "user");
+    assert.equal(result.messages[0].content.text, 'Аудит: {"focus":"ссылки"}');
+    const sent = site.state.requests.at(-1);
+    assert.deepEqual(sent.args, { name: "audit", arguments: { focus: "ссылки" } });
+    assert.equal(sent.request_id, undefined);
+    await assert.rejects(client.getPrompt({ name: "study_site" }), /MODX not_found \(HTTP 404\): Unknown prompt 'study_site'/);
+    await assert.rejects(client.getPrompt({ name: "audit", arguments: { focus: "too long" } }), /validation_failed/);
   });
 
   await t.test("the guide is offered as resources", async () => {

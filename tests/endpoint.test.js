@@ -127,6 +127,26 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
     assert.ok(result.error_codes.includes("revision_conflict"));
   });
 
+  await t.test("prompts: the manifest lists what the token may use and the prompt action renders them", async () => {
+    const names = async (token) => (await call(token, "manifest")).body.result.prompts.map((item) => item.name);
+    assert.deepEqual(await names(read), ["study_site", "audit", "fix_errors"]);
+    assert.deepEqual(await names(admin), ["study_site", "audit", "change_page", "new_page_type", "fix_errors"]);
+    assert.notEqual((await call(read, "manifest")).body.result.hash, (await call(admin, "manifest")).body.result.hash);
+    const ok = await call(read, "prompt", { name: "audit", arguments: { focus: "ссылки" } });
+    assert.equal(ok.status, 200);
+    assert.equal(ok.body.result.messages[0].role, "user");
+    assert.match(ok.body.result.messages[0].content.text, /"ссылки"/);
+    assert.match(ok.body.result.messages[0].content.text, /`modx_undo`/);
+    assert.equal(ok.body.meta.manifest, (await call(read, "manifest")).body.result.hash);
+    const denied = await call(read, "prompt", { name: "change_page", arguments: { page: "1", change: "x" } });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.body.error.code, "unavailable");
+    assert.equal(denied.body.error.details.reason, "forbidden_scope");
+    assert.equal((await call(admin, "prompt", { name: "nope" })).body.error.code, "not_found");
+    assert.equal((await call(admin, "prompt", { name: "change_page", arguments: { page: "1" } })).body.error.code, "validation_failed");
+    assert.equal((await call(admin, "prompt", { name: "audit", arguments: { focus: "я".repeat(2001) } })).status, 400);
+  });
+
   await t.test("run_processor and query_db are off by default", async () => {
     for (const [action, args] of [["run_processor", { processor: "resource/getlist", confirm: true }], ["query_db", { sql: "SELECT 1" }]]) {
       const response = await call(admin, action, args);
@@ -298,6 +318,14 @@ test("bridge + kernel end to end", { skip: available ? false : "PHP with pdo_sql
   assert.match(failed.content[0].text, /MODX not_found \(HTTP 404\)/);
   const { resources } = await client.listResources();
   assert.ok(resources.some((item) => item.uri === "modx-help://index"));
+
+  const { prompts } = await client.listPrompts();
+  assert.deepEqual(prompts.map((item) => item.name), ["study_site", "audit", "change_page", "new_page_type", "fix_errors"]);
+  assert.deepEqual(prompts[2].arguments.map((item) => [item.name, item.required]), [["page", true], ["change", true]]);
+  const page = await client.getPrompt({ name: "change_page", arguments: { page: "Контакты", change: "новый телефон" } });
+  assert.match(page.messages[0].content.text, /"Контакты"/);
+  await assert.rejects(client.getPrompt({ name: "change_page", arguments: { page: "Контакты" } }), /validation_failed/);
+  await assert.rejects(client.getPrompt({ name: "nope" }), /not_found/);
 });
 
 test("escape hatches: tools appear with the settings on", { skip: available ? false : "PHP with pdo_sqlite is not available" }, async (t) => {

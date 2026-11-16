@@ -25,6 +25,8 @@ final class Context {
     public $actions;
     /** @var KindRegistry */
     public $kinds;
+    /** @var \ModxMCP\Prompt\Registry */
+    public $prompts;
     /** @var string Component core path with a trailing slash. */
     public $corePath;
     /** @var \ModxMCP\Write\Transaction|null The write transaction in progress, for kinds whose writes change other objects. */
@@ -54,6 +56,7 @@ final class Context {
         $this->capabilities = new Capabilities($modx);
         $this->actions = new Registry();
         $this->kinds = new KindRegistry($this);
+        $this->prompts = new \ModxMCP\Prompt\Registry();
         $this->requestStoreFactory = $requestStoreFactory;
     }
 

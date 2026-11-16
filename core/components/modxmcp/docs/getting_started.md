@@ -88,6 +88,18 @@ and `draft_of` on a draft. A page with a draft, and a draft, cannot be deleted u
 is applied or discarded. A person can apply or discard a draft from the Drafts block on the
 component's page in the manager, which shows the same plan first.
 
+## Scenarios
+
+The site offers ready-made scenarios as MCP prompts. In Claude Code call them as commands
+`/mcp__modx__<name>`; other clients show them in their prompt menu. A token sees only the
+scenarios it can carry out.
+
+- `study_site` — study the site and answer with a short map; changes nothing.
+- `audit {focus?}` — run `modx_audit_site`, group the findings, propose fixes, change only what the person picks.
+- `change_page {page, change}` — change a page through a draft and apply it after the person agrees (needs the `content` scope).
+- `new_page_type {description}` — plan and create a template, TVs and chunks, with a checkpoint (needs the `develop` scope).
+- `fix_errors {since?}` — group the errors of the MODX log, find their causes, fix after confirmation.
+
 ## Files
 
 - Files live in media sources: `modx_list {kind: "media_source"}` shows their ids and
