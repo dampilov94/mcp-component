@@ -35,7 +35,7 @@ final class EditCodeAction extends WriteAction {
             'name'      => Schema::str('Name, when the id is not known.', array('maxLength' => 255)),
             'key'       => self::keyArgument(),
             'edits'     => Schema::arr($edit, 'Edits, all relative to the code before this call.', array('maxItems' => 100)),
-            'skip_lint' => Schema::bool('Save PHP code even if it does not parse.'),
+            'skip_lint' => Schema::bool('Save PHP or Fenom code even if it does not pass the syntax check.'),
         ) + $this->commonInput(), array('kind', 'edits'));
     }
 

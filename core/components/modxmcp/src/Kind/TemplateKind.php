@@ -23,6 +23,8 @@ final class TemplateKind extends Kind {
         );
     }
 
+    public function lint() { return 'fenom'; }
+
     public function operations() { return $this->staticOperations(); }
 
     public function relationSpecs() {

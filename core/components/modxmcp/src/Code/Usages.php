@@ -23,10 +23,19 @@ final class Usages {
                 'property' => '&(?:includeTVs|processTVs|tvFilters)\s*=\s*`[^`]*?(?<![A-Za-z0-9_.-])' . $n . $end . '[^`]*`');
         }
         if ($kind === 'chunk' || $kind === 'snippet') {
+            // Fenom (pdoTools): {include 'x'}, {insert 'x'}, {extends 'x'}, {'chunk:x'}-style provider prefixes, 'x' | chunk, a 'tpl' => 'x' array value;
+            // a snippet is also called as runSnippet('!x'), and parseChunk() takes a chunk like getChunk().
+            $chunkQuoted = '(?:\'(?:chunk:)?' . $n . '\'|"(?:chunk:)?' . $n . '")';
+            $snippetQuoted = '(?:\'!?' . $n . '\'|"!?' . $n . '")';
             return array('tag' => '\[\[!?' . ($kind === 'chunk' ? '\$' : '') . $n . $end,
-                'api' => '\b' . ($kind === 'chunk' ? 'getChunk' : 'runSnippet') . '\s*\(\s*' . $quoted,
+                'api' => $kind === 'chunk' ? '\b(?:getChunk|parseChunk)\s*\(\s*' . $quoted : '\brunSnippet\s*\(\s*' . $snippetQuoted,
                 'property' => '`' . $n . '`',
-                'fenom' => ($kind === 'chunk' ? '\{include\s+' . $quoted . '|' : '') . $quoted . '\s*\|\s*' . $kind . '\b');
+                'fenom' => $kind === 'chunk'
+                    ? '\{(?:include|insert|extends)\s+' . $chunkQuoted . '|' . $quoted . '\s*\|\s*chunk\b|[\'"][A-Za-z0-9_]*(?:tpl|chunk|wrapper)[A-Za-z0-9_]*[\'"]\s*=>\s*' . $quoted
+                    : $snippetQuoted . '\s*\|\s*snippet\b');
+        }
+        if ($kind === 'template') {
+            return array('fenom' => '\{(?:include|extends)\s+(?:\'template:' . $n . '\'|"template:' . $n . '")');
         }
         return array();
     }

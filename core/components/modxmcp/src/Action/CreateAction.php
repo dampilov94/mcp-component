@@ -19,7 +19,7 @@ final class CreateAction extends WriteAction {
             'kind'      => Schema::str('Object kind; see modx_describe.', array('pattern' => '^[a-z][a-z0-9_]{0,63}$')),
             'fields'    => Schema::obj(array(), array(), true) + array('description' => 'Field values.'),
             'relations' => Schema::obj(array(), array(), true) + array('description' => 'Writable relations, e.g. {"events": ["OnLoadWebDocument"]}.'),
-            'skip_lint' => Schema::bool('Save PHP code even if it does not parse.'),
+            'skip_lint' => Schema::bool('Save PHP or Fenom code even if it does not pass the syntax check.'),
             'dry_run'   => Schema::bool('Validate and report without creating anything.'),
         ), array('kind', 'fields'));
     }

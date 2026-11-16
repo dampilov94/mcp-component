@@ -3,6 +3,7 @@
 // Run: php tests/php/run.php
 
 require_once __DIR__ . '/FakeModx.php';
+require_once __DIR__ . '/FakeFenom.php';
 
 $component = dirname(dirname(__DIR__)) . '/core/components/modxmcp/';
 require_once $component . 'src/autoload.php';
@@ -1417,12 +1418,12 @@ $cappedGraph = $call($graphRead, 'dependency_graph', array('max_nodes' => 1));
 check('graph: node cap uses legacy minimum 10', $cappedGraph['truncated'] && $cappedGraph['returned']['nodes'] === 10 && $cappedGraph['stats']['nodes'] === 12);
 $graphSite->removeCollection('modChunk', array('id' => 5));
 $graphSite->removeCollection('modChunk', array('id' => 6));
-// Preserve the old empty-file fallback and ASCII-only tag-name heuristic, not silently fix them.
+// Preserve the old empty-file fallback; the ASCII-only tag-name heuristic was lifted by brief 32 (Cyrillic names are seen).
 file_put_contents($graphFile, '');
 check('graph: legacy empty static file falls back to database', count($call($graphRead, 'dependency_graph')['missing']) === 2);
 file_put_contents($graphFile, '[[$header]]');
 $graphSite->store('modChunk', array('id' => 5, 'name' => 'Юникод', 'snippet' => '[[$несуществующий]]'));
-check('graph: legacy Cyrillic tag-name limitation preserved', count($call($graphRead, 'dependency_graph')['missing']) === 1);
+check('graph: a Cyrillic tag name is seen (brief 32 lifted the ASCII-only limitation)', count($call($graphRead, 'dependency_graph')['missing']) === 2);
 $graphSite->removeCollection('modChunk', array('id' => 5));
 // Instantiate the real manager processor against a minimal processor base and fake MODX.
 if (!class_exists('modProcessor')) {
@@ -6457,7 +6458,7 @@ $audit = $call($aRead, 'audit_site');
 $aBy = array();
 foreach ($audit['findings'] as $finding) { $aBy[$finding['check']][] = $finding; }
 $aOne = function ($check) use ($aBy) { return isset($aBy[$check]) && count($aBy[$check]) === 1 ? $aBy[$check][0] : null; };
-check('audit: summary counts every problem exactly once', array_column($audit['summary'], 'count') === array(3, 1, 3, 1, 1, 2, 1) && array_keys($audit['summary']) === SiteAudit::CHECKS
+check('audit: summary counts every problem exactly once', array_column($audit['summary'], 'count') === array(3, 1, 3, 1, 1, 2, 1, 0) && array_keys($audit['summary']) === SiteAudit::CHECKS
     && count($audit['findings']) === 12 && array_sum(array_column($audit['summary'], 'truncated')) === 0);
 check('audit: findings come in the order of the checks', array_values(array_unique(array_column($audit['findings'], 'check'))) === array('broken_link', 'missing_element', 'unused_element', 'static_file_missing', 'duplicate_alias', 'php_syntax', 'missing_template'));
 
@@ -7164,6 +7165,251 @@ check('drafts: a manager discard is journaled as the manager', $dSite->row('modR
 $e = throws('drafts: the manager gets the API\'s refusals', ApiException::class, function () use ($dService, $dB) { $dService->apply($dB['id'], true); });
 check('drafts: applying a page without a draft is validation_failed', $e && $e->errorCode === 'validation_failed');
 check('drafts: no stale link or archive row of an open draft remains', $dCount('drafts') === 0 && $dCount('draft_archive', 'draft_id = ?', array($dBDraft)) === 1);
+
+// --- Fenom (pdoTools): references, syntax check ---
+use ModxMCP\Code\Fenom;
+use ModxMCP\Verify\SiteAudit as FenomAudit;
+
+// the rule that decides what is Fenom
+check('fenom: the syntax pattern is the one of pdoTools', Fenom::SYNTAX === '#\{(\$|\/|\w+(\s|\(|\|)|\(|\')#');
+foreach (array('{$title}', '<p>{$a|upper}</p>', "{include 'x'}", "{'x' | chunk}", '{if $a}1{/if}', '{/foreach}', "{('a')}", "{set \$x = 1}", '{$_modx->makeUrl(5)}', '{5 | url}', 'function a() {return 1;}') as $fenomText) {
+    check('fenom: ' . $fenomText . ' looks like Fenom', Fenom::looksLike($fenomText));
+}
+// 'function a() {return 1;}' is accepted above: a known false positive of pdoTools' own rule, mirrored on purpose.
+foreach (array('', 'Обычный текст', '[[$chunk]] [[+x]]', 'a { color: red }', '{}', '{ $a }', '{ \'a\' }', '{"a"}') as $plainText) {
+    check('fenom: ' . json_encode($plainText, JSON_UNESCAPED_UNICODE) . ' does not', !Fenom::looksLike($plainText));
+}
+check('fenom: switched off, nothing is Fenom', !Fenom::looksLike('{$title}', null, false) && !Fenom::looksLike(null));
+check('fenom: the text is trimmed like pdoTools does and an own pattern is used', Fenom::looksLike("\n  {\$a}\n") && Fenom::looksLike('<<x>>', '#<<\w+>>#') && !Fenom::looksLike('{$a}', '#<<\w+>>#'));
+check('fenom: an unusable pattern falls back to the default', Fenom::looksLike('{$a}', '#(unclosed') && Fenom::looksLike('{$a}', ''));
+
+// what a Fenom text refers to
+$fRef = function ($text) {
+    $out = array();
+    foreach (Fenom::references($text) as $ref) { $out[] = $ref['via'] . ':' . $ref['kind'] . ':' . $ref['name']; }
+    sort($out);
+    return $out;
+};
+check('fenom refs: include, insert and extends use a chunk, with either quote and any spacing', $fRef("{include 'a'} {include \"b\" x=1} {insert 'c'} {extends 'd'}{include   'e'}") === array('fenom:chunk:a', 'fenom:chunk:b', 'fenom:chunk:c', 'fenom:chunk:d', 'fenom:chunk:e'));
+check('fenom refs: the provider prefixes', $fRef("{include 'chunk:a'} {include 'template:Основа'} {extends \"template:Base\"}") === array('fenom:chunk:a', 'fenom:template:Base', 'fenom:template:Основа'));
+check('fenom refs: files and bindings are not elements', $fRef("{include 'file:/x.tpl'} {include '@FILE y.tpl'} {include '@INLINE <b>'} {'@INLINE z' | chunk} {include 'chunk:'} {include ''}") === array());
+check('fenom refs: the chunk and snippet modifiers, with arguments and whitespace', $fRef("{'a' | chunk} {\"b\"|chunk : ['x' => 1]} {'c'  |  snippet : []} {'!d' | snippet}") === array('fenom:chunk:a', 'fenom:chunk:b', 'fenom:snippet:c', 'fenom:snippet:d'));
+check('fenom refs: getChunk, parseChunk, runSnippet', $fRef("{\$_modx->getChunk('a')} {\$_modx->parseChunk(\"b\", [])} {\$_modx->runSnippet('c', [])} {\$_modx->runSnippet('!d')} {\$modx -> getChunk( 'e' )}") === array('fenom:chunk:a', 'fenom:chunk:b', 'fenom:chunk:e', 'fenom:snippet:c', 'fenom:snippet:d'));
+check('fenom refs: tpl-like array keys name a chunk, the graph\'s key rule', $fRef("{\$_modx->runSnippet('pdoMenu', ['tpl' => 'a', 'tplOuter' => \"b\", 'rowChunk' => 'c', 'wrapperX' => 'd', 'limit' => 'e', 'tplInline' => '@INLINE x', 'tplFile' => '@FILE y'])}")
+    === array('fenom:snippet:pdoMenu', 'property:chunk:a', 'property:chunk:b', 'property:chunk:c', 'property:chunk:d'));
+check('fenom refs: makeUrl and the url modifier are links to resources', $fRef('{$_modx->makeUrl(5)} {$_modx->makeUrl(6, "web", "a=1")} {7 | url} {$a|url} {$x.8|url} {12 |url}') === array('link:resource:12', 'link:resource:5', 'link:resource:6', 'link:resource:7'));
+check('fenom refs: a name built at run time is not a reference', $fRef("{include \$name} {include 'a'.\$b} {include \"x{\$y}\"} {\$name | chunk} {\$_modx->getChunk(\$n)} {\$_modx->runSnippet('s' ~ \$t)} {\$_modx->makeUrl(\$id)} {'a' ~ \$b | chunk} {'x' ~ 'a' | chunk} {include 'p' ~ \$q}") === array());
+check('fenom refs: Cyrillic names and names with a space', $fRef("{include 'шапка'} {'подвал' | chunk} {\$_modx->runSnippet('Меню сайта')} {include 'chunk:Мой чанк'}") === array('fenom:chunk:Мой чанк', 'fenom:chunk:подвал', 'fenom:chunk:шапка', 'fenom:snippet:Меню сайта'));
+check('fenom refs: comments and ignored blocks are skipped', $fRef("{* {include 'a'} *}{ignore}{include 'b'}{/ignore}{include 'c'}") === array('fenom:chunk:c'));
+check('fenom refs: MODX tags are no business of Fenom, mixed with Fenom they stay apart', $fRef("[[\$a]] [[~5]] {include 'b'} [[!snip? &tpl=`x`]]") === array('fenom:chunk:b'));
+
+// a fake site with pdoTools
+$fDir = sys_get_temp_dir() . '/modxmcp-fenom-' . bin2hex(random_bytes(6));
+mkdir($fDir . '/core/components/pdotools/model/pdotools', 0700, true);
+file_put_contents($fDir . '/core/components/pdotools/model/pdotools/pdotools.class.php', "<?php\n");
+$fSite = fakeSite($fDir);
+$fSite->options['modxmcp.auto_static'] = false;
+$fSite->options['minishop2.core_path'] = $fDir . '/none/';
+$fPdo = new FakePdoTools();
+$fSite->services['pdoTools'] = $fPdo;
+$fTokenRec = array('id' => 1, 'label' => 'fenom', 'prefix' => 'mcp_f', 'scope' => 'develop', 'plan_only' => false, 'denied_groups' => array(), 'expires_at' => null);
+$fActor = function (array $override = array()) use ($fSite, $dCore, $fTokenRec) {
+    $c = new Context($fSite, $override + $fTokenRec, $dCore, function () { throw new RuntimeException('no store in tests'); });
+    $c->sessionId = 'session-fenom-0001';
+    return $c;
+};
+$fDev = $fActor();
+$fRead = $fActor(array('scope' => 'read'));
+$fChunk = function ($id, $name, $text) use ($fSite) { $fSite->store('modChunk', array('id' => $id, 'name' => $name, 'snippet' => $text, 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => '')); };
+$fTemplate = function ($id, $name, $text) use ($fSite) { $fSite->store('modTemplate', array('id' => $id, 'templatename' => $name, 'content' => $text, 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => '', 'icon' => '')); };
+$fTemplate(1, 'Основа', "<html>{include 'шапка'}{block 'main'}{/block}{\$_modx->runSnippet('!pdoMenu', ['tplOuter' => 'menuOuter'])}</html>");
+$fTemplate(2, 'Страница', "{extends 'template:Основа'}{include 'mixed'}{include 'brokenRefs'}");
+$fChunk(1, 'шапка', "<h1>{\$pagetitle}</h1> {'подвал' | chunk : ['x' => 1]}");
+$fChunk(2, 'подвал', '<p>footer</p>');
+$fChunk(3, 'menuOuter', '<ul>{$wrapper}</ul>');
+$fChunk(4, 'viaGet', 'text');
+$fChunk(5, 'modxChunk', 'x');
+$fChunk(6, 'fenomChunk', 'x');
+$fChunk(7, 'mixed', "[[\$modxChunk]] {include 'fenomChunk'} {\$_modx->getChunk('viaGet')} {\$_modx->makeUrl(5)} {7 | url} {\$_modx->makeUrl(8)} [[~6]]");
+$fChunk(8, 'orphanOne', 'Никем не используется');
+$fChunk(9, 'brokenRefs', "{include 'нет такого'} {\$_modx->runSnippet('missingSnippet')} {'ghost' | chunk} {\$_modx->runSnippet('pdoMenu')} {include 'file:/x.tpl'} {include \$var} {\$_modx->getChunk(\$name)} {include 'template:Нет'}");
+$fChunk(10, 'plain', "Не Fenom: \$modx->getChunk('orphanTwo') и 'tplChunk' | chunk");
+$fChunk(11, 'orphanTwo', 'x');
+$fChunk(12, 'tplChunk', 'x');
+$fSite->store('modSnippet', array('id' => 1, 'name' => 'pdoMenu', 'snippet' => 'return 1;', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => ''));
+$fSite->store('modContext', array('key' => 'web', 'name' => 'Web'));
+foreach (array(array(5, 1, 1, 'five.html'), array(6, 2, 1, 'six.html'), array(7, 2, 0, 'seven.html')) as $fRes) {
+    $fSite->store('modResource', array('id' => $fRes[0], 'pagetitle' => 'Страница ' . $fRes[0], 'context_key' => 'web', 'template' => $fRes[1], 'published' => $fRes[2], 'deleted' => $fRes[0] === 6 ? 1 : 0, 'uri' => $fRes[3], 'content' => '', 'editedon' => 1));
+}
+$fSite->store('modResource', array('id' => 4, 'pagetitle' => 'Страница 4', 'context_key' => 'web', 'template' => 1, 'published' => 1, 'deleted' => 0, 'uri' => 'four.html', 'content' => '', 'editedon' => 1));
+
+// the graph
+$fGraph = function () use ($call, $fRead) {
+    $g = $call($fRead, 'dependency_graph');
+    $names = array();
+    foreach ($g['nodes'] as $n) { $names[$n['i']] = $n['type'] . ':' . $n['name']; }
+    $edges = array();
+    foreach ($g['edges'] as $e) { $edges[] = $names[$e[0]] . ' > ' . $names[$e[1]] . ' ' . $e[2]; }
+    sort($edges);
+    return array($g, $edges);
+};
+list($fG, $fEdges) = $fGraph();
+check('fenom graph: a template reads its Fenom calls, with the template prefix and the array rule', in_array('template:Основа > chunk:шапка fenom', $fEdges, true) && in_array('template:Основа > snippet:pdoMenu fenom', $fEdges, true)
+    && in_array('template:Основа > chunk:menuOuter property', $fEdges, true) && in_array('template:Страница > template:Основа fenom', $fEdges, true));
+check('fenom graph: a chunk reads its Fenom calls, a modifier with arguments too', in_array('chunk:шапка > chunk:подвал fenom', $fEdges, true) && in_array('template:Страница > chunk:mixed fenom', $fEdges, true));
+check('fenom graph: MODX tags and Fenom calls in one text, getChunk is one reference', in_array('chunk:mixed > chunk:modxChunk tag', $fEdges, true) && in_array('chunk:mixed > chunk:fenomChunk fenom', $fEdges, true)
+    && in_array('chunk:mixed > chunk:viaGet fenom', $fEdges, true) && !in_array('chunk:mixed > chunk:viaGet php', $fEdges, true));
+check('fenom graph: a text that is not Fenom is not read as Fenom (plain PHP calls stay as they were)', array_values(array_filter($fEdges, function ($e) { return strpos($e, 'chunk:plain >') === 0; })) === array('chunk:plain > chunk:orphanTwo php'));
+check('fenom graph: files, run-time names and the template prefix make no edges', !in_array('chunk:brokenRefs > chunk:file:/x.tpl fenom', $fEdges, true) && count(array_filter($fEdges, function ($e) { return strpos($e, 'chunk:brokenRefs >') === 0; })) === 1);
+$fMissing = array();
+foreach ($fG['missing'] as $m) { $fMissing[] = $m['from'] . ' ' . $m['kind'] . ' ' . $m['name']; }
+sort($fMissing);
+check('fenom graph: a Fenom call of an element that does not exist is missing, like a tag', $fMissing === array('chunk:brokenRefs chunk ghost', 'chunk:brokenRefs chunk нет такого', 'chunk:brokenRefs snippet missingSnippet'));
+$fOrphans = array_column($fG['orphans'], 'name', 'name');
+check('fenom graph: a chunk used only through Fenom is no orphan', !isset($fOrphans['подвал']) && !isset($fOrphans['menuOuter']) && !isset($fOrphans['viaGet']) && !isset($fOrphans['fenomChunk']) && !isset($fOrphans['mixed']) && !isset($fOrphans['шапка']));
+check('fenom graph: the real orphans stay, the legend and the notes say Fenom is read', isset($fOrphans['orphanOne']) && isset($fOrphans['plain']) && isset($fOrphans['tplChunk']) && !isset($fOrphans['orphanTwo'])
+    && strpos($fG['legend']['edges'], 'fenom') !== false && strpos($fG['legend']['edges'], 'pdoTools') !== false && strpos($fG['orphans_note'], 'Fenom') !== false);
+// the same site without Fenom: nothing of it is read
+$fSite->options['pdotools_fenom_default'] = false;
+list($fGOff, $fEdgesOff) = $fGraph();
+check('fenom graph: Fenom switched off in pdoTools, no Fenom is read', !array_filter($fEdgesOff, function ($e) { return strpos($e, ' fenom') !== false; }) && count($fGOff['missing']) === 0 && isset(array_column($fGOff['orphans'], 'name', 'name')['подвал']));
+$fSite->options['pdotools_fenom_default'] = true;
+unlink($fDir . '/core/components/pdotools/model/pdotools/pdotools.class.php');
+list($fGAbsent, $fEdgesAbsent) = $fGraph();
+check('fenom graph: pdoTools not installed, no Fenom is read', $fEdgesAbsent === $fEdgesOff);
+file_put_contents($fDir . '/core/components/pdotools/model/pdotools/pdotools.class.php', "<?php\n");
+// MODX tags with Cyrillic names, in a Fenom-free text
+$fChunk(13, 'cyr', '[[$подвал]] [[$нетТакого]] [[не_сниппет]]');
+list($fGCyr, $fEdgesCyr) = $fGraph();
+check('fenom graph: a MODX tag with a Cyrillic name is seen (edge and missing)', in_array('chunk:cyr > chunk:подвал tag', $fEdgesCyr, true)
+    && in_array('chunk:cyr chunk нетТакого', array_map(function ($m) { return $m['from'] . ' ' . $m['kind'] . ' ' . $m['name']; }, $fGCyr['missing']), true));
+$fSite->removeCollection('modChunk', array('id' => 13));
+
+// find_usages
+$fUse = function ($kind, $name) use ($call, $fRead) {
+    $found = $call($fRead, 'find_usages', array('kind' => $kind, 'name' => $name));
+    $out = array();
+    foreach ($found['usages'] as $u) { foreach ($u['matches'] as $m) { $out[] = $u['kind'] . ':' . $u['name'] . ' ' . $m['via']; } }
+    sort($out);
+    return array_values(array_unique($out));
+};
+check('fenom usages: a chunk is found through include, the modifier, getChunk and the array rule', $fUse('chunk', 'подвал') === array('chunk:шапка fenom') && $fUse('chunk', 'fenomChunk') === array('chunk:mixed fenom')
+    && $fUse('chunk', 'viaGet') === array('chunk:mixed api') && $fUse('chunk', 'menuOuter') === array('template:Основа fenom') && $fUse('chunk', 'шапка') === array('template:Основа fenom') && $fUse('chunk', 'orphanOne') === array());
+check('fenom usages: a snippet through runSnippet with and without the bang, a template through its prefix', $fUse('snippet', 'pdoMenu') === array('chunk:brokenRefs api', 'template:Основа api') && $fUse('template', 'Основа') === array('template:Страница fenom'));
+$fResUse = $call($fRead, 'find_usages', array('kind' => 'resource', 'id' => 5));
+check('fenom usages: a resource through makeUrl', array_column($fResUse['usages'], 'name') === array('mixed') && $fResUse['usages'][0]['matches'][0]['via'] === 'api');
+$fResUse7 = $call($fRead, 'find_usages', array('kind' => 'resource', 'id' => 7));
+check('fenom usages: a resource through the url modifier', array_column($fResUse7['usages'], 'name') === array('mixed') && $fResUse7['usages'][0]['matches'][0]['via'] === 'fenom');
+
+// the audit
+$fAudit = $call($fRead, 'audit_site', array('checks' => array('unused_element', 'missing_element', 'broken_link')));
+$fBy = array();
+foreach ($fAudit['findings'] as $f) { $fBy[$f['check']][] = $f; }
+$fUnused = array_column(array_filter($fBy['unused_element'], function ($f) { return $f['kind'] !== 'template'; }), 'name');
+sort($fUnused);
+check('fenom audit: a chunk used only through Fenom is not reported as unused', $fUnused === array('orphanOne', 'plain', 'tplChunk'));
+check('fenom audit: missing_element reports the missing Fenom calls', count($fBy['missing_element']) === 3 && array_unique(array_column($fBy['missing_element'], 'name')) === array('brokenRefs')
+    && strpos(implode(' ', $fAudit['notes']), 'Fenom') !== false);
+$fLinks = array();
+foreach ($fBy['broken_link'] as $f) { $fLinks[$f['name'] . ' ' . $f['details']['target']] = $f['severity']; }
+ksort($fLinks);
+check('fenom audit: broken_link sees makeUrl and the url modifier', $fLinks === array('mixed 6' => 'warning', 'mixed 7' => 'warning', 'mixed 8' => 'error'));
+
+// the syntax check before saving
+$fChunks = function () use ($fSite) { return $fSite->getCount('modChunk'); };
+$fJournal = function () use ($fSite) { return (int) $fSite->pdo->query('SELECT COUNT(*) FROM modx_modxmcp_changesets')->fetchColumn(); };
+$fPdo->fenom->compiled = array();
+$fBroken = "<p>{\$title}</p>\n\n{BROKEN}\n";
+$fBefore = array($fChunks(), $fJournal());
+$e = throws('fenom lint: a chunk that does not compile is refused on create', ApiException::class, function () use ($call, $fDev, $fBroken) { $call($fDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'сломанный', 'content' => $fBroken))); });
+check('fenom lint: lint_failed with the line, the message and nothing written', $e && $e->errorCode === 'lint_failed' && $e->details['line'] === 3 && strpos($e->getMessage(), 'Fenom syntax error on line 3') !== false
+    && strpos($e->getMessage(), "Unexpected token '}'") !== false && strpos($e->getMessage(), 'Nothing was saved') !== false && $fBefore === array($fChunks(), $fJournal()));
+check('fenom lint: the text was compiled as it is stored, named by its kind', $fPdo->fenom->compiled === array(array('chunk', $fBroken)));
+$fOk = $call($fDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'годный', 'content' => "<p>{\$title}</p>\n{include 'подвал'}")));
+check('fenom lint: a chunk that compiles is saved', is_int($fOk['id']) && $fChunks() === $fBefore[0] + 1);
+$fPlainBroken = $call($fDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'не fenom', 'content' => '[[+x]] {BROKEN}')));
+check('fenom lint: a text that is not Fenom is not compiled', is_int($fPlainBroken['id']) && count($fPdo->fenom->compiled) === 2);
+$fSkipCtx = $fActor();
+$fSkipped = $call($fSkipCtx, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'пропущен', 'content' => $fBroken), 'skip_lint' => true));
+check('fenom lint: skip_lint saves it with a warning that says Fenom', is_int($fSkipped['id']) && count($fSkipCtx->warnings) === 1 && strpos($fSkipCtx->warnings[0], 'Fenom syntax check skipped on request') !== false && strpos($fSkipCtx->warnings[0], 'line 3') !== false);
+$e = throws('fenom lint: update refuses a broken text', ApiException::class, function () use ($call, $fDev, $fOk, $fBroken) { $call($fDev, 'update', array('kind' => 'chunk', 'id' => $fOk['id'], 'fields' => array('content' => $fBroken))); });
+check('fenom lint: update is lint_failed and the chunk is as it was', $e && $e->errorCode === 'lint_failed' && $fSite->row('modChunk', $fOk['id'])['snippet'] === "<p>{\$title}</p>\n{include 'подвал'}");
+$call($fDev, 'update', array('kind' => 'chunk', 'id' => $fOk['id'], 'fields' => array('description' => 'без текста')));
+check('fenom lint: an update that does not touch the text is not checked', $fSite->row('modChunk', $fOk['id'])['description'] === 'без текста');
+$e = throws('fenom lint: edit_code refuses a broken text', ApiException::class, function () use ($call, $fDev, $fOk) { $call($fDev, 'edit_code', array('kind' => 'chunk', 'id' => $fOk['id'], 'edits' => array(array('start_line' => 2, 'replacement' => '{BROKEN}')))); });
+check('fenom lint: edit_code is lint_failed with the line of the stored text', $e && $e->errorCode === 'lint_failed' && $e->details['line'] === 2);
+$call($fDev, 'edit_code', array('kind' => 'chunk', 'id' => $fOk['id'], 'edits' => array(array('start_line' => 2, 'replacement' => "{include 'шапка'}"))));
+check('fenom lint: edit_code saves a text that compiles', $fSite->row('modChunk', $fOk['id'])['snippet'] === "<p>{\$title}</p>\n{include 'шапка'}");
+$e = throws('fenom lint: replace refuses a text that would not compile', ApiException::class, function () use ($call, $fDev) {
+    $fReplace = array('find' => "{include 'шапка'}", 'replacement' => '{BROKEN}', 'kinds' => array('chunk'));
+    $fPlanned = $call($fDev, 'replace', $fReplace + array('dry_run' => true));
+    $call($fDev, 'replace', $fReplace + array('expected_revisions' => $fPlanned['revisions']));
+});
+check('fenom lint: replace is lint_failed and names the object', $e && $e->errorCode === 'lint_failed' && isset($e->details['object']) && $fSite->row('modChunk', $fOk['id'])['snippet'] === "<p>{\$title}</p>\n{include 'шапка'}");
+$e = throws('fenom lint: a template is checked as well', ApiException::class, function () use ($call, $fDev, $fBroken) { $call($fDev, 'create', array('kind' => 'template', 'fields' => array('name' => 'Сломанный шаблон', 'content' => $fBroken))); });
+check('fenom lint: template create is lint_failed', $e && $e->errorCode === 'lint_failed');
+$e = throws('fenom lint: template update', ApiException::class, function () use ($call, $fDev, $fBroken) { $call($fDev, 'update', array('kind' => 'template', 'id' => 1, 'fields' => array('content' => $fBroken))); });
+check('fenom lint: template update is lint_failed and the template is as it was', $e && $e->errorCode === 'lint_failed' && strpos($fSite->row('modTemplate', 1)['content'], 'BROKEN') === false);
+$fSite->store('modChunk', array('id' => 40, 'name' => 'исходник', 'snippet' => $fBroken, 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => ''));
+$fPdo->fenom->compiled = array();
+$fCopy = $call($fDev, 'duplicate', array('kind' => 'chunk', 'id' => 40));
+check('fenom lint: a copy needs no check', is_int($fCopy['id']) && $fPdo->fenom->compiled === array());
+// no check when it cannot be made
+$fCount = $fChunks();
+$fSite->options['modxmcp.lint_php'] = false;
+$call($fDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'lint выключен', 'content' => $fBroken)));
+check('fenom lint: modxmcp.lint_php off covers Fenom', $fChunks() === $fCount + 1);
+$fSite->options['modxmcp.lint_php'] = true;
+$fSite->options['pdotools_fenom_default'] = false;
+$call($fDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'Fenom выключен', 'content' => $fBroken)));
+check('fenom lint: Fenom switched off for chunks, no check and no error', $fChunks() === $fCount + 2);
+$fSite->options['pdotools_fenom_default'] = true;
+$fSite->services['pdoTools'] = null;
+$call($fDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'сервиса нет', 'content' => $fBroken)));
+check('fenom lint: the pdoTools service cannot be loaded, no check and no error', $fChunks() === $fCount + 3);
+$fSite->services['pdoTools'] = $fPdo;
+$fPdo->fails = true;
+$call($fDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'Fenom не создан', 'content' => $fBroken)));
+check('fenom lint: pdoTools gives no Fenom, no check and no error', $fChunks() === $fCount + 4);
+$fPdo->fails = false;
+unlink($fDir . '/core/components/pdotools/model/pdotools/pdotools.class.php');
+$call($fDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'pdoTools нет', 'content' => $fBroken)));
+check('fenom lint: pdoTools not installed, no check and no error', $fChunks() === $fCount + 5);
+file_put_contents($fDir . '/core/components/pdotools/model/pdotools/pdotools.class.php', "<?php\n");
+$fSite->logLines = array();
+$fWarn = $fActor();
+$call($fWarn, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'сбой Fenom', 'content' => "{\$a}\n{EXPLODE}")));
+check('fenom lint: an exception of Fenom that is not a syntax error is logged and does not block the save', $fChunks() === $fCount + 6 && !$fWarn->warnings
+    && count(array_filter($fSite->logLines, function ($l) { return strpos($l, '[modxmcp]') === 0 && strpos($l, 'Template provider failed') !== false; })) === 1);
+
+// the audit's own check
+$fSite->store('modChunk', array('id' => 41, 'name' => 'аудит сломан', 'snippet' => "{\$a}\n{BROKEN}", 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => ''));
+$fTemplate(3, 'Шаблон сломан', "<p>{\$a}</p>\n\n{BROKEN}");
+check('fenom audit: the check is one of the audit\'s', in_array('fenom_syntax', FenomAudit::CHECKS, true) && FenomAudit::CHECKS[count(FenomAudit::CHECKS) - 1] === 'fenom_syntax');
+$fAuditSyntax = $call($fRead, 'audit_site', array('checks' => array('fenom_syntax'), 'limit' => 200));
+$fFound = array();
+foreach ($fAuditSyntax['findings'] as $f) { $fFound[$f['kind'] . ':' . $f['name']] = $f; }
+$fBrokenRows = 0;
+foreach (array('modChunk' => 'snippet', 'modTemplate' => 'content') as $fClass => $fColumn) {
+    foreach ($fSite->tableDump($fClass) as $fRow) { if (strpos($fRow[$fColumn], '{BROKEN}') !== false && Fenom::looksLike($fRow[$fColumn])) { $fBrokenRows++; } }
+}
+check('fenom audit: chunks and templates that do not compile are errors with the line and the message', $fAuditSyntax['summary']['fenom_syntax']['count'] === $fBrokenRows && $fBrokenRows >= 9
+    && $fFound['chunk:аудит сломан']['severity'] === 'error' && $fFound['chunk:аудит сломан']['details']['line'] === 2 && $fFound['template:Шаблон сломан']['details']['line'] === 3
+    && strpos($fFound['template:Шаблон сломан']['message'], 'Fenom syntax error on line 3') !== false && $fFound['chunk:аудит сломан']['id'] === 41);
+check('fenom audit: a chunk that compiles, one that is not Fenom and a Fenom problem that is no syntax error are not findings', !isset($fFound['chunk:годный']) && !isset($fFound['chunk:не fenom']) && !isset($fFound['chunk:сбой Fenom']) && !isset($fFound['chunk:plain'])
+    && $fAuditSyntax['summary']['fenom_syntax']['scanned'] > $fBrokenRows && !array_filter($fAuditSyntax['notes'], function ($n) { return strpos($n, 'fenom_syntax was skipped') === 0; }));
+$fSite->options['pdotools_fenom_default'] = false;
+$fAuditOff = $call($fRead, 'audit_site', array('checks' => array('fenom_syntax')));
+check('fenom audit: skipped with a note when Fenom is off for chunks', $fAuditOff['findings'] === array() && $fAuditOff['summary']['fenom_syntax'] === array('count' => 0, 'truncated' => false, 'scanned' => 0)
+    && count(array_filter($fAuditOff['notes'], function ($n) { return strpos($n, 'fenom_syntax was skipped') === 0; })) === 1);
+$fSite->options['pdotools_fenom_default'] = true;
+$fSite->services['pdoTools'] = null;
+$fAuditNone = $call($fRead, 'audit_site', array('checks' => array('fenom_syntax')));
+check('fenom audit: skipped with a note when the compiler cannot be loaded', $fAuditNone['findings'] === array() && count($fAuditNone['notes']) === 1);
+$fSite->services['pdoTools'] = $fPdo;
+$fBeforeAudit = array($fSite->tableDump('modChunk'), $fSite->tableDump('modTemplate'), $fJournal());
+$call($fRead, 'audit_site', array('checks' => array('fenom_syntax')));
+check('fenom audit: read only', $fBeforeAudit === array($fSite->tableDump('modChunk'), $fSite->tableDump('modTemplate'), $fJournal()));
 
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));

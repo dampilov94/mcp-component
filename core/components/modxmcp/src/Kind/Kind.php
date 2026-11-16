@@ -390,7 +390,7 @@ abstract class Kind {
         return array();
     }
 
-    /** "php" when the code field must pass a PHP syntax check before it is saved. */
+    /** "php" when the code field must pass a PHP syntax check before it is saved, "fenom" when it is checked as Fenom (pdoTools). */
     public function lint() {
         return null;
     }

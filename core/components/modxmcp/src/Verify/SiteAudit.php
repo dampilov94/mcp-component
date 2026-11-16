@@ -2,6 +2,7 @@
 namespace ModxMCP\Verify;
 
 use ModxMCP\Context;
+use ModxMCP\Code\FenomCheck;
 use ModxMCP\Draft\DraftStore;
 use ModxMCP\Graph\GraphBuilder;
 use ModxMCP\Lint\PhpLint;
@@ -11,7 +12,7 @@ use ModxMCP\Lint\PhpLint;
  * supplies missing_element and unused_element so the tag parsing exists only once.
  */
 final class SiteAudit {
-    const CHECKS = array('broken_link', 'missing_element', 'unused_element', 'static_file_missing', 'duplicate_alias', 'php_syntax', 'missing_template');
+    const CHECKS = array('broken_link', 'missing_element', 'unused_element', 'static_file_missing', 'duplicate_alias', 'php_syntax', 'missing_template', 'fenom_syntax');
 
     /** The per-resource checks look at no more resources than this (the most recently edited when there are more). */
     public static $maxResources = 5000;
@@ -59,7 +60,7 @@ final class SiteAudit {
 
     private function execute() {
         $resourcePass = $this->wants('broken_link') || $this->wants('duplicate_alias') || $this->wants('missing_template');
-        $elementPass = $this->wants('broken_link') || $this->wants('static_file_missing') || $this->wants('php_syntax');
+        $elementPass = $this->wants('broken_link') || $this->wants('static_file_missing') || $this->wants('php_syntax') || $this->wants('fenom_syntax');
         if ($resourcePass) { $this->scanResources(); }
         if ($elementPass) { $this->scanElements(); }
         if ($this->wants('broken_link')) { $this->reportBrokenLinks(); }
@@ -183,6 +184,14 @@ final class SiteAudit {
     /** One pass over every element: links in its code, static files and PHP syntax, reading code through the kinds. */
     private function scanElements() {
         $graph = $this->wants('broken_link') ? new GraphBuilder($this->modx) : null;
+        $fenom = null;
+        if ($this->wants('fenom_syntax')) {
+            $fenom = new FenomCheck($this->modx);
+            if (!$fenom->available()) {
+                $this->notes[] = 'fenom_syntax was skipped: pdoTools is not installed, Fenom is switched off for chunks (pdotools_fenom_default) or its compiler could not be loaded.';
+                $fenom = null;
+            }
+        }
         foreach (array('chunk', 'snippet', 'template', 'plugin', 'tv') as $kindName) {
             $kind = $this->context->kinds->get($kindName);
             if (!$kind) { continue; }
@@ -207,9 +216,17 @@ final class SiteAudit {
                 if ($this->wants('static_file_missing') && $static) { $this->summary['static_file_missing']['scanned']++; }
                 if ($graph && $isCode) {
                     $this->summary['broken_link']['scanned']++;
-                    foreach ($content === null ? array() : $graph->linkTargets($content) as $target) {
+                    // Fenom is read in chunks and templates only: code of a snippet or a plugin can look like it without being it.
+                    foreach ($content === null ? array() : $graph->linkTargets($content, $kindName === 'chunk' || $kindName === 'template') as $target) {
                         $this->links[] = array($kindName, $id, $target);
                         $this->linkNames[$kindName . ':' . $id] = $name;
+                    }
+                }
+                if ($fenom !== null && $content !== null && $kind->lint() === 'fenom') {
+                    $this->summary['fenom_syntax']['scanned']++;
+                    $error = $fenom->check($content, $kindName . ' ' . $name);
+                    if ($error !== null) {
+                        $this->add('fenom_syntax', 'error', $kindName, $id, $name, "Fenom syntax error on line {$error['line']}: {$error['message']}.", array('line' => $error['line'], 'error' => $error['message'], 'static' => $static));
                     }
                 }
                 if ($php && $content !== null && $this->wants('php_syntax')) {
@@ -278,7 +295,7 @@ final class SiteAudit {
                 $this->add('missing_element', 'error', $from[0], $row['from_id'], isset($from[1]) ? $from[1] : '',
                     "Calls the {$row['kind']} '{$row['name']}', which does not exist.", array('calls' => $row['kind'], 'missing' => $row['name']));
             }
-            $this->notes[] = 'missing_element uses the dependency graph: explicit [[$chunk]] and [[snippet]] tags in the code of elements. Resource content is not scanned for it; modx_check_page shows tags that fail on a rendered page.';
+            $this->notes[] = 'missing_element uses the dependency graph: explicit [[$chunk]] and [[snippet]] tags in the code of elements, and Fenom calls ({include \'chunk\'}, | chunk, runSnippet) in chunks and templates when pdoTools is installed. Resource content is not scanned for it; modx_check_page shows tags that fail on a rendered page.';
         }
         if ($this->wants('unused_element')) {
             $scanned = 0;
@@ -289,7 +306,7 @@ final class SiteAudit {
             }
             $this->notes[] = 'unused_element follows the dependency graph and lists candidates, not proof. A chunk, snippet or TV counts as used when element code, default properties, a property set, a system setting or a miniShop2 order status refers to it, or (TV) a template has it attached; chunks and TVs named in resource content count as used only when the graph verified orphans against resources'
                 . ($stats['orphans_verified'] ? ' (it did).' : ' (it did NOT on this site, which has more than 5000 resources, so some may be used only inside pages).')
-                . ' A template counts as used when a non-deleted resource uses it. Plugins are never reported; a name built at run time, or used by an add-on from its own tables, is invisible.';
+                . ' A template counts as used when a non-deleted resource uses it. Fenom calls in chunks and templates count as references when pdoTools is installed. Plugins are never reported; a name built at run time, or used by an add-on from its own tables, is invisible.';
         }
     }
 }

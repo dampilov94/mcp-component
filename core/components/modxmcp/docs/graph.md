@@ -36,6 +36,11 @@ tells you whether the site has broken references or dead elements.
 `direction:"out"` = *what this uses* (check before reading a template's parts).
 `depth` is 1–5 hops. `focus` accepts a bare name (`"header"`) or `type:name` to disambiguate.
 
+With pdoTools installed, chunks and templates written in Fenom are read as well: `{include 'x'}`,
+`{extends 'template:Name'}`, `{'x' | chunk}`, `{$_modx->runSnippet('x')}`, `'tpl' => 'x'` in their
+arrays (edge kind `fenom`, or `property` for the arrays) and `makeUrl(id)` / `id | url` (a link). A name
+built at run time is invisible.
+
 `modx_find_usages` gives matching source lines and structural counts for one object; the
 graph gives connections and neighborhoods. Both use textual heuristics rather than executing code.
 

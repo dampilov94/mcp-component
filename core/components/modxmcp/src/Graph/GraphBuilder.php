@@ -1,12 +1,15 @@
 <?php
 namespace ModxMCP\Graph;
 
+use ModxMCP\Code\Fenom;
 use ModxMCP\Kind\KindRegistry;
 
 /** The shared manager/API graph, preserving the legacy graph algorithm and wire format. */
 final class GraphBuilder {
     private $modx;
     private $kinds;
+    /** @var array|null [pdoTools treats texts as Fenom, the syntax pattern]; read once */
+    private $fenom = null;
 
     public function __construct(\modX $modx) {
         $this->modx = $modx;
@@ -115,6 +118,7 @@ final class GraphBuilder {
                 // element as a side effect — this action must stay read-only.)
                 $raw = $this->readCode($o, $type, $m['content']);
                 $refs = array_merge($this->scanModxTags($raw), $this->scanPhpElementCalls($raw));
+                if ($type === 'chunk' || $type === 'template') { $refs = $this->withFenom($refs, $raw); }
                 // An element's DEFAULT properties are a first-class wiring mechanism: miniShop2's
                 // msProducts points &tpl at tpl.msProducts.row there, not in any content. Without
                 // this, those chunks look like orphans and the snippet→chunk link is invisible.
@@ -142,7 +146,7 @@ final class GraphBuilder {
                 }
                 // Unresolved. [[*x]] is usually a resource FIELD, and property/php refs are
                 // heuristic — only explicit [[$chunk]] / [[snippet]] tags are reported as broken.
-                if ($ref['via'] === 'tag' && ($kind === 'chunk' || $kind === 'snippet')) {
+                if (($ref['via'] === 'tag' || $ref['via'] === 'fenom') && ($kind === 'chunk' || $kind === 'snippet')) {
                     $k = $from . '|' . $kind . '|' . $name;
                     $missing[$k] = array(
                         'from'      => $nodes[$from]['type'] . ':' . $nodes[$from]['name'],
@@ -353,7 +357,7 @@ final class GraphBuilder {
         // tables. Say so, so nothing deletes on this list alone.
         $orphanNote = 'Orphans are CANDIDATES, not proof. Checked: element content, element default'
             . ' properties, named property sets, system settings, miniShop2 order-status e-mails,'
-            . ' template↔TV attachment' . ($verified ? ', resource content' : '')
+            . ' template↔TV attachment' . ($verified ? ', resource content' : '') . ', Fenom calls in chunks and templates (when pdoTools is installed)'
             . '. An add-on can still reference an element from its own tables, and dynamic names'
             . ' ($modx->getChunk($var)) are invisible. Confirm with delete_element {dry_run:true}.';
 
@@ -404,7 +408,7 @@ final class GraphBuilder {
             'truncated' => $truncated,
             'legend'    => array(
                 'nodes' => 'i=index, type, id, name, category, in/out = reference degree across the WHOLE site.',
-                'edges' => '[from_i, to_i, kind] — from USES to. kind: tag ([[$chunk]]/[[snippet]]/[[*tv]]), attached (TV on template), property (&tpl=`chunk`, an element default property, or a named property set), php ($modx->getChunk/runSnippet), migx (inputTV/renderchunktpl), binding (@CHUNK), link ([[~id]]), template (resource uses template).',
+                'edges' => '[from_i, to_i, kind] — from USES to. kind: tag ([[$chunk]]/[[snippet]]/[[*tv]]), attached (TV on template), property (&tpl=`chunk`, an element default property, or a named property set), php ($modx->getChunk/runSnippet), migx (inputTV/renderchunktpl), binding (@CHUNK), link ([[~id]], or makeUrl(id) / id|url in Fenom), template (resource uses template), fenom ({include \'chunk\'}, {\'chunk\' | chunk}, {$_modx->runSnippet(\'snippet\')} and the like, read in chunks and templates that pdoTools treats as Fenom when it is installed; {\'tpl\' => \'chunk\'} arrays inside them count as property).',
             ),
             'nodes'     => $out,
             'edges'     => $outEdges,
@@ -492,12 +496,33 @@ final class GraphBuilder {
      * appearance, without repeats. Uses the graph's own tag parser.
      * @return int[]
      */
-    public function linkTargets($content) {
+    public function linkTargets($content, $fenom = true) {
         $ids = array();
-        foreach ($this->scanModxTags($content) as $ref) {
+        $refs = $this->scanModxTags($content);
+        if ($fenom) { $refs = $this->withFenom($refs, $content); }
+        foreach ($refs as $ref) {
             if ($ref['kind'] === 'resource') { $ids[(int) $ref['name']] = true; }
         }
         return array_keys($ids);
+    }
+
+    /**
+     * Add the references of a Fenom text to those found already. Only a text that pdoTools would treat as Fenom is read this way;
+     * a call that Fenom makes (`{$_modx->getChunk('x')}`) replaces the same one found as plain PHP, so it is one reference.
+     */
+    private function withFenom(array $refs, $content) {
+        if ($this->fenom === null) {
+            $this->fenom = Fenom::active($this->modx) ? array(true, Fenom::syntaxOf($this->modx)) : array(false, Fenom::SYNTAX);
+        }
+        if (!$this->fenom[0] || !is_string($content) || !Fenom::looksLike($content, $this->fenom[1], true)) { return $refs; }
+        $found = array();
+        foreach (Fenom::references($content) as $ref) {
+            $found[$ref['kind'] . '|' . $ref['name']] = true;
+            $refs[] = $ref;
+        }
+        return array_values(array_filter($refs, function ($ref) use ($found) {
+            return $ref['via'] !== 'php' || !isset($found[$ref['kind'] . '|' . $ref['name']]);
+        }));
     }
 
     /** Parse one tag body (without the [[ ]]) into element references. */
@@ -542,7 +567,10 @@ final class GraphBuilder {
 
     /** Leading element-name characters of a tag body ("header? &x=`1`" -> "header"). */
     private function tagName($s) {
-        return preg_match('/^([A-Za-z0-9_\-\.\/]+)/', ltrim((string) $s), $m) ? $m[1] : '';
+        $s = ltrim((string) $s);
+        // Names may hold any letter or digit (Cyrillic chunk names exist); text that is not valid UTF-8 falls back to ASCII.
+        if (preg_match('/^([\p{L}\p{N}\p{M}_\-\.\/]+)/u', $s, $m)) { return $m[1]; }
+        return preg_match('/^([A-Za-z0-9_\-\.\/]+)/', $s, $m) ? $m[1] : '';
     }
 
     /**
