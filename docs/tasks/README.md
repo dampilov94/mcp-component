@@ -67,6 +67,8 @@ below) or append a `## Review` section to the brief with numbered change request
 | 28 | [modx_audit_site](28-audit-site.md) | `task/28-audit-site` | merged |
 | 29 | [modx_run](29-run.md) | `task/29-run` | merged |
 | 30 | [Tokens page and panel](30-tokens-panel.md) | `task/30-tokens-panel` | merged |
+| 31 | [Resource drafts](31-drafts.md) | `task/31-drafts` | ready for the executor |
+| 32 | [Fenom](32-fenom.md) | `task/32-fenom` | ready for the executor |
 
 ## Doing several briefs in a row
 
