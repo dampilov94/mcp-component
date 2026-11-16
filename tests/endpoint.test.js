@@ -324,6 +324,39 @@ test("escape hatches: tools appear with the settings on", { skip: available ? fa
   assert.equal((await call(admin, "run_processor", { processor: "resource/getlist" })).body.error.code, "not_found");
 });
 
+test("modx_run: the tool appears only with its setting on", { skip: available ? false : "PHP with pdo_sqlite is not available" }, async (t) => {
+  const off = await startSite();
+  t.after(off.stop);
+  const offNames = (await off.post(off.info.tokens.admin, { v: 2, action: "manifest", args: {} })).body.result.tools.map((item) => item.name);
+  assert.ok(!offNames.includes("modx_run"));
+  const refused = await off.post(off.info.tokens.admin, { v: 2, action: "run", args: { text: "x" } });
+  assert.equal(refused.status, 403);
+  assert.equal(refused.body.error.code, "unavailable");
+  assert.equal(refused.body.error.details.reason, "disabled_by_setting");
+
+  const on = await startSite({ MODXMCP_TEST_ALLOW_RUN: "1" });
+  t.after(on.stop);
+  const { admin, read } = on.info.tokens;
+  const call = (token, action, args = {}) => on.post(token, { v: 2, action, args });
+  const names = async (token) => (await call(token, "manifest")).body.result.tools.map((item) => item.name);
+  const adminTools = await names(admin);
+  assert.equal(adminTools.length, 36);
+  assert.equal(adminTools[adminTools.indexOf("modx_audit_site") + 1], "modx_run");
+  const run = (await call(admin, "manifest")).body.result.tools.find((item) => item.name === "modx_run");
+  assert.deepEqual(run.effect, { read_only: false, destructive: true, reversible: false, open_world: true });
+  assert.equal(run.scope, "develop");
+  assert.ok(!(await names(read)).includes("modx_run"));
+  assert.equal((await call(read, "run", { text: "x" })).body.error.code, "forbidden_scope");
+  const result = await call(admin, "run", { text: "Привет [[+нет]]" });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.result.ok, true);
+  assert.equal(result.body.result.output, "Привет [[+нет]]");
+  assert.equal(result.body.result.unparsed_count, 1);
+  assert.equal(result.body.result.reversible, false);
+  assert.ok(result.body.meta.warnings.includes("Changes made by the executed code are not journaled."));
+  assert.equal((await call(admin, "run", { snippet: "a", chunk: "b" })).body.error.code, "validation_failed");
+});
+
 test("miniShop2: the option kind and the product relations appear when it is installed", { skip: available ? false : "PHP with pdo_sqlite is not available" }, async (t) => {
   const site = await startSite({ MODXMCP_TEST_MS2: "1" });
   t.after(site.stop);

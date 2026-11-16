@@ -724,11 +724,87 @@ trait FakePackageProcessors {
     }
 }
 
+/** The running context: like modX::$context, a key is all the component reads. */
+class FakeContext {
+    public $key;
+    public function __construct($key) { $this->key = $key; }
+    public function get($field) { return $field === 'key' ? $this->key : null; }
+}
+
+/**
+ * A minimal modParser for the tags the component's run tool needs: [[*field]], [[+placeholder]], [[$chunk]] and [[snippet]]
+ * (with &name=`value` properties). Tags it cannot resolve stay in the text, like MODX leaves them until the last pass removes them.
+ * Cacheable tags are the ones without a leading "!"; uncacheable ones are processed only in an uncacheable pass.
+ */
+class FakeParser {
+    private $modx;
+    private $uncacheable = false;
+    private $removing = false;
+    public $passes = array();
+    public function __construct(modX $modx) { $this->modx = $modx; }
+    public function isProcessingUncacheable() { return $this->uncacheable; }
+    public function isRemovingUnprocessed() { return $this->removing; }
+    public function processElementTags($parentTag, &$content, $processUncacheable = false, $removeUnprocessed = false, $prefix = '[[', $suffix = ']]', $tokens = array(), $depth = 0) {
+        $this->passes[] = array((bool) $processUncacheable, (bool) $removeUnprocessed, (int) $depth);
+        $previous = array($this->uncacheable, $this->removing);
+        $this->uncacheable = (bool) $processUncacheable;
+        $this->removing = (bool) $removeUnprocessed;
+        for ($round = 0; $round < max(1, $depth); $round++) {
+            $before = $content;
+            $content = preg_replace_callback('/\[\[([^\[\]]*)\]\]/su', function ($match) use ($processUncacheable, $removeUnprocessed) {
+                $body = ltrim($match[1]);
+                if ($body !== '' && $body[0] === '!') {
+                    if (!$processUncacheable) { return $removeUnprocessed ? '' : $match[0]; }
+                    $body = substr($body, 1);
+                }
+                $value = $this->tag($body);
+                return $value === null ? ($removeUnprocessed ? '' : $match[0]) : $value;
+            }, $content);
+            if ($content === $before) { break; }
+        }
+        list($this->uncacheable, $this->removing) = $previous;
+    }
+    private function properties($text) {
+        $props = array();
+        if (preg_match_all('/&([A-Za-z0-9_]+)\s*=\s*`([^`]*)`/u', $text, $pairs, PREG_SET_ORDER)) {
+            foreach ($pairs as $pair) { $props[$pair[1]] = $pair[2]; }
+        }
+        return $props;
+    }
+    private function tag($body) {
+        if ($body === '') { return null; }
+        $token = $body[0];
+        $name = preg_match('/^[*+$]?([^\s?]+)/u', $body, $m) ? $m[1] : '';
+        $props = $this->properties($body);
+        if ($token === '*') {
+            $resource = $this->modx->resource;
+            $value = $resource ? $resource->get($name) : null;
+            return $value === null ? null : (string) $value;
+        }
+        if ($token === '+') {
+            return isset($this->modx->placeholders[$name]) ? (string) $this->modx->placeholders[$name] : null;
+        }
+        if ($token === '$') {
+            return $this->modx->getObject('modChunk', array('name' => $name)) ? $this->modx->getChunk($name, $props) : null;
+        }
+        return $this->modx->getObject('modSnippet', array('name' => $name)) && isset($this->modx->snippetRunners[$name]) ? $this->modx->runSnippet($name, $props) : null;
+    }
+}
+
 class modX extends xPDO {
     use FakeResourceProcessors;
     use FakeMiniShop2;
     use FakePackageProcessors;
     public $maintenanceProcessors = array();
+    // What the run tool touches: the running context, the current resource, placeholders, snippet bodies (PHP closures
+    // registered by the test: function (array $scriptProperties, modX $modx)) and a record of what was run.
+    public $context;
+    public $resource = null;
+    public $resourceIdentifier = null;
+    public $placeholders = array();
+    public $snippetRunners = array();
+    public $runCalls = array();
+    public $parser;
     const LOG_LEVEL_ERROR = 1;
     public $user;
     public $events = array();
@@ -779,6 +855,8 @@ class modX extends xPDO {
     public function __construct($file = null) {
         $this->file = $file;
         $this->cache = new FakeCache();
+        $this->context = new FakeContext('mgr');
+        $this->parser = new FakeParser($this);
         if ($file && is_file($file)) { $this->tables = json_decode(file_get_contents($file), true); }
     }
     public static function codeColumn($class) {
@@ -1053,6 +1131,44 @@ class modX extends xPDO {
         return $this->options;
     }
     public function getContext($key) { return $this->getObject('modContext', array('key' => $key)); }
+    /** modX::switchContext(): false when already there; an unknown context leaves no context (as _initContext does). */
+    public function switchContext($key, $reload = false) {
+        if ($this->context && $this->context->get('key') === $key) { return false; }
+        if (!$this->getObject('modContext', array('key' => $key))) { $this->context = null; return false; }
+        $this->context = new FakeContext($key);
+        return true;
+    }
+    public function getParser() { return $this->parser; }
+    /**
+     * modX::runSnippet(): the snippet's own buffer swallows what it echoes and joins it with the returned value (a non-string
+     * return value stays as it is when nothing was echoed); a string result is parsed with the parser's current flags. A throwing
+     * snippet leaves its buffer open, as in MODX.
+     */
+    public function runSnippet($name, array $params = array()) {
+        if (!$this->getObject('modSnippet', array('name' => $name)) || !isset($this->snippetRunners[$name])) { return ''; }
+        $this->runCalls[] = array('snippet', $name, $params, $this->context ? $this->context->get('key') : null, $this->resourceIdentifier);
+        ob_start();
+        $result = call_user_func($this->snippetRunners[$name], $params, $this);
+        $result = $result === null ? '' : $result;
+        $output = ob_get_length() ? ob_get_contents() . $result : $result;
+        ob_end_clean();
+        if ($output && is_string($output)) {
+            $this->parser->processElementTags($name, $output, $this->parser->isProcessingUncacheable(), $this->parser->isRemovingUnprocessed(), '[[', ']]', array(), 10);
+        }
+        return $output;
+    }
+    /** modX::getChunk(): the chunk's text with the properties as placeholders, parsed with the parser's current flags. */
+    public function getChunk($name, array $properties = array()) {
+        $chunk = $this->getObject('modChunk', array('name' => $name));
+        if (!$chunk) { return ''; }
+        $this->runCalls[] = array('chunk', $name, $properties, $this->context ? $this->context->get('key') : null, $this->resourceIdentifier);
+        $saved = $this->placeholders;
+        foreach ($properties as $key => $value) { $this->placeholders[$key] = $value; }
+        $output = (string) $chunk->get('snippet');
+        $this->parser->processElementTags($name, $output, $this->parser->isProcessingUncacheable(), $this->parser->isRemovingUnprocessed(), '[[', ']]', array(), 10);
+        $this->placeholders = $saved;
+        return $output;
+    }
     public function log($level, $message) { error_log($message); }
     public function getVersionData() { return array('full_version' => '2.8.8-pl'); }
 

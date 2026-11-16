@@ -39,6 +39,9 @@ $_lang['setting_modxmcp.allow_run_processor_desc'] = 'When enabled, the run_proc
 $_lang['setting_modxmcp.allow_query_db'] = 'Allow query_db';
 $_lang['setting_modxmcp.allow_query_db_desc'] = 'When enabled, tokens with the develop scope may run read-only SELECT queries against the site database with the modx_query_db tool. Credential tables are refused. Off by default.';
 
+$_lang['setting_modxmcp.allow_run'] = 'Allow run';
+$_lang['setting_modxmcp.allow_run_desc'] = 'When enabled, tokens with the develop scope may execute snippets, render chunks and parse MODX tags with the modx_run tool. The code really runs: what it changes on the site is not journaled and cannot be undone. Off by default.';
+
 $_lang['setting_modxmcp.max_response_bytes'] = 'Maximum response size';
 $_lang['setting_modxmcp.max_response_bytes_desc'] = 'JSON response limit in bytes (default 4194304, minimum 1024). An oversized response returns an error even if its action has completed; inspect request status before retrying.';
 

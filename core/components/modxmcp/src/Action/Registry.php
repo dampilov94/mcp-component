@@ -39,6 +39,7 @@ final class Registry {
         ReadLogAction::class,
         CheckPageAction::class,
         AuditSiteAction::class,
+        RunAction::class,
         MaintenanceAction::class,
         InstallPackageAction::class,
         UninstallPackageAction::class,
