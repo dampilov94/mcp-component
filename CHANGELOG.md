@@ -48,8 +48,7 @@ Stage 2 — writes and the change journal (element kinds):
   `expected_revision` when the model omits it.
 - Built-in guide rewritten for 2.0 (`index`, `getting_started`); 1.x topics moved to
   `docs/legacy-help/` until their stages land.
-- Not yet in this stage: recording manager edits through a plugin, the manager lock check,
-  `modx_duplicate`, `modx_invoke` (including `make_static` and auto-static), journal retention.
+- Not yet: refusing an API write while a person has the object open in the manager.
 
 Stage 3 — resources:
 
@@ -154,6 +153,20 @@ After stage 3:
 - VirtualPage: kinds `vp_event`, `vp_handler`, `vp_route` (validated; cascades journaled; on
   VirtualPage 1.x its plugin is wired to the events routes use, journaled with the route), route
   tester `modx_invoke {kind: "vp_route", op: "resolve"}`, help topic `virtualpage`.
+
+Stage 7 — manager:
+
+- History page (Components > modxMCP > История): everything recorded in the journal with source,
+  author, tool and objects; filters and text search; a changeset opens under its row with old and
+  new values and coloured code diffs; undo of one changeset or back to a checkpoint with a plan,
+  conflicts and an explicit forced variant. An undo made here is journaled as `manager` with the
+  user. `modx_history` entries carry `author` (token label, manager username or `unknown`).
+- Edits made in the manager are journaled when they are saved: the plugin `modxMCP` passes the
+  save/delete events of elements, categories, resources (also publishing, sorting, the trash),
+  users, media sources and contexts to a recorder that reuses the write transaction, so such a
+  change has an author, a diff and an undo. It stays silent during API writes and undos, never
+  breaks a manager action, and can be switched off with `modxmcp.history_track_manager`. Kinds
+  without save events (settings, access rules) are still detected later as `external`.
 
 - Offline tests (`npm test`): pure PHP logic, the real kernel behind PHP's built-in server with
   stubbed MODX classes, and the Node bridge end to end. CI runs them.

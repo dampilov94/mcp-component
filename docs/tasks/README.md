@@ -61,8 +61,8 @@ below) or append a `## Review` section to the brief with numbered change request
 | 22 | [miniShop2 links and orders](22-minishop2-links-orders.md) | `task/22-minishop2-links-orders` | merged |
 | 23 | [MIGX](23-migx.md) | `task/23-migx` | merged |
 | 24 | [VirtualPage](24-virtualpage.md) | `task/24-virtualpage` | merged |
-| 25 | [History page](25-history-page.md) | `task/25-history-page` | in review: waiting for a look in a real manager |
-| 26 | [Recording manager edits](26-manager-recorder.md) | `task/26-manager-recorder` | ready for the executor |
+| 25 | [History page](25-history-page.md) | `task/25-history-page` | merged |
+| 26 | [Recording manager edits](26-manager-recorder.md) | `task/26-manager-recorder` | merged |
 
 ## Doing several briefs in a row
 
@@ -100,3 +100,13 @@ Lessons from briefs 01–08 (all of the architect's corrections came from these)
 
 Stop and report after each brief only if you are blocked; otherwise continue with the next
 one and tell the user at the end which branches are ready.
+
+Lessons from briefs 25–26:
+
+- A page that shows details "below the table" hides them off screen on a full page; open
+  details next to what was clicked.
+- MODX fires some events it never registered (`OnContextUpdate`); a plugin can only be attached
+  to events present in the `modEvent` table. Check `_build`/setup data, not only `invokeEvent`.
+- When the journal differs from an object's current state, the difference belongs to whoever is
+  acting now only if their action has no before-event; otherwise it was made earlier by someone
+  unknown.
