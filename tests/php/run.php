@@ -5943,7 +5943,7 @@ $hContext = Context::forManager($hSite, $hSite->user, $hCore);
 check('manager context: admin scope, no token, the user recorded', $hContext->managerUserId === 2 && $hContext->token['id'] === null && $hContext->token['scope'] === 'admin'
     && $hContext->token['label'] === 'manager: Иванов' && $hContext->token['plan_only'] === false && $hContext->token['denied_groups'] === array());
 check('api context: no manager user by default', $hDev->managerUserId === null && $hAdmin->managerUserId === null);
-$hAllowed = array('Context.php', 'Write/Transaction.php', 'Manager/HistoryService.php');
+$hAllowed = array('Context.php', 'Write/Transaction.php', 'Manager/HistoryService.php', 'Manager/Recorder.php');
 $hFound = array();
 foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($hCore . 'src', FilesystemIterator::SKIP_DOTS)) as $hFile) {
     if (substr($hFile->getFilename(), -4) !== '.php') { continue; }
@@ -5954,6 +5954,283 @@ sort($hFound);
 sort($hAllowed);
 check('manager context: only the context, the transaction and the service touch it, the kernel never does', $hFound === $hAllowed
     && strpos(file_get_contents($hCore . 'src/Kernel.php'), 'managerUserId') === false);
+
+// --- Manager recorder: edits made by people in the manager are journaled as they happen ---
+use ModxMCP\Manager\Recorder;
+use ModxMCP\Write\Lock;
+use ModxMCP\Write\Transaction;
+$rCore = dirname(dirname(__DIR__)) . '/core/components/modxmcp/';
+$rDir = sys_get_temp_dir() . '/modxmcp-rec-' . bin2hex(random_bytes(6));
+mkdir($rDir . '/core', 0700, true);
+$rSite = fakeSite($rDir);
+$rSite->options['modxmcp.auto_static'] = false;
+$rSite->store('modUser', array('id' => 1, 'username' => 'admin', 'primary_group' => 0));
+$rSite->store('modUser', array('id' => 2, 'username' => 'Иванов', 'primary_group' => 0));
+$rPerson = $rSite->getObject('modUser', 2);
+$rSite->user = $rPerson;
+$rToken = (new TokenStore($rSite))->create('Claude Code', 'develop');
+unset($rToken['token']);
+$rDev = new Context($rSite, $rToken, $rCore, function () { throw new RuntimeException('no store in tests'); });
+$rAdmin = new Context($rSite, array('scope' => 'admin') + $rToken, $rCore, function () { throw new RuntimeException('no store in tests'); });
+$rSite->listeners[] = function ($name, array $params) use ($rSite) { Recorder::handle($rSite, $name, $params); };
+$rService = new HistoryService($rSite, $rPerson);
+$rLog = function () use ($rService) { return $rService->changesets(array(), 200)['changesets']; };
+$rCount = function () use ($rLog) { return count($rLog()); };
+
+// the same processors through the API: the recorder stays silent
+$rHead = $call($rDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'шапка', 'content' => "<h1>\nЗаголовок\n</h1>")));
+$rApi = $call($rDev, 'update', array('kind' => 'chunk', 'id' => $rHead['id'], 'fields' => array('content' => "<h1>\nПравка API\n</h1>")));
+$rEntries = $rLog();
+check('recorder: an API create and update make exactly one changeset each, source mcp', count($rEntries) === 2 && $rEntries[0]['source'] === 'mcp' && $rEntries[1]['source'] === 'mcp'
+    && $rEntries[0]['author'] === 'Claude Code' && Transaction::depth() === 0);
+
+// a manager save of an existing chunk
+$rSave = function (array $data) use ($rSite, $rHead) {
+    return $rSite->runProcessor('element/chunk/update', $data + array('id' => $rHead['id'], 'name' => 'шапка', 'snippet' => "<h1>\nПравка API\n</h1>", 'description' => '', 'category' => 0, 'locked' => 0));
+};
+$rSave(array('snippet' => "<h1>\nПравка в админке\n</h1>", 'description' => 'человек'));
+$rEntries = $rLog();
+$rFirst = $rEntries[0];
+check('recorder: a manager save is one changeset by the user', count($rEntries) === 3 && $rFirst['source'] === 'manager' && $rFirst['tool'] === 'manager' && $rFirst['author'] === 'Иванов'
+    && $rFirst['summary'] === 'save chunk ' . $rHead['id'] . ' in the manager' && $rFirst['objects'][0]['op'] === 'update' && $rFirst['objects'][0]['name'] === 'шапка');
+$rChange = (new \ModxMCP\Journal\Journal($rSite))->changeset($rFirst['changeset_id']);
+check('recorder: the journal row has the user and no token', $rChange['user_id'] === 2 && $rChange['token_id'] === null && $rChange['source'] === 'manager');
+$rDiff = $call($rDev, 'history_diff', array('changeset_id' => $rFirst['changeset_id']));
+check('recorder: history_diff shows the changed fields and the before state is the API state', $rDiff['objects'][0]['changed']['content']['diff'] === "@@ -2,1 +2,1 @@\n-Правка API\n+Правка в админке"
+    && $rDiff['objects'][0]['changed']['description']['new'] === 'человек');
+check('recorder: modx_history shows the username as author', $call($rDev, 'history', array('kind' => 'chunk', 'id' => $rHead['id']))['changesets'][0]['author'] === 'Иванов');
+check('recorder: no transaction is left open', Transaction::depth() === 0);
+$rUndo = $call($rAdmin, 'undo', array('changeset_id' => $rFirst['changeset_id'], 'confirm' => true));
+check('recorder: undo restores the state before the manager save', $rUndo['performed'] === true && $rSite->getObject('modChunk', array('id' => $rHead['id']))->get('snippet') === "<h1>\nПравка API\n</h1>"
+    && $rSite->getObject('modChunk', array('id' => $rHead['id']))->get('description') === '');
+check('recorder: the undo is one changeset of its own (the events it fires are ignored)', $rCount() === 4 && $rLog()[0]['tool'] === 'undo' && $rLog()[0]['undoes'] === array($rFirst['changeset_id']));
+
+// the undo from the history page is silent too
+$rService->undo(array('changeset_id' => $rLog()[0]['changeset_id']), true);
+check('recorder: undo of an undo from HistoryService adds exactly one changeset', $rCount() === 5 && $rLog()[0]['tool'] === 'undo' && Transaction::depth() === 0);
+$rSave(array('snippet' => "<h1>\nПравка API\n</h1>", 'description' => ''));   // put the chunk back to the API state; this is a manager save too
+$rBase = $rCount();
+
+// nothing changed: nothing recorded
+$rSave(array());
+check('recorder: a save that changes nothing records nothing', $rCount() === $rBase && Transaction::depth() === 0);
+
+// a save refused after its before-event: nothing recorded; a later save is recorded correctly
+$rSite->failBeforeSave = 'element/chunk/update';
+$rSave(array('snippet' => 'не сохранится'));
+$rSite->failBeforeSave = null;
+check('recorder: a refused save records nothing', $rCount() === $rBase && $rSite->getObject('modChunk', array('id' => $rHead['id']))->get('snippet') !== 'не сохранится');
+$rSave(array('snippet' => 'сохранится'));
+$rLast = $rLog()[0];
+$rLastDiff = $call($rDev, 'history_diff', array('changeset_id' => $rLast['changeset_id']));
+check('recorder: the save after a refused one is recorded with the right before-state', $rCount() === $rBase + 1 && $rLast['source'] === 'manager'
+    && $rLastDiff['objects'][0]['changed']['content']['diff'] === "@@ -1,3 +1,1 @@\n-<h1>\n-Правка API\n-</h1>\n+сохранится");
+$rBase = $rCount();
+
+// create and delete in the manager
+$rSite->runProcessor('element/chunk/create', array('name' => 'новый', 'snippet' => 'тело'));
+$rNew = $rSite->getObject('modChunk', array('name' => 'новый'));
+$rNewId = (int) $rNew->get('id');
+$rCreated = $rLog()[0];
+check('recorder: a creation in the manager', $rCount() === $rBase + 1 && $rCreated['source'] === 'manager' && $rCreated['objects'][0]['op'] === 'create' && $rCreated['summary'] === "create chunk {$rNewId} in the manager"
+    && $rCreated['author'] === 'Иванов');
+$rTemplate = $call($rDev, 'create', array('kind' => 'template', 'fields' => array('name' => 'Основной', 'content' => '[[*content]]')));
+$rTv = $call($rDev, 'create', array('kind' => 'tv', 'fields' => array('name' => 'hero', 'type' => 'image'), 'relations' => array('templates' => array($rTemplate['id']))));
+$rSite->store('modTemplateVarResource', array('id' => 91, 'tmplvarid' => $rTv['id'], 'contentid' => 7, 'value' => 'hero.jpg'));
+$rTvBefore = $call($rDev, 'get', array('kind' => 'tv', 'id' => $rTv['id']));
+$rBase = $rCount();
+$rSite->runProcessor('element/tv/remove', array('id' => $rTv['id']));
+$rDeleted = $rLog()[0];
+check('recorder: a deletion in the manager keeps the related rows', $rCount() === $rBase + 1 && $rDeleted['source'] === 'manager' && $rDeleted['objects'][0]['op'] === 'delete'
+    && $rSite->getCount('modTemplateVarResource') === 0 && $rDeleted['summary'] === "delete tv {$rTv['id']} in the manager");
+$rBack = $call($rAdmin, 'undo', array('changeset_id' => $rDeleted['changeset_id'], 'confirm' => true));
+check('recorder: undo of a manager delete brings the object back with its id and rows', $rBack['performed'] === true
+    && $call($rDev, 'get', array('kind' => 'tv', 'id' => $rTv['id']))['revision'] === $rTvBefore['revision'] && $rSite->getCount('modTemplateVarResource', array('value' => 'hero.jpg')) === 1);
+
+// a resource delete in the manager trashes the descendants: all in one changeset
+$rHome = $call($rDev, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Главная', 'published' => true)));
+$rAbout = $call($rDev, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'О нас', 'parent' => $rHome['id'])));
+$rTeam = $call($rDev, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Команда', 'parent' => $rAbout['id'])));
+$rBase = $rCount();
+$rSite->runProcessor('resource/delete', array('id' => $rHome['id']));
+$rTrash = $rLog()[0];
+check('recorder: a resource delete in the manager is one changeset with the descendants', $rCount() === $rBase + 1 && $rTrash['source'] === 'manager' && count($rTrash['objects']) === 3
+    && $rSite->getObject('modResource', array('id' => $rTeam['id']))->get('deleted') == 1);
+$call($rAdmin, 'undo', array('changeset_id' => $rTrash['changeset_id'], 'confirm' => true));
+check('recorder: and one undo restores all of them', $rSite->getObject('modResource', array('id' => $rTeam['id']))->get('deleted') == 0 && $rSite->getObject('modResource', array('id' => $rHome['id']))->get('deleted') == 0);
+
+// a resource saved in the manager: created under a parent (its isfolder changes too) and edited
+$rBase = $rCount();
+$rSite->runProcessor('resource/create', array('pagetitle' => 'Новая', 'parent' => $rTeam['id'], 'class_key' => 'modDocument'));
+$rNewPage = $rSite->getObject('modResource', array('pagetitle' => 'Новая'));
+$rPageEntry = $rLog()[0];
+$rKinds = array_map(function ($o) { return $o['kind'] . ':' . $o['id']; }, $rPageEntry['objects']);
+sort($rKinds);
+check('recorder: a resource created in the manager is journaled with the parent whose isfolder changed', $rCount() === $rBase + 1 && $rPageEntry['source'] === 'manager'
+    && $rKinds === array('resource:' . $rTeam['id'], 'resource:' . $rNewPage->get('id')) && $rPageEntry['summary'] === 'create resource ' . $rNewPage->get('id') . ' in the manager');
+
+// after-only events: publish from the tree
+$rBase = $rCount();
+$rSite->runProcessor('resource/unpublish', array('id' => $rHome['id']));
+$rPub = $rLog()[0];
+check('recorder: publishing from the tree is recorded as a manager change for a journaled resource', $rCount() === $rBase + 1 && $rPub['source'] === 'manager' && $rPub['author'] === 'Иванов'
+    && $rPub['objects'][0]['op'] === 'update' && $rPub['summary'] === "resource {$rHome['id']} was changed in the manager");
+$rSite->store('modResource', array('id' => 900, 'pagetitle' => 'Никогда не видела журнала', 'published' => 0, 'deleted' => 0, 'parent' => 0, 'content' => ''));
+$rBase = $rCount();
+$rSite->runProcessor('resource/publish', array('id' => 900));
+check('recorder: publishing a resource the journal never saw records nothing and is no error', $rCount() === $rBase && Transaction::depth() === 0);
+
+// the object was changed outside the journal before the manager save
+$rSite->store('modChunk', array('description' => 'правка по FTP') + $rSite->row('modChunk', $rHead['id']));
+$rBase = $rCount();
+$rSave(array('snippet' => 'после FTP', 'description' => 'правка по FTP'));
+$rTwo = array_slice($rLog(), 0, 2);
+$rTwoDiff = $call($rDev, 'history_diff', array('changeset_id' => $rTwo[0]['changeset_id']));
+check('recorder: an outside change before the manager save is its own changeset first', $rCount() === $rBase + 2 && $rTwo[1]['summary'] === "chunk {$rHead['id']} was changed in the manager" && $rTwo[1]['source'] === 'manager'
+    && $rTwo[1]['author'] === 'Иванов' && $rTwo[0]['summary'] === "save chunk {$rHead['id']} in the manager"
+    && $rTwoDiff['objects'][0]['changed']['content']['diff'] === "@@ -1,1 +1,1 @@\n-сохранится\n+после FTP");
+$rOutside = (new \ModxMCP\Journal\Journal($rSite))->changes(array($rTwo[1]['changeset_id']));
+check('recorder: the outside change has no "author unknown" note', $rOutside[0]['note'] === '');
+
+// an MCP lock on the object: the save succeeds, nothing is recorded, nothing is thrown
+$rBase = $rCount();
+$rLock = new Lock($rDev->dataDir() . '/locks');
+$rLock->acquire('chunk:' . $rHead['id']);
+$rLocked = $rSave(array('snippet' => 'пока блокировка', 'description' => 'правка по FTP'));
+$rLock->releaseAll();
+check('recorder: an MCP lock on the object skips recording, the save goes through', !$rLocked->isError() && $rCount() === $rBase && Transaction::depth() === 0
+    && $rSite->getObject('modChunk', array('id' => $rHead['id']))->get('snippet') === 'пока блокировка');
+$call($rDev, 'update', array('kind' => 'chunk', 'id' => $rHead['id'], 'fields' => array('description' => 'после блокировки')));
+$rAfterLock = array_slice($rLog(), 0, 2);
+check('recorder: a later API touch records the unrecorded change as outside', $rAfterLock[1]['source'] === 'external' && $rAfterLock[0]['source'] === 'mcp');
+
+// settings and the user
+$rBase = $rCount();
+$rSite->options['modxmcp.history_track_manager'] = '0';
+$rSave(array('snippet' => 'выключено', 'description' => 'после блокировки'));
+$rOff = $rCount() === $rBase;
+$rSite->options['modxmcp.history_track_manager'] = '1';
+$rSite->user = $rSite->getObject('modUser', array('id' => 1000));
+$rSave(array('snippet' => 'аноним', 'description' => 'после блокировки'));
+$rAnon = $rCount() === $rBase;
+$rSite->user = $rPerson;
+$rSite->options['setup'] = true;
+$rSave(array('snippet' => 'установка', 'description' => 'после блокировки'));
+$rSetup = $rCount() === $rBase;
+unset($rSite->options['setup']);
+check('recorder: nothing is recorded with the setting off, without a logged-in user, or during setup', $rOff && $rAnon && $rSetup && Transaction::depth() === 0);
+$rSite->context = new FakeObject($rSite, 'modContext', array('key' => 'web'), false);
+$rSave(array('snippet' => 'фронтенд', 'description' => 'после блокировки'));
+$rWeb = $rCount() === $rBase;
+$rSite->context = new FakeObject($rSite, 'modContext', array('key' => 'mgr'), false);
+$rSave(array('snippet' => 'менеджер', 'description' => 'после блокировки'));
+// the unrecorded saves above are found as one outside change before this one is recorded
+check('recorder: a web-context user is not a manager edit, the mgr context is', $rWeb && $rCount() === $rBase + 2 && $rLog()[0]['summary'] === "save chunk {$rHead['id']} in the manager" && $rLog()[1]['summary'] === "chunk {$rHead['id']} was changed in the manager");
+unset($rSite->context);
+$rBase = $rCount();
+
+// an error inside the recorder never reaches the caller
+$rSite->pdo->exec('ALTER TABLE modx_modxmcp_changes RENAME TO modx_modxmcp_changes_away');
+$rErrorLog = ini_set('error_log', '/dev/null');
+$rBroken = $rSave(array('snippet' => 'журнал сломан', 'description' => 'после блокировки'));
+ini_set('error_log', $rErrorLog);
+$rSite->pdo->exec('ALTER TABLE modx_modxmcp_changes_away RENAME TO modx_modxmcp_changes');
+check('recorder: a failing journal does not break the manager save', !$rBroken->isError() && $rSite->getObject('modChunk', array('id' => $rHead['id']))->get('snippet') === 'журнал сломан' && $rCount() === $rBase
+    && Transaction::depth() === 0);
+
+// events with parameters that only a real manager sends, fed to the recorder directly
+$rCategory = $call($rDev, 'create', array('kind' => 'category', 'fields' => array('name' => 'Блоки')));
+$rBase = $rCount();
+$rCat = $rSite->getObject('modCategory', array('id' => $rCategory['id']));
+Recorder::handle($rSite, 'OnCategoryBeforeSave', array('mode' => 'upd', 'category' => &$rCat, 'cacheFlag' => null));
+$rCat->set('category', 'Блоки сайта');
+$rCat->save();
+Recorder::handle($rSite, 'OnCategorySave', array('mode' => 'upd', 'category' => &$rCat, 'cacheFlag' => null));
+$rCatEntry = $rLog()[0];
+check('recorder: a category saved by the model (object only, no id parameter)', $rCount() === $rBase + 1 && $rCatEntry['source'] === 'manager' && $rCatEntry['objects'][0]['kind'] === 'category' && $rCatEntry['objects'][0]['name'] === 'Блоки сайта');
+Recorder::handle($rSite, 'OnCategoryBeforeRemove', array('category' => &$rCat, 'ancestors' => array()));
+$rCat->remove();
+Recorder::handle($rSite, 'OnCategoryRemove', array('category' => &$rCat, 'ancestors' => array()));
+check('recorder: a category removed by the model', $rCount() === $rBase + 2 && $rLog()[0]['objects'][0]['op'] === 'delete');
+
+$rA = $call($rDev, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'A', 'menuindex' => 1)));
+$rB = $call($rDev, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'B', 'menuindex' => 2)));
+$rBase = $rCount();
+$rNodes = array(array('id' => (string) $rA['id'], 'context' => 'web', 'parent' => '0', 'order' => 1), array('id' => (string) $rB['id'], 'context' => 'web', 'parent' => '0', 'order' => 0), array('id' => '0'));
+Recorder::handle($rSite, 'OnResourceBeforeSort', array('nodes' => &$rNodes, 'contexts' => array('web')));
+foreach (array($rA['id'] => 2, $rB['id'] => 1) as $rId => $rIndex) { $rObject = $rSite->getObject('modResource', array('id' => $rId)); $rObject->set('menuindex', $rIndex); $rObject->save(); }
+Recorder::handle($rSite, 'OnResourceSort', array('nodes' => &$rNodes, 'nodesAffected' => array(), 'contexts' => array('web'), 'contextsAffected' => array('web')));
+$rSort = $rLog()[0];
+check('recorder: a sort in the tree is one changeset with every moved resource', $rCount() === $rBase + 1 && $rSort['source'] === 'manager' && count($rSort['objects']) === 2 && $rSort['summary'] === 'sort resources in the manager');
+
+// emptying the trash: the resources are gone after the event, so they are touched before it
+$call($rDev, 'delete', array('kind' => 'resource', 'id' => $rA['id']));
+$rBase = $rCount();
+$rSite->runProcessor('resource/emptyrecyclebin', array());
+$rEmpty = $rLog()[0];
+check('recorder: emptying the trash journals every removed resource as deleted', $rCount() === $rBase + 1 && $rEmpty['source'] === 'manager' && $rEmpty['summary'] === 'empty the trash in the manager'
+    && array_column($rEmpty['objects'], 'op') === array('delete') && $rSite->getCount('modResource', array('id' => $rA['id'])) === 0);
+$rBackTrash = $call($rAdmin, 'undo', array('changeset_id' => $rEmpty['changeset_id'], 'confirm' => true));
+check('recorder: and the removed resource can be brought back', $rBackTrash['performed'] === true && $rSite->getCount('modResource', array('id' => $rA['id'])) === 1);
+
+// more than 500 objects: skipped, one log line
+$rMany = array();
+for ($i = 1; $i <= 501; $i++) { $rMany[] = $i; }
+$rBase = $rCount();
+$rSite->pdo->exec('SELECT 1');
+$rErrorLog = ini_set('error_log', $rDir . '/many.log');
+Recorder::handle($rSite, 'OnBeforeEmptyTrash', array('ids' => &$rMany));
+Recorder::handle($rSite, 'OnEmptyTrash', array('ids' => &$rMany));
+ini_set('error_log', $rErrorLog);
+check('recorder: above the cap nothing is recorded and one line is logged', $rCount() === $rBase && substr_count((string) @file_get_contents($rDir . '/many.log'), '[modxmcp]') === 1 && Transaction::depth() === 0);
+
+// events and the plugin
+$rExpected = array(
+    'OnBeforeChunkFormSave', 'OnChunkFormSave', 'OnBeforeChunkFormDelete', 'OnChunkFormDelete',
+    'OnBeforeSnipFormSave', 'OnSnipFormSave', 'OnBeforeSnipFormDelete', 'OnSnipFormDelete',
+    'OnBeforeTempFormSave', 'OnTempFormSave', 'OnBeforeTempFormDelete', 'OnTempFormDelete',
+    'OnBeforePluginFormSave', 'OnPluginFormSave', 'OnBeforePluginFormDelete', 'OnPluginFormDelete',
+    'OnBeforeTVFormSave', 'OnTVFormSave', 'OnBeforeTVFormDelete', 'OnTVFormDelete',
+    'OnCategoryBeforeSave', 'OnCategorySave', 'OnCategoryBeforeRemove', 'OnCategoryRemove',
+    'OnBeforeDocFormSave', 'OnDocFormSave', 'OnBeforeDocFormDelete', 'OnDocFormDelete',
+    'OnResourceUndelete', 'OnDocPublished', 'OnDocUnPublished', 'OnResourceBeforeSort', 'OnResourceSort', 'OnBeforeEmptyTrash', 'OnEmptyTrash',
+    'OnBeforeUserFormSave', 'OnUserFormSave', 'OnBeforeUserFormDelete', 'OnUserFormDelete', 'OnUserActivate', 'OnUserDeactivate',
+    'OnMediaSourceBeforeFormSave', 'OnMediaSourceFormSave', 'OnMediaSourceBeforeFormDelete', 'OnMediaSourceFormDelete',
+    'OnContextUpdate', 'OnContextBeforeSave', 'OnContextSave', 'OnContextBeforeRemove', 'OnContextRemove',
+);
+$rEvents = Recorder::events();
+$rSorted = $rEvents;
+sort($rSorted);
+$rWanted = $rExpected;
+sort($rWanted);
+check('recorder: events() lists every event of the table exactly once', $rSorted === $rWanted && count($rEvents) === count(array_unique($rEvents)));
+
+$rJournalBefore = $rCount();
+$rFirstSync = Recorder::syncPlugin($rSite);
+$rPlugin = $rSite->getObject('modPlugin', array('name' => 'modxMCP'));
+$rNames = function ($id) use ($rSite) { $n = array(); foreach ($rSite->getCollection('modPluginEvent', array('pluginid' => $id)) as $row) { $n[] = $row->get('event'); } sort($n); return $n; };
+check('syncPlugin: creates the plugin with exactly the events of the recorder', $rFirstSync['created'] === true && $rPlugin && $rNames($rPlugin->get('id')) === $rWanted
+    && strpos((string) $rPlugin->get('plugincode'), 'Recorder::handle') !== false && strpos((string) $rPlugin->get('plugincode'), '<?php') === false
+    && $rPlugin->get('description') === 'Records changes made in the manager into the modxMCP journal.');
+$rSecondSync = Recorder::syncPlugin($rSite);
+check('syncPlugin: is idempotent', $rSecondSync === array('created' => false, 'added' => array(), 'removed' => array()) && $rSite->getCount('modPlugin', array('name' => 'modxMCP')) === 1 && count($rNames($rPlugin->get('id'))) === count($rWanted));
+$rSite->store('modPlugin', array('id' => 70, 'name' => 'tracker', 'plugincode' => 'return;'));
+$rSite->store('modPluginEvent', array('id' => 71, 'pluginid' => 70, 'event' => 'OnWebPageInit', 'priority' => 0, 'propertyset' => 0));
+$rSite->store('modPluginEvent', array('id' => 72, 'pluginid' => $rPlugin->get('id'), 'event' => 'OnWebPageInit', 'priority' => 0, 'propertyset' => 0));
+$rSite->getObject('modPluginEvent', array('pluginid' => $rPlugin->get('id'), 'event' => 'OnDocPublished'))->remove();
+$rThird = Recorder::syncPlugin($rSite);
+check('syncPlugin: adds missing events, removes events no longer listed, leaves other plugins alone', $rThird['added'] === array('OnDocPublished') && $rThird['removed'] === array('OnWebPageInit')
+    && $rNames($rPlugin->get('id')) === $rWanted && $rSite->getCount('modPluginEvent', array('pluginid' => 70)) === 1 && $rSite->getObject('modPlugin', array('id' => 70))->get('plugincode') === 'return;');
+check('syncPlugin: leaves no journal entries and the plugin is not a recorded kind object', $rCount() === $rJournalBefore
+    && (new \ModxMCP\Journal\Journal($rSite))->lastChange('plugin', (string) $rPlugin->get('id')) === null && Transaction::depth() === 0);
+
+// the plugin file is a thin call into the recorder
+$rPluginCode = Recorder::pluginCode($rCore);
+$rSite->event = (object) array('name' => 'OnChunkFormSave');
+$rProps = array();
+$rRan = (function ($modx, $scriptProperties) use ($rPluginCode) { eval($rPluginCode); return true; })($rSite, $rProps);
+check('plugin file: runs against the component and is a few lines', $rRan === true && substr_count($rPluginCode, "\n") <= 6);
+unset($rSite->event);
 
 // --- Kernel helpers ---
 check('canonical: key order does not matter', Kernel::canonical(array('b' => 1, 'a' => array('d' => 1, 'c' => 2))) === array('a' => array('c' => 2, 'd' => 1), 'b' => 1));

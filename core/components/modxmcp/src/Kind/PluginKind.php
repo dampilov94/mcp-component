@@ -15,7 +15,10 @@ final class PluginKind extends Kind {
     public function lint() { return 'php'; }
 
     public function eventNames() {
-        return array('save' => 'OnPluginFormSave', 'delete' => 'OnPluginFormDelete', 'param' => 'plugin');
+        return array(
+            'before_save' => 'OnBeforePluginFormSave', 'save' => 'OnPluginFormSave',
+            'before_delete' => 'OnBeforePluginFormDelete', 'delete' => 'OnPluginFormDelete', 'param' => 'plugin',
+        );
     }
 
     public function fields() {

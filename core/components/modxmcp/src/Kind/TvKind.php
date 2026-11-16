@@ -15,7 +15,10 @@ final class TvKind extends Kind {
     public function processorPath() { return 'element/tv/'; }
 
     public function eventNames() {
-        return array('save' => 'OnTVFormSave', 'delete' => 'OnTVFormDelete', 'param' => 'tv');
+        return array(
+            'before_save' => 'OnBeforeTVFormSave', 'save' => 'OnTVFormSave',
+            'before_delete' => 'OnBeforeTVFormDelete', 'delete' => 'OnTVFormDelete', 'param' => 'tv',
+        );
     }
 
     public function fields() {

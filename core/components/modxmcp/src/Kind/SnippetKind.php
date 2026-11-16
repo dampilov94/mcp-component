@@ -13,7 +13,10 @@ final class SnippetKind extends Kind {
     public function lint() { return 'php'; }
 
     public function eventNames() {
-        return array('save' => 'OnSnipFormSave', 'delete' => 'OnSnipFormDelete', 'param' => 'snippet');
+        return array(
+            'before_save' => 'OnBeforeSnipFormSave', 'save' => 'OnSnipFormSave',
+            'before_delete' => 'OnBeforeSnipFormDelete', 'delete' => 'OnSnipFormDelete', 'param' => 'snippet',
+        );
     }
 
     public function fields() {

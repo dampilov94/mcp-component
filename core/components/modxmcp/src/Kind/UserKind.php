@@ -13,6 +13,17 @@ final class UserKind extends Kind {
     const SERVICE_MESSAGE = 'The service user of modxMCP cannot be changed through the API.';
     const SUDO_MESSAGE = 'A user with the sudo flag cannot be deleted or copied, and its username, password, active and blocked state cannot be changed through the API.';
 
+    public function managerEvents() {
+        return array(
+            'OnBeforeUserFormSave' => array('role' => 'before_save', 'param' => 'user'),
+            'OnUserFormSave' => array('role' => 'save', 'param' => 'user'),
+            'OnBeforeUserFormDelete' => array('role' => 'before_delete', 'param' => 'user'),
+            'OnUserFormDelete' => array('role' => 'delete', 'param' => 'user'),
+            'OnUserActivate' => array('role' => 'touch', 'param' => 'user'),
+            'OnUserDeactivate' => array('role' => 'touch', 'param' => 'user'),
+        );
+    }
+
     public function name() { return 'user'; }
     public function label() { return 'User'; }
     public function modelClass() { return 'modUser'; }

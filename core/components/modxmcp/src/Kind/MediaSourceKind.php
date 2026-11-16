@@ -4,6 +4,15 @@ namespace ModxMCP\Kind;
 use ModxMCP\Auth\Scope;
 
 final class MediaSourceKind extends Kind {
+    public function managerEvents() {
+        return array(
+            'OnMediaSourceBeforeFormSave' => array('role' => 'before_save', 'param' => 'source'),
+            'OnMediaSourceFormSave' => array('role' => 'save', 'param' => 'source'),
+            'OnMediaSourceBeforeFormDelete' => array('role' => 'before_delete', 'param' => 'source'),
+            'OnMediaSourceFormDelete' => array('role' => 'delete', 'param' => 'source'),
+        );
+    }
+
     public function name() { return 'media_source'; }
 
     public function label() { return 'Media source'; }

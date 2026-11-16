@@ -42,7 +42,24 @@ final class ResourceKind extends Kind {
     }
 
     public function eventNames() {
-        return array('save' => 'OnDocFormSave', 'delete' => 'OnDocFormDelete', 'param' => 'resource');
+        return array(
+            'before_save' => 'OnBeforeDocFormSave', 'save' => 'OnDocFormSave',
+            'before_delete' => 'OnBeforeDocFormDelete', 'delete' => 'OnDocFormDelete', 'param' => 'resource',
+        );
+    }
+
+    public function managerEvents() {
+        return array(
+            // After-only events: the resource is compared with the journal (undelete also looks at the descendants).
+            'OnResourceUndelete' => array('role' => 'touch', 'cascade' => 'undelete'),
+            'OnDocPublished' => array('role' => 'touch'),
+            'OnDocUnPublished' => array('role' => 'touch'),
+            // Many resources at once: params nodes (sort), ids (trash).
+            'OnResourceBeforeSort' => array('role' => 'before_sort'),
+            'OnResourceSort' => array('role' => 'sort'),
+            'OnBeforeEmptyTrash' => array('role' => 'before_trash'),
+            'OnEmptyTrash' => array('role' => 'trash'),
+        );
     }
 
     public function searchColumns() {

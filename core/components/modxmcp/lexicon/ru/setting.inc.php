@@ -56,6 +56,8 @@ $_lang['setting_modxmcp.allowed_ips_desc'] = 'IP-адреса или диапа�
 
 $_lang['setting_modxmcp.lint_php'] = 'Проверять PHP перед сохранением';
 $_lang['setting_modxmcp.lint_php_desc'] = 'Код сниппетов и плагинов проверяется на синтаксические ошибки до записи. Код с ошибкой не сохраняется.';
+$_lang['setting_modxmcp.history_track_manager'] = 'Записывать правки в админке в историю';
+$_lang['setting_modxmcp.history_track_manager_desc'] = 'Изменения, которые люди вносят в админке MODX (сохранение и удаление ресурсов, элементов, пользователей и так далее), попадают в историю modxMCP с указанием автора и могут быть отменены. Нужен плагин modxMCP, который устанавливает пакет.';
 $_lang['setting_modxmcp.history_max_blob_bytes'] = 'Максимальный размер снимка в журнале';
 $_lang['setting_modxmcp.history_max_blob_bytes_desc'] = 'Изменение объекта, снимок которого больше этого размера (в байтах), выполняется, но не может быть отменено.';
 $_lang['setting_modxmcp.history_retention_days'] = 'Срок хранения журнала в днях';

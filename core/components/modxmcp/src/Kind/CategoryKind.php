@@ -2,6 +2,16 @@
 namespace ModxMCP\Kind;
 
 final class CategoryKind extends Kind {
+    public function managerEvents() {
+        // modCategory::save() / remove() fire these themselves, with the object under `category` and no id.
+        return array(
+            'OnCategoryBeforeSave' => array('role' => 'before_save', 'param' => 'category'),
+            'OnCategorySave' => array('role' => 'save', 'param' => 'category'),
+            'OnCategoryBeforeRemove' => array('role' => 'before_delete', 'param' => 'category'),
+            'OnCategoryRemove' => array('role' => 'delete', 'param' => 'category'),
+        );
+    }
+
     public function name() { return 'category'; }
 
     public function label() { return 'Category'; }
