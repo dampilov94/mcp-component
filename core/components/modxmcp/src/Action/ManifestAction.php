@@ -21,10 +21,11 @@ final class ManifestAction extends Action {
 
     public function run(array $args, Context $context) {
         $tools = Manifest::tools($context);
+        $prompts = Manifest::prompts($context);
         return array(
             'protocol'       => Kernel::PROTOCOL,
             'server_version' => Kernel::VERSION,
-            'hash'           => Manifest::hash($tools),
+            'hash'           => Manifest::hash($tools, $prompts),
             'instructions'   => self::INSTRUCTIONS,
             'token'          => array(
                 'label'     => $context->token['label'],
@@ -33,6 +34,7 @@ final class ManifestAction extends Action {
             ),
             'error_codes'    => array_keys(ApiException::CODES),
             'tools'          => $tools,
+            'prompts'        => $prompts,
         );
     }
 }

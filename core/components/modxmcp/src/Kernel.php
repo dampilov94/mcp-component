@@ -254,7 +254,7 @@ final class Kernel {
         $meta = array();
         if ($requestId !== null) { $meta['request_id'] = $requestId; }
         try {
-            $meta['manifest'] = Manifest::hash(Manifest::tools($context));
+            $meta['manifest'] = Manifest::currentHash($context);
         } catch (\Throwable $e) {
             // A notification failure must not turn a completed action into an unknown outcome.
             $this->log('Manifest hash failed: ' . $e->getMessage());

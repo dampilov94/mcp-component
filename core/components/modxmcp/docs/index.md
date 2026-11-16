@@ -7,6 +7,8 @@ Call `modx_help` with a `topic` for a focused guide.
 - `migx` — MIGX: rows in a TV, named configurations (`migx_config`), binding a TV to a configuration.
 - `virtualpage` — VirtualPage: events, handlers and routes (`vp_event`, `vp_handler`, `vp_route`), the route tester.
 - `getting_started` — how to work on a site: orient, read, change safely, undo.
+- Scenarios: ready-made prompts (`study_site`, `audit`, `change_page`, `new_page_type`, `fix_errors`); in Claude Code
+  call them as `/mcp__modx__<name>`. See `getting_started`.
 
 Quick reference:
 

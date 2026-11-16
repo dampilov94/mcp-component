@@ -8,6 +8,7 @@ use ModxMCP\Context;
 final class Registry {
     const ACTIONS = array(
         ManifestAction::class,
+        PromptAction::class,
         CapabilitiesAction::class,
         SiteInfoAction::class,
         DescribeAction::class,

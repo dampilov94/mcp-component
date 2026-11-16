@@ -183,6 +183,10 @@ Stage 8 — drafts and Fenom:
   `makeUrl` / `| url` links; Cyrillic element names are recognised. Chunks and templates that
   pdoTools would compile are compiled with the site's own Fenom before saving (`lint_failed` with
   the line), and the audit has a `fenom_syntax` check. No check when pdoTools or Fenom is off.
+- Ready-made scenarios as MCP prompts, defined on the site and offered per token like tools:
+  `study_site`, `audit`, `change_page` (through a draft), `new_page_type`, `fix_errors`. In
+  Claude Code they are `/mcp__modx__<name>`. Arguments are passed to the model as quoted data;
+  every scenario ends with the same safety rules.
 
 Stage 7 — manager:
 

@@ -33,8 +33,22 @@ final class Manifest {
         return $tools;
     }
 
-    /** Changes whenever the tool list or any contract visible to this token changes. */
-    public static function hash(array $tools) {
-        return hash('sha256', json_encode($tools, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
+    /** @return array[] Prompt entries (name, title, description, arguments) this token may use. */
+    public static function prompts(Context $context) {
+        $prompts = array();
+        foreach ($context->prompts->all() as $prompt) {
+            if ($context->prompts->blockReason($prompt, $context) === null) { $prompts[] = $prompt->describe(); }
+        }
+        return $prompts;
+    }
+
+    /** Changes whenever the tool list, a prompt or any contract visible to this token changes. */
+    public static function hash(array $tools, array $prompts = array()) {
+        $visible = $prompts ? array('tools' => $tools, 'prompts' => $prompts) : $tools;
+        return hash('sha256', json_encode($visible, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
+    }
+
+    public static function currentHash(Context $context) {
+        return self::hash(self::tools($context), self::prompts($context));
     }
 }
