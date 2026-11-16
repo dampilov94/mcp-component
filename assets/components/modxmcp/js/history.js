@@ -136,7 +136,7 @@ Ext.onReady(function () {
     add(root,
         bar,
         add(el('div', 'h-body'),
-            add(el('div', 'h-main'), tableBox, pager, detail),
+            add(el('div', 'h-main'), tableBox, pager),
             side));
 
     // ---- the table --------------------------------------------------------------------
@@ -222,6 +222,23 @@ Ext.onReady(function () {
         });
         add(table, body);
         add(tableBox, table);
+        // The opened changeset stays open under its row when the table is redrawn.
+        if (state.openId !== null && !placeDetail(state.openId)) { state.openId = null; clear(detail); }
+    }
+
+    // The detail is shown right under the clicked row (a panel below a 50-row table would be off screen).
+    var detailRow = null;
+    function placeDetail(id) {
+        var tr = tableBox.querySelector('tr[data-id="' + id + '"]');
+        if (!tr) { return false; }
+        if (!detailRow) {
+            detailRow = el('tr', 'h-detailrow');
+            var cell = el('td');
+            cell.colSpan = 9;
+            add(detailRow, add(cell, detail));
+        }
+        tr.parentNode.insertBefore(detailRow, tr.nextSibling);
+        return true;
     }
 
     function drawPager() {
@@ -276,6 +293,7 @@ Ext.onReady(function () {
     function closeDetail() {
         state.openId = null;
         clear(detail);
+        if (detailRow && detailRow.parentNode) { detailRow.parentNode.removeChild(detailRow); }
         Array.prototype.forEach.call(tableBox.querySelectorAll('tr.sel'), function (tr) { tr.className = ''; });
     }
 
@@ -285,6 +303,7 @@ Ext.onReady(function () {
             tr.className = +tr.getAttribute('data-id') === id ? 'sel' : '';
         });
         clear(detail);
+        placeDetail(id);
         add(detail, el('p', 'h-muted', t('loading')));
         request('mgr/history/get', { id: id }, function (r) { drawDetail(r.object); }, function (r) {
             clear(detail);
