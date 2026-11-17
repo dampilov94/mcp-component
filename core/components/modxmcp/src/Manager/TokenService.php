@@ -70,7 +70,8 @@ final class TokenService {
     /**
      * Create a token.
      * @param array $input label, scope, plan_only, expires_days (0 = never, up to 3650), denied_groups (list or comma-separated)
-     * @return array the public record plus `token` (shown once) and `config` (a ready .mcp.json text)
+     * @return array the public record plus `token` (shown once), `configs` (ready snippets per client, see configs())
+     *               and `config` (the Node snippet, kept for older callers)
      */
     public function create(array $input) {
         $label = $this->label(isset($input['label']) ? $input['label'] : '');
@@ -88,7 +89,8 @@ final class TokenService {
             throw new ApiException('validation_failed', $e->getMessage());
         }
         $this->modx->logManagerAction('modxmcp_create_token', 'modxmcp_token', $record['id']);
-        $record['config'] = $this->config($record['token']);
+        $record['configs'] = $this->configs($record['token']);
+        $record['config'] = $record['configs'][count($record['configs']) - 1]['text'];
         return $record;
     }
 
@@ -138,15 +140,47 @@ final class TokenService {
         return rtrim($base, '/') . '/api.php';
     }
 
-    /** A .mcp.json text for a client of this site. */
-    public function config($token) {
-        $config = array('mcpServers' => array('modx' => array(
-            'command' => 'npx',
-            'args'    => array('-y', 'github:dampilov94/mcp-component'),
-            'env'     => array('MODX_MCP_SITE_URL' => $this->endpoint(), 'MODX_MCP_TOKEN' => (string) $token),
-        )));
-        $text = json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        // json_encode indents with four spaces; a .mcp.json is usually written with two. Strings never contain a line break.
+    /**
+     * Ready connection snippets for the clients that speak MCP over HTTP, and for the Node bridge (last).
+     * Each entry: id, title, file (where the text goes), text. The formats follow each client's own documentation.
+     * @return array[]
+     */
+    public function configs($token) {
+        $token = (string) $token;
+        $url = $this->endpoint();
+        $bearer = array('Authorization' => 'Bearer ' . $token);
+        $out = array();
+        $out[] = array('id' => 'claude_code', 'title' => 'Claude Code', 'file' => '.mcp.json',
+            'text' => self::json(array('mcpServers' => array('modx' => array('type' => 'http', 'url' => $url, 'headers' => $bearer)))));
+        $out[] = array('id' => 'codex', 'title' => 'Codex CLI', 'file' => '~/.codex/config.toml',
+            'text' => "[mcp_servers.modx]\nurl = " . json_encode($url, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+                . "\nbearer_token_env_var = \"MODX_MCP_TOKEN\"\n# export MODX_MCP_TOKEN=" . $token);
+        $out[] = array('id' => 'gemini', 'title' => 'Gemini CLI', 'file' => 'settings.json',
+            'text' => self::json(array('mcpServers' => array('modx' => array('httpUrl' => $url, 'headers' => $bearer)))));
+        $out[] = array('id' => 'opencode', 'title' => 'opencode', 'file' => 'opencode.json',
+            'text' => self::json(array('$schema' => 'https://opencode.ai/config.json', 'mcp' => array('servers' => array('modx' => array(
+                'type' => 'remote', 'url' => $url, 'oauth' => false, 'headers' => $bearer))))));
+        $out[] = array('id' => 'cursor', 'title' => 'Cursor', 'file' => '.cursor/mcp.json',
+            'text' => self::json(array('mcpServers' => array('modx' => array('url' => $url, 'headers' => $bearer)))));
+        $out[] = array('id' => 'vscode', 'title' => 'VS Code', 'file' => '.vscode/mcp.json',
+            'text' => self::json(array('servers' => array('modx' => array('type' => 'http', 'url' => $url, 'headers' => $bearer)))));
+        $out[] = array('id' => 'cline', 'title' => 'Cline', 'file' => 'cline_mcp_settings.json',
+            'text' => self::json(array('mcpServers' => array('modx' => array('type' => 'streamableHttp', 'url' => $url, 'headers' => $bearer)))));
+        $out[] = array('id' => 'zed', 'title' => 'Zed', 'file' => 'settings.json',
+            'text' => self::json(array('context_servers' => array('modx' => array('url' => $url, 'headers' => $bearer)))));
+        $out[] = array('id' => 'node', 'title' => 'Через Node (Claude Desktop и клиенты без HTTP)', 'file' => '.mcp.json',
+            'text' => self::json(array('mcpServers' => array('modx' => array(
+                'command' => 'npx',
+                'args'    => array('-y', 'github:dampilov94/mcp-component'),
+                'env'     => array('MODX_MCP_SITE_URL' => $url, 'MODX_MCP_TOKEN' => $token),
+            )))));
+        return $out;
+    }
+
+    /** Pretty JSON with two-space indents. */
+    private static function json(array $value) {
+        $text = json_encode($value, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        // json_encode indents with four spaces; client files are usually written with two. Strings never contain a line break.
         return preg_replace_callback('/^( {4})+/m', function ($m) { return str_repeat('  ', strlen($m[0]) / 4); }, $text);
     }
 

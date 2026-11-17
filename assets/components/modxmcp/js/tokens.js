@@ -118,6 +118,38 @@ Ext.onReady(function () {
         return add(el('div', 'k-copyblock'), head, pre);
     }
 
+    // The ready snippets of a new token: a select "Клиент" picks the client, the box shows its text.
+    function configBlock(rec) {
+        var configs = rec.configs || [];
+        if (!configs.length) { return copyBlock(t('result_config'), rec.config || '', ''); }
+        var wrap = el('div', 'k-copyblock');
+        var select = el('select');
+        configs.forEach(function (item) {
+            var option = el('option', '', item.id === 'node' ? t('client_node') : item.title);
+            option.value = item.id;
+            select.appendChild(option);
+        });
+        select.value = configs[0].id;
+        var pre = el('pre', 'k-pre', '');
+        var file = el('span', 'k-muted');
+        var status = el('span', 'k-muted');
+        function show() {
+            var current = configs[0];
+            configs.forEach(function (item) { if (item.id === select.value) { current = item; } });
+            pre.textContent = current.text;
+            file.textContent = t('result_config_file', { file: current.file });
+            status.textContent = '';
+        }
+        select.addEventListener('change', show);
+        show();
+        add(wrap,
+            add(el('div', 'k-copyhead'), el('b', '', t('f_client')), select,
+                button(t('btn_copy'), '', function () { copyNode(pre, status); }), status),
+            add(el('p', 'k-muted'), file),
+            pre);
+        return wrap;
+    }
+
     // ---- layout -----------------------------------------------------------------------
     var statEl = el('span', 'k-stat');
     var createBtn = button(t('btn_create'), 'k-primary', function () { toggleCreate(); });
@@ -341,7 +373,8 @@ Ext.onReady(function () {
             el('p', 'k-warn', t('result_once')),
             copyBlock(t('result_token'), rec.token || '', 'k-token'),
             el('p', 'k-muted', t('result_config_hint')),
-            copyBlock(t('result_config'), rec.config || '', ''));
+            el('h4', '', t('result_config')),
+            configBlock(rec));
         if (resultBox.scrollIntoView) { resultBox.scrollIntoView(); }
     }
 

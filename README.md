@@ -9,13 +9,61 @@
 
 1. Скачать `modxmcp-*.transport.zip` из **Releases** и установить: **Дополнения → Установщик → Загрузить пакет**.
 2. Открыть **Дополнения → modxMCP → Токены** и создать токен с нужным уровнем доступа (`read`,
-   `content`, `develop` или `admin`). Токен показывается один раз, вместе с готовым `.mcp.json`
-   для этого сайта. При обновлении с 1.x прежний токен продолжает работать как `admin`.
+   `content`, `develop` или `admin`). Токен показывается один раз, вместе с готовыми настройками
+   клиента для этого сайта (выбор клиента на странице). При обновлении с 1.x прежний токен продолжает работать как `admin`.
 
 ## Подключение
 
-Скопировать готовый `.mcp.json` со страницы «Токены» в проект (или указать адрес сайта и токен
-вручную, как ниже), затем переподключить MCP (`/mcp`):
+### По HTTP, без Node (основной способ)
+
+Сайт сам отвечает по MCP (Streamable HTTP) на том же адресе `api.php`, с теми же токенами.
+Клиенту нужны адрес и заголовок `Authorization: Bearer <токен>`. Готовый текст для каждого
+клиента показывается на странице «Токены» при создании токена. Пример, Claude Code
+(`.mcp.json` в папке проекта; затем `/mcp`):
+
+```json
+{
+  "mcpServers": {
+    "modx": {
+      "type": "http",
+      "url": "http://САЙТ/assets/components/modxmcp/api.php",
+      "headers": { "Authorization": "Bearer ваш-токен" }
+    }
+  }
+}
+```
+
+| Клиент | Файл | Ключи |
+|---|---|---|
+| Claude Code | `.mcp.json` | `mcpServers.modx`: `type: "http"`, `url`, `headers` |
+| Codex CLI | `~/.codex/config.toml` | `[mcp_servers.modx]`: `url`, `bearer_token_env_var` (токен в переменной `MODX_MCP_TOKEN`) |
+| Gemini CLI | `settings.json` | `mcpServers.modx`: `httpUrl`, `headers` |
+| opencode | `opencode.json` | `mcp.servers.modx`: `type: "remote"`, `url`, `oauth: false`, `headers` |
+| Cursor | `.cursor/mcp.json` | `mcpServers.modx`: `url`, `headers` |
+| VS Code | `.vscode/mcp.json` | `servers.modx`: `type: "http"`, `url`, `headers` |
+| Cline | `cline_mcp_settings.json` | `mcpServers.modx`: `type: "streamableHttp"`, `url`, `headers` |
+| Zed | `settings.json` | `context_servers.modx`: `url`, `headers` |
+
+Особенности HTTP-режима: список инструментов обновляется при переподключении клиента (мост
+Node узнаёт об изменениях сразу); моста нет, поэтому нет и запоминания ревизий между
+вызовами, передавайте `expected_revision` сами. Заголовок `Origin` принимается только с
+адресом самого сайта или из настройки `modxmcp.allowed_origins` (запросы без `Origin`,
+то есть консольных клиентов, это не касается). Подключения claude.ai и ChatGPT (OAuth)
+не поддерживаются.
+
+Клиенты без поддержки HTTP (в том числе Claude Desktop) подключаются через `mcp-remote`:
+
+```
+npx mcp-remote http://САЙТ/assets/components/modxmcp/api.php --transport http-only --header "Authorization:${AUTH_HEADER}"
+```
+
+с `AUTH_HEADER="Bearer ваш-токен"` в `env` сервера (для сайта на простом HTTP добавьте
+`--allow-http`).
+
+### Через Node (мост `modx-mcp`)
+
+Клиенты без HTTP могут запускать мост. Скопировать вариант «Через Node» со страницы «Токены»
+в проект (или указать адрес сайта и токен вручную, как ниже), затем переподключить MCP (`/mcp`):
 
 ```json
 {
