@@ -50,7 +50,8 @@ final class Runner {
             } else {
                 $result = $spec['text'];
             }
-            if (is_string($result) && strpos($result, '[[') !== false) {
+            // A text is always parsed: a parser extended by pdoTools/Fenom handles syntax other than [[tags]].
+            if (is_string($result) && ($spec['mode'] === 'text' || strpos($result, '[[') !== false)) {
                 // What a page would finally show: the two passes MODX makes for a page, the cacheable tags and then the
                 // uncacheable ones — also over the output of a snippet or chunk, whose [[!tags]] are otherwise left for
                 // the page. Tags that cannot be processed stay in the text (the third pass that removes them is left

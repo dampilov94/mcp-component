@@ -317,10 +317,13 @@ final class GraphBuilder {
             if ($verified) {
                 $prefix = ($n['type'] === 'chunk') ? '[[$' : (($n['type'] === 'tv') ? '[[*' : '[[');
                 $unc    = ($n['type'] === 'chunk') ? '[[!$' : (($n['type'] === 'tv') ? '[[!*' : '[[!');
+                // The name is text, not a pattern: % and _ in it match themselves. A deleted page does not use anything.
+                $escaped = strtr($n['name'], array('\\' => '\\\\', '%' => '\\%', '_' => '\\_'));
                 $q = $this->modx->newQuery('modResource');
+                $q->where(array('deleted' => 0));
                 $q->where(array(array(
-                    'content:LIKE'    => '%' . $prefix . $n['name'] . '%',
-                    'OR:content:LIKE' => '%' . $unc . $n['name'] . '%',
+                    'content:LIKE'    => '%' . $prefix . $escaped . '%',
+                    'OR:content:LIKE' => '%' . $unc . $escaped . '%',
                 )));
                 if ((int) $this->modx->getCount('modResource', $q) > 0) { continue; }
             }
@@ -478,7 +481,8 @@ final class GraphBuilder {
     private function scanModxTags($content) {
         $refs = array();
         if (!is_string($content) || $content === '' || strpos($content, '[[') === false) { return $refs; }
-        $s = $content;
+        // A comment tag [[- … ]] may hold other tags; none of them is used.
+        $s = self::withoutComments($content);
         for ($pass = 0; $pass < 12; $pass++) {
             if (!preg_match_all('/\[\[([^\[\]]*)\]\]/s', $s, $m, PREG_SET_ORDER)) { break; }
             foreach ($m as $hit) {
@@ -489,6 +493,25 @@ final class GraphBuilder {
             if (!$cnt) { break; }
         }
         return $refs;
+    }
+
+    /** The text without its comment tags [[- … ]], nested tags included (each is replaced by a space). */
+    private static function withoutComments($text) {
+        if (strpos($text, '[[-') === false) { return $text; }
+        $out = '';
+        $length = strlen($text);
+        $i = 0;
+        while ($i < $length) {
+            if (substr_compare($text, '[[-', $i, 3) !== 0) { $out .= $text[$i++]; continue; }
+            $depth = 0;
+            while ($i < $length) {
+                if (substr_compare($text, '[[', $i, 2) === 0) { $depth++; $i += 2; }
+                elseif (substr_compare($text, ']]', $i, 2) === 0) { $depth--; $i += 2; if ($depth === 0) { break; } }
+                else { $i++; }
+            }
+            $out .= ' ';
+        }
+        return $out;
     }
 
     /**

@@ -6635,6 +6635,9 @@ check('run text: cacheable and uncacheable tags are processed, a missing chunk s
     && $r['output'] === "Главная — Привет, Мир\nПривет, мир [[\$нет]]" && $r['unparsed_count'] === 1 && $r['unparsed_tags'] === array(array('tag' => '[[$нет]]', 'line' => 2)));
 check('run text: the cacheable pass, then the uncacheable one, and never the pass that removes unprocessed tags',
     $uSite->parser->passes[0] === array(false, false, 10) && in_array(array(true, false, 10), $uSite->parser->passes, true) && !in_array(true, array_column($uSite->parser->passes, 1), true));
+$uSite->parser->passes = array();
+$r = $call($uCtx(), 'run', array('text' => "{\$x} без квадратных скобок"));
+check('run text: the parser passes also run for a text without [[', $r['ok'] === true && $r['output'] === "{\$x} без квадратных скобок" && $uSite->parser->passes === array(array(false, false, 10), array(true, false, 10)));
 $r = $call($uCtx(), 'run', array('snippet' => 'tags'));
 check('run: unparsed tags carry their line', $r['unparsed_tags'] === array(array('tag' => '[[$нет]]', 'line' => 2), array('tag' => '[[+пусто]]', 'line' => 2)));
 $r = $call($uCtx(), 'run', array('snippet' => 'manytags'));
@@ -7746,6 +7749,57 @@ check('cleanup: the resolver runs it on upgrades only', (function () {
     return preg_match('/if \(\$action === xPDOTransport::ACTION_UPGRADE\) \{[^}]*LegacyCleanup::run/s', $source) === 1;
 })());
 check('cleanup: the 1.x model directory is gone from the package', !is_dir(dirname(__DIR__, 2) . '/core/components/modxmcp/model'));
+
+// --- Small fixes (task 35): TV ranks, comment tags and LIKE escaping in the graph ---
+$tvDir = $siteDir . '/small-fixes';
+mkdir($tvDir . '/core', 0700, true);
+$tvSite = fakeSite($tvDir);
+$tvDev = new Context($tvSite, array('scope' => 'develop') + $dev->token, $dev->corePath, function () {});
+$tvDev->sessionId = 'small-fixes-session';
+foreach (array(1 => 'Первый', 2 => 'Второй', 3 => 'Третий') as $tvTplId => $tvTplName) {
+    $tvSite->store('modTemplate', array('id' => $tvTplId, 'templatename' => $tvTplName, 'content' => '', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => '', 'icon' => ''));
+}
+$tvMade = $call($tvDev, 'create', array('kind' => 'tv', 'fields' => array('name' => 'ранги', 'type' => 'text'), 'relations' => array('templates' => array(1, 2))));
+$tvSite->getObject('modTemplateVarTemplate', array('tmplvarid' => $tvMade['id'], 'templateid' => 1))->fromArray(array('rank' => 4), '', true, true);
+foreach (array(1 => 4, 2 => 7) as $tvTplId => $tvRank) {
+    $tvRow = $tvSite->getObject('modTemplateVarTemplate', array('tmplvarid' => $tvMade['id'], 'templateid' => $tvTplId));
+    $tvRow->set('rank', $tvRank);
+    $tvRow->save();
+}
+$call($tvDev, 'update', array('kind' => 'tv', 'id' => $tvMade['id'], 'relations' => array('templates' => array(2, 3))));
+$tvRanks = array();
+foreach ($tvSite->getCollection('modTemplateVarTemplate', array('tmplvarid' => $tvMade['id'])) as $tvRow) { $tvRanks[(int) $tvRow->get('templateid')] = (int) $tvRow->get('rank'); }
+ksort($tvRanks);
+check('tv: templates that stay attached keep their rank, a new one gets 0, a removed one is gone', $tvRanks === array(2 => 7, 3 => 0));
+$call($tvDev, 'undo', array('last' => 1, 'confirm' => true));
+$tvRanks = array();
+foreach ($tvSite->getCollection('modTemplateVarTemplate', array('tmplvarid' => $tvMade['id'])) as $tvRow) { $tvRanks[(int) $tvRow->get('templateid')] = (int) $tvRow->get('rank'); }
+ksort($tvRanks);
+check('tv: undo restores the ranks as they were', $tvRanks === array(1 => 4, 2 => 7));
+
+$gcDir = $siteDir . '/graph-small';
+mkdir($gcDir . '/core', 0700, true);
+$gcSite = fakeSite($gcDir);
+$gcRead = new Context($gcSite, array('scope' => 'read') + $dev->token, $dev->corePath, function () {});
+$gcSite->store('modTemplate', array('id' => 1, 'templatename' => 'Основной', 'content' => "[[- [[\$призрак]] [[\$в_комментарии]] ]]\n[[\$живой]]"));
+foreach (array(1 => 'живой', 2 => 'в_комментарии', 3 => 'a_b', 4 => 'used_in_page', 5 => 'only_deleted') as $gcId => $gcName) {
+    $gcSite->store('modChunk', array('id' => $gcId, 'name' => $gcName, 'snippet' => 'текст', 'category' => 0));
+}
+$gcSite->store('modResource', array('id' => 10, 'pagetitle' => 'Страница', 'template' => 1, 'deleted' => 0, 'published' => 1, 'content' => 'Текст [[$aXb]] и [[$used_in_page]]'));
+$gcSite->store('modResource', array('id' => 11, 'pagetitle' => 'Удалённая', 'template' => 1, 'deleted' => 1, 'published' => 0, 'content' => '[[$only_deleted]]'));
+$gcGraph = $call($gcRead, 'dependency_graph');
+$gcOrphans = array_column($gcGraph['orphans'], 'name');
+sort($gcOrphans);
+$gcExpected = array('a_b', 'only_deleted', 'в_комментарии');
+sort($gcExpected);
+check('graph: a chunk named only in a comment tag is an orphan, not used', $gcOrphans === $gcExpected);
+check('graph: a chunk called only inside a comment tag is not reported missing', $gcGraph['missing'] === array());
+check('graph: the edges leave out everything inside the comment', array_column(array_filter($gcGraph['edges'], function ($e) { return $e[0] === 0; }), 1) !== array() && count(array_filter($gcGraph['edges'], function ($e) { return $e[0] === 0; })) === 1);
+check('graph: _ in a name is not a wildcard, and a deleted page uses nothing', in_array('a_b', $gcOrphans, true) && in_array('only_deleted', $gcOrphans, true) && !in_array('used_in_page', $gcOrphans, true));
+check('graph: comment tags are skipped by the audit link scan too', (function () use ($gcSite) {
+    $gcSite->store('modResource', array('id' => 12, 'pagetitle' => 'Ссылки', 'template' => 1, 'deleted' => 0, 'published' => 1, 'content' => '[[- [[~999]] ]] [[~10]]'));
+    return (new \ModxMCP\Graph\GraphBuilder($gcSite))->linkTargets('[[- [[~999]] ]] [[~10]] [[-- [[~998]] ]]') === array(10);
+})());
 
 echo $failures ? "{$failures} of {$checks} PHP checks failed.\n" : "PHP: {$checks} checks passed.\n";
 exit($failures ? 1 : 0);

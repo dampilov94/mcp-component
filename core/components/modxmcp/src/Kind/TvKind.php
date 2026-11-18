@@ -83,10 +83,13 @@ final class TvKind extends Kind {
             $ids[$item] = true;
         }
         $id = (int) $object->get('id');
+        // A template that stays attached keeps its rank (the order of the TV tabs in the manager); a new one gets 0, as in MODX.
+        $ranks = array();
+        foreach ($modx->getCollection('modTemplateVarTemplate', array('tmplvarid' => $id)) as $existing) { $ranks[(int) $existing->get('templateid')] = $existing->get('rank'); }
         $modx->removeCollection('modTemplateVarTemplate', array('tmplvarid' => $id));
         foreach (array_keys($ids) as $template) {
             $row = $modx->newObject('modTemplateVarTemplate');
-            $row->fromArray(array('tmplvarid' => $id, 'templateid' => $template, 'rank' => 0), '', true, true);
+            $row->fromArray(array('tmplvarid' => $id, 'templateid' => $template, 'rank' => isset($ranks[$template]) ? $ranks[$template] : 0), '', true, true);
             if (!$row->save()) { throw new \RuntimeException('Cannot attach the TV to a template.'); }
         }
     }
