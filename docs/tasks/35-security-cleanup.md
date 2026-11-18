@@ -103,3 +103,67 @@ keep passing unchanged.
 
 `npm run check`, `npm test`. Commit after each numbered part (the host machine may sleep and
 interrupt you). Report as usual; say which MODX path rules you mirrored and from where.
+
+## Report
+
+Based on: main at 1ec3fd6
+
+Counts: `npm test` 37 pass before and after; `tests/php/run.php` 5141 checks before, 5221 after; `npm run check` passes.
+
+### Implemented
+
+1. **Static paths** (`src/Kind/StaticPath.php`, new). `resolveFor($modx, $static_file, $source)` mirrors `modElement::getSourceFile()` as read in
+   `modx-example-2-8-8/core/model/modx/modelement.class.php`: `[[++setting]]` tags are filled in (any other tag, a `://` scheme, `..` or an empty
+   path makes the path unresolvable and refused); a streaming media source (`is_stream`) puts `getBasePath()` in front; a path that does not exist as
+   given and has no source is taken below `element_static_path` / `components_path` (core/components). `allowed()` normalises with the realpath of the
+   nearest existing parent and requires: inside a root of `modxmcp.static_roots` (placeholders `{core_path}` etc. or relative to `base_path`; empty means the
+   default `{core_path}elements/,{core_path}components/,{assets_path}`), the lexical path starts with the root, the real path is the root's real path plus the
+   same tail (so no symlink anywhere), not in `{core_path}config|modxmcp-data|cache|packages`, name not matching `FileRoot::SECRET_NAMES`.
+   - Writes: `Objects::assertStaticWrite()` is called in `Objects::save()` (the chokepoint for create, update, duplicate, edit_code, replace, drafts, make_static) and
+     in `CreateAction`, `UpdateAction`, `DuplicateAction` before the dry-run branch. It looks at the result of the change (current values overridden by the columns
+     sent) when static, static_file, source or the code is touched and the element is static. `StaticFiles::makeStatic` checks the target before reserving a file.
+   - Reads: `Kind::effectiveContent()` returns the database column when the file is outside (a fifth value `true`; four-value callers are unaffected).
+     `Snapshot::capture()` flags the state `static_file_outside_roots` (only then, so no revision changes). Warnings in `modx_get`, `modx_view_code`, `modx_search`;
+     `modx_edit_code` refuses such an element.
+   - Undo: `Snapshot::restore()` does not write the file and calls `$object->setOption(xPDO::OPT_SETUP, true)` before `save()`, because `modElement::save()` itself
+     reads the file into the row or writes the content to it when static source fields change; the skipped file is reported through `Snapshot::takeNotes()` into the
+     undo warnings.
+   - Audit: check `static_outside_roots` (error), placed before `fenom_syntax` so `fenom_syntax` stays last; `scanned` counts static elements.
+   - Setting `modxmcp.static_roots` (area `modxmcp:security`, both lexicons), `modx_help` getting_started mentions the check.
+2. **Dead 1.x code.** `core/components/modxmcp/model/` deleted (grep found no reference: only text comments about other add-ons' `model/` dirs). Settings `audit_log` and
+   `component_code_roots` removed from build data, `Overview`, `controllers/index.class.php`, `home.tpl`, lexicons (also the label `modxmcp_cmp_audit_log`).
+   `src/Setup/LegacyCleanup.php` (new) is run by `resolve.token.php` on `ACTION_UPGRADE` only: removes the three token processors, `docs/acl.md`, `docs/minishop2.md`,
+   `docs/study_component.md` (the 1.x help files absent from `docs/` now, from `git log --diff-filter=D`), the `model/` directory, the two settings, and `versionx` from
+   `modxmcp.disabled_groups`; one log line per item; `logs/` and everything outside the component directory is untouched; a symlink is never followed.
+3. **Recorder.** `Kernel::servingApi()` (getter/setter) is set by `Kernel::handle()`; `Recorder::handle()` returns first thing when it is set.
+4. **Small fixes.** `TvKind::writeRelation('templates')` keeps ranks. `GraphBuilder`: `withoutComments()` removes `[[- ... ]]` with nested tags before scanning; the orphan LIKE
+   escapes `\ % _` and adds `deleted = 0`. `Verify\Runner`: text mode always runs both parser passes.
+
+### Deviations and judgement calls
+
+- `tests/php/FakeModx.php` changed: `fakeSite()` now sets `base_path`, `assets_path` and `modxmcp.static_roots = './'` so the older tests (static files anywhere under the site
+  directory) keep passing unchanged; my new block uses a site with the setting empty (the defaults). `FakeObject::getSourceFile()` now fills any `[[++x]]` tag and a streaming media
+  source's base path (it only knew `core_path`); `setOption()` and `xPDO::OPT_SETUP` added, and save() skips the file sync in setup mode like `modElement::save()`.
+- Existing assertions changed (2): the audit summary counts `array(3, 1, 3, 1, 1, 2, 1, 0)` became `... 0, 0)` for the new check; the manager overview test no longer asserts
+  `$ovData['audit_log']` (and the `modxmcp.audit_log` option passed in its fixture is gone), as the setting was removed.
+- The brief says the cleanup removes the 1.x help files on every upgrade; I gate those three (not the processors or settings) on the 1.x marker file `model/modxmcp.class.php`
+  existing, because a later stage may ship a help topic of the same name and a 2.x upgrade must not delete it; a test fails while a listed topic is shipped.
+- Real MODX: an absolute static path that does not exist yet resolves below `components_path` (`$_sourcePath . $filename`), so for a new file `[[++core_path]]config/x.tpl` really
+  resolves to `core/components//…/core/config/x.tpl` (inside the roots). I mirror that (it is what MODX writes). Existing files are checked at their real location, so the tests for
+  config, cache, symlinks and `.env` use existing files. The fake's `getSourceFile()` does not do this fallback.
+- `resolve($modx, $object)` uses the object's own `getSourceFile()` (MODX's answer) for reads; `resolveFor()` (my mirror) is used for writes where no object exists yet.
+- Undo notes go to the response warnings (there is no per-call note column for this).
+- AGENTS.md still calls `model/` "the backend of the manager dependency graph"; the graph processor uses `src/Graph`, so that sentence is outdated (not edited).
+
+### Verified only against the fake (check on the stand)
+
+- Real `modElement::save()` with `OPT_SETUP` on restore (read from source: it skips the file sync and file write); `getOldStaticFilePath()` still runs, so with
+  `static_elements_automate_*` on, changing the path of an element that currently points outside deletes that old (outside) file in MODX itself, in the update processors and
+  in a restore. Not guarded.
+- Media-source resolution (`initialize()`/`getBasePath()` with `basePathRelative`), `{core_path}`-style placeholders and symlink behaviour on the real file system/hosting.
+- Real processors' behaviour for refused paths (they never run: refusal happens before).
+
+### Open questions
+
+- Should `FileRoot` share the `SECRET_NAMES`/protected-directory list with `StaticPath` (now two lists of the same dirs)?
+- Existing sites with static files outside the default roots lose file reads until `modxmcp.static_roots` is widened (the audit check lists them); is a post-install notice wanted?
