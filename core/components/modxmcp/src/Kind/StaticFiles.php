@@ -21,6 +21,7 @@ final class StaticFiles {
         $dir = $root . '/' . $folder;
         if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) { throw new \RuntimeException('Cannot create static element directory.'); }
         if (strpos(realpath($dir) . '/', realpath($root) . '/') !== 0) { throw new ApiException('validation_failed', 'Static directory resolves outside core/elements.'); }
+        StaticPath::assertAllowed($context->modx, '[[++core_path]]elements/' . $folder . '/' . $slug . '.' . $ext, 0);
         $path = null;
         $handle = null;
         try {

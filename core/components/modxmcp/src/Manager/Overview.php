@@ -55,7 +55,6 @@ final class Overview {
             'endpoint'      => $tokens->endpoint(),
             'active_tokens' => $active,
             'auto_static'   => (bool) $this->modx->getOption('modxmcp.auto_static'),
-            'audit_log'     => (bool) $this->modx->getOption('modxmcp.audit_log'),
             'recent'        => $recent,
             'counts_24h'    => $counts,
             'dangerous'     => $this->dangerous(),

@@ -11,7 +11,7 @@ final class AuditSiteAction extends Action {
     public function group() { return 'verify'; }
     public function description() {
         return 'List concrete problems of the site, each tied to an object you can fix: links [[~id]] to missing or hidden pages, calls of '
-            . 'missing chunks and snippets, unused elements, static files that are gone, duplicate page addresses, PHP that does not parse, '
+            . 'missing chunks and snippets, unused elements, static files that are gone or outside modxmcp.static_roots, duplicate page addresses, PHP that does not parse, '
             . 'pages with a missing template. Read-only. Findings are candidates to check, not orders; a count above the listed findings means more exist.';
     }
     public function inputSchema() {

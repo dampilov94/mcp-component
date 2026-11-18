@@ -90,7 +90,6 @@ $_lang['modxmcp_cmp_token'] = 'API token';
 $_lang['modxmcp_cmp_token_set'] = 'set';
 $_lang['modxmcp_cmp_token_notset'] = 'not set — click Regenerate below';
 $_lang['modxmcp_cmp_auto_static'] = 'Auto-static';
-$_lang['modxmcp_cmp_audit_log'] = 'Audit log';
 $_lang['modxmcp_cmp_package_install'] = 'Package install';
 $_lang['modxmcp_cmp_on'] = 'On';
 $_lang['modxmcp_cmp_off'] = 'Off';

@@ -200,7 +200,8 @@ Rules that keep a live site safe:
 - `modx_audit_site {checks?, limit?}` lists concrete problems, each tied to an object: `broken_link`
   (a `[[~id]]` to a missing page is an error, to a deleted or unpublished one a warning),
   `missing_element`, `unused_element`, `static_file_missing`, `duplicate_alias`, `php_syntax`,
-  `missing_template`, `fenom_syntax` (a chunk or template whose Fenom does not compile; needs
+  `missing_template`, `static_outside_roots` (a static element whose file is outside the folders of
+  `modxmcp.static_roots`; the tools do not read such a file), `fenom_syntax` (a chunk or template whose Fenom does not compile; needs
   pdoTools). With pdoTools, Fenom calls (`{include 'chunk'}`, `{'chunk' | chunk}`,
   `{$_modx->runSnippet('name')}`, `makeUrl`) count as references in chunks and templates. `summary` gives the real `count` per check even when `limit` (default 50)
   lists fewer; `truncated` means a scan cap was hit. Findings are candidates to look at, not

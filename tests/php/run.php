@@ -6458,7 +6458,7 @@ $audit = $call($aRead, 'audit_site');
 $aBy = array();
 foreach ($audit['findings'] as $finding) { $aBy[$finding['check']][] = $finding; }
 $aOne = function ($check) use ($aBy) { return isset($aBy[$check]) && count($aBy[$check]) === 1 ? $aBy[$check][0] : null; };
-check('audit: summary counts every problem exactly once', array_column($audit['summary'], 'count') === array(3, 1, 3, 1, 1, 2, 1, 0) && array_keys($audit['summary']) === SiteAudit::CHECKS
+check('audit: summary counts every problem exactly once', array_column($audit['summary'], 'count') === array(3, 1, 3, 1, 1, 2, 1, 0, 0) && array_keys($audit['summary']) === SiteAudit::CHECKS
     && count($audit['findings']) === 12 && array_sum(array_column($audit['summary'], 'truncated')) === 0);
 check('audit: findings come in the order of the checks', array_values(array_unique(array_column($audit['findings'], 'check'))) === array('broken_link', 'missing_element', 'unused_element', 'static_file_missing', 'duplicate_alias', 'php_syntax', 'missing_template'));
 
@@ -6872,7 +6872,7 @@ check('tokens page: manager actions name the token id', $tkSite->managerActions[
 $ovDir = sys_get_temp_dir() . '/modxmcp-overview-' . bin2hex(random_bytes(6));
 mkdir($ovDir . '/core', 0700, true);
 $ovSite = fakeSite($ovDir, array('site_url' => 'https://example.test/', 'assets_url' => '/assets/', 'modxmcp.allow_run' => '1', 'modxmcp.allow_run_processor' => '0',
-    'modxmcp.history_track_manager' => 1, 'modxmcp.lint_php' => '0', 'modxmcp.allowed_ips' => ' 10.0.0.1, 10.0.0.2 ', 'modxmcp.audit_log' => true));
+    'modxmcp.history_track_manager' => 1, 'modxmcp.lint_php' => '0', 'modxmcp.allowed_ips' => ' 10.0.0.1, 10.0.0.2 '));
 $ovSite->store('modUser', array('id' => 2, 'username' => 'Иванов', 'primary_group' => 0));
 $ovSite->user = $ovSite->getObject('modUser', 2);
 $ovOverview = new Overview($ovSite, $ovSite->user);
@@ -6903,7 +6903,7 @@ check('overview: five newest changesets with their authors and summaries', array
     && $ovData['recent'][0]['author'] === 'Иванов' && $ovData['recent'][1]['author'] === 'Рабочий' && $ovData['recent'][0]['source'] === 'manager' && $ovData['recent'][3]['source'] === 'external');
 check('overview: counts of the last 24 hours by source leave out older changesets', $ovData['counts_24h'] === array('mcp' => 3, 'manager' => 2, 'external' => 0));
 check('overview: active tokens leave out revoked ones, the rest of the status', $ovData['active_tokens'] === 2 && $ovData['enabled'] === true && $ovData['version'] === Kernel::VERSION
-    && $ovData['endpoint'] === 'https://example.test/assets/components/modxmcp/api.php' && $ovData['audit_log'] === true && $ovData['auto_static'] === true);
+    && $ovData['endpoint'] === 'https://example.test/assets/components/modxmcp/api.php' && $ovData['auto_static'] === true);
 check('overview: the result is plain JSON data without secrets', strpos(json_encode($ovData), 'mcp_') === false && json_decode(json_encode($ovData), true) === $ovData);
 
 // --- Drafts ---
@@ -7504,6 +7504,155 @@ check('prompts: texts are Russian and every tool they name exists', (function ()
     }
     return true;
 })());
+
+// --- Static paths and cleanup (task 35) ---
+$spDir = $siteDir . '/static-paths';
+foreach (array('core/elements/chunks', 'core/config', 'core/cache', 'core/components/shop', 'assets/inc', 'outside', 'extra') as $spSub) { mkdir($spDir . '/' . $spSub, 0755, true); }
+file_put_contents($spDir . '/core/config/config.inc.php', '<?php // DB PASSWORD');
+file_put_contents($spDir . '/outside/notes.tpl', 'SECRET-OUTSIDE');
+file_put_contents($spDir . '/outside/.env', 'KEY=1');
+file_put_contents($spDir . '/extra/widened.tpl', 'WIDENED-FILE');
+file_put_contents($spDir . '/outside/other.tpl', 'OTHER-FILE');
+file_put_contents($spDir . '/core/cache/exists.tpl', 'CACHE-FILE');
+file_put_contents($spDir . '/assets/inc/exists.tpl', 'ASSETS-FILE');
+$spRoots = ModxMCP\Kind\StaticPath::DEFAULT_ROOTS;
+$spSite = fakeSite($spDir, array('modxmcp.static_roots' => ''));
+$spSite->store('sources.modMediaSource', array('id' => 5, 'name' => 'Config', 'class_key' => 'sources.modFileMediaSource', 'is_stream' => 1, 'basePath' => $spDir . '/core/config/'));
+$spSite->store('sources.modMediaSource', array('id' => 6, 'name' => 'Whole site', 'class_key' => 'sources.modFileMediaSource', 'is_stream' => 1, 'basePath' => $spDir . '/'));
+$spSite->store('sources.modMediaSource', array('id' => 7, 'name' => 'Assets', 'class_key' => 'sources.modFileMediaSource', 'is_stream' => 1, 'basePath' => $spDir . '/assets/'));
+$spCtx = function ($scope = 'develop') use ($spSite, $dev) {
+    $c = new Context($spSite, array('scope' => $scope) + $dev->token, $dev->corePath, function () {});
+    $c->sessionId = 'static-paths-session';
+    return $c;
+};
+$spDev = $spCtx();
+$spTry = function ($label, array $fields, $allowed, $op = 'create', $id = null) use ($call, $spCtx) {
+    $c = $spCtx();
+    try {
+        $r = $op === 'create' ? $call($c, 'create', array('kind' => 'chunk', 'fields' => $fields + array('name' => 'sp ' . md5(json_encode($fields) . $label), 'content' => 'x', 'static' => true)))
+            : $call($c, 'update', array('kind' => 'chunk', 'id' => $id, 'fields' => $fields));
+        check("static paths: {$label}", $allowed);
+        return $r;
+    } catch (ApiException $e) {
+        check("static paths: {$label}", !$allowed && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'modxmcp.static_roots') !== false);
+        return null;
+    }
+};
+// allowed places, Cyrillic names
+$spTry('core/elements (setting tag, Cyrillic name) works', array('static_file' => '[[++core_path]]elements/chunks/привет.tpl'), true);
+check('static paths: the file was written', file_get_contents($spDir . '/core/elements/chunks/привет.tpl') === 'x');
+$spTry('core/components works', array('static_file' => '[[++core_path]]components/shop/файл.tpl'), true);
+$spTry('assets works', array('static_file' => '[[++assets_path]]inc/блок.tpl'), true);
+$spTry('absolute path inside a root works', array('static_file' => $spDir . '/assets/inc/abs.tpl'), true);
+$spTry('media source below assets works', array('static_file' => 'inc/src.tpl', 'source' => 7), true);
+// refused places
+$spCreated = $spSite->getCount('modChunk');
+$spTry('config.inc.php through the setting tag', array('static_file' => '[[++core_path]]config/config.inc.php'), false);
+$spTry('traversal out of elements', array('static_file' => '[[++core_path]]elements/../config/config.inc.php'), false);
+$spTry('traversal in a relative path', array('static_file' => '../../outside/notes.tpl'), false);
+$spTry('absolute path outside the roots', array('static_file' => $spDir . '/outside/notes.tpl'), false);
+$spTry('a file of the site root', array('static_file' => $spDir . '/objects.json'), false);
+$spTry('media source on core/config', array('static_file' => 'config.inc.php', 'source' => 5), false);
+$spTry('media source on the site root, pointing at core/config', array('static_file' => 'core/config/config.inc.php', 'source' => 6), false);
+$spTry('media source on the site root, outside the roots', array('static_file' => 'outside/notes.tpl', 'source' => 6), false);
+$spTry('a credentials file name inside a root', array('static_file' => '[[++assets_path]]inc/.env'), false);
+$spTry('config.core.php inside assets', array('static_file' => '[[++assets_path]]config.core.php'), false);
+$spTry('an existing file in the cache directory', array('static_file' => '[[++core_path]]cache/exists.tpl'), false);
+$spTry('a stream wrapper', array('static_file' => 'php://filter/resource=' . $spDir . '/assets/a.tpl'), false);
+$spTry('another kind of tag', array('static_file' => '[[$chunk]]a.tpl'), false);
+$spTry('an empty path', array('static_file' => ''), false);
+if (function_exists('symlink')) {
+    symlink($spDir . '/outside', $spDir . '/core/elements/linked');
+    symlink($spDir . '/assets/inc', $spDir . '/core/elements/inner-link');
+    $spTry('a symlinked directory leading outside', array('static_file' => '[[++core_path]]elements/linked/other.tpl'), false);
+    $spTry('a symlinked directory leading inside the roots', array('static_file' => '[[++core_path]]elements/inner-link/exists.tpl'), false);
+}
+check('static paths: refused writes created nothing', $spSite->getCount('modChunk') === $spCreated);
+// update, flipping to static, source
+$spPlain = $call($spDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'sp plain', 'content' => 'plain', 'static' => false, 'static_file' => $spDir . '/outside/notes.tpl')));
+$spTry('update: pointing an element outside', array('static_file' => '[[++core_path]]config/config.inc.php', 'static' => true), false, 'update', $spPlain['id']);
+$spTry('update: switching static on with the stored outside path', array('static' => true), false, 'update', $spPlain['id']);
+$spTry('update: the stored outside path is fine while the element is not static', array('description' => 'd'), true, 'update', $spPlain['id']);
+$spTry('update: a media source that leads outside', array('source' => 6, 'static_file' => 'outside/notes.tpl', 'static' => true), false, 'update', $spPlain['id']);
+check('static paths: refused update changed nothing', $call($spDev, 'get', array('kind' => 'chunk', 'id' => $spPlain['id']))['fields']['static'] === false);
+$e = throws('static paths: dry run of a create is refused too', ApiException::class, function () use ($call, $spDev) {
+    $call($spDev, 'create', array('kind' => 'chunk', 'dry_run' => true, 'fields' => array('name' => 'dry', 'static' => true, 'static_file' => '[[++core_path]]config/config.inc.php')));
+});
+// duplicate of an element whose file is outside
+$spSite->store('modChunk', array('id' => 900, 'name' => 'Снаружи', 'snippet' => 'DB-COPY', 'static' => 1, 'static_file' => $spDir . '/outside/notes.tpl', 'source' => 0, 'category' => 0, 'description' => '', 'locked' => 0, 'properties' => null));
+$spSite->store('modSnippet', array('id' => 900, 'name' => 'Снаружи сниппет', 'snippet' => 'return "DB-COPY";', 'static' => 1, 'static_file' => '[[++core_path]]config/config.inc.php', 'source' => 0, 'category' => 0, 'description' => '', 'locked' => 0, 'properties' => null));
+$spOut = $spCtx();
+$spGot = $call($spOut, 'get', array('kind' => 'chunk', 'id' => 900));
+check('static outside: get returns the database copy, not the file', $spGot['fields']['content'] === 'DB-COPY' && strpos(json_encode($spGot), 'SECRET-OUTSIDE') === false
+    && count($spOut->warnings) === 1 && strpos($spOut->warnings[0], 'outside modxmcp.static_roots') !== false);
+$spOut = $spCtx();
+$spView = $call($spOut, 'view_code', array('kind' => 'chunk', 'id' => 900));
+check('static outside: view_code shows the database copy with a warning', strpos($spView['numbered'], 'DB-COPY') !== false && strpos($spView['numbered'], 'SECRET') === false && count($spOut->warnings) === 1);
+$spSnip = $call($spCtx(), 'get', array('kind' => 'snippet', 'id' => 900));
+check('static outside: a snippet pointing at config.inc.php does not reveal it', strpos(json_encode($spSnip), 'DB PASSWORD') === false && $spSnip['fields']['content'] === 'return "DB-COPY";');
+$spSearch = $call($spCtx(), 'search', array('query' => 'SECRET-OUTSIDE'));
+check('static outside: search does not find text of the file', $spSearch['objects'] === 0);
+$spOut = $spCtx();
+$spSearch = $call($spOut, 'search', array('query' => 'DB-COPY'));
+check('static outside: search finds the database copy and says so', $spSearch['objects'] === 2 && count($spOut->warnings) === 1);
+$spState = ModxMCP\Journal\Snapshot::capture($spSite, $spOut->kinds->get('chunk'), 900);
+check('static outside: the snapshot holds no bytes of the file and is flagged', strpos(ModxMCP\Journal\Snapshot::encode($spState), 'SECRET-OUTSIDE') === false
+    && $spState['static_file_outside_roots'] === true && $spState['fields']['snippet'] === 'DB-COPY');
+$e = throws('static outside: writing its code is refused', ApiException::class, function () use ($call, $spDev) {
+    $call($spDev, 'update', array('kind' => 'chunk', 'id' => 900, 'fields' => array('content' => 'new')));
+});
+check('static outside: refusal names the roots', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'modxmcp.static_roots') !== false);
+throws('static outside: edit_code is refused', ApiException::class, function () use ($call, $spDev) {
+    $call($spDev, 'edit_code', array('kind' => 'chunk', 'id' => 900, 'edits' => array(array('start_line' => 1, 'new_text' => 'x'))));
+});
+check('static outside: the file was never touched', file_get_contents($spDir . '/outside/notes.tpl') === 'SECRET-OUTSIDE' && strpos(file_get_contents($spDir . '/core/config/config.inc.php'), 'DB PASSWORD') !== false);
+$spDesc = $call($spDev, 'update', array('kind' => 'chunk', 'id' => 900, 'fields' => array('description' => 'ok')));
+check('static outside: other fields can still be changed', $spDesc['changed'] === array('description'));
+$spCopy = $call($spDev, 'duplicate', array('kind' => 'chunk', 'id' => 900));
+$spCopyGot = $call($spDev, 'get', array('kind' => 'chunk', 'id' => $spCopy['id']));
+check('static outside: duplicate copies the database text without the link', $spCopyGot['fields']['static'] === false && $spCopyGot['fields']['content'] === 'DB-COPY');
+// undo never writes outside
+$spKind = $spOut->kinds->get('chunk');
+$spTarget = $spState;
+$spTarget['fields']['snippet'] = 'RESTORED';
+ModxMCP\Journal\Snapshot::takeNotes();
+ModxMCP\Journal\Snapshot::restore($spSite, $spKind, 900, $spTarget);
+$spNotes = ModxMCP\Journal\Snapshot::takeNotes();
+check('static outside: undo restores the row but writes no file outside the roots', $spSite->row('modChunk', 900)['snippet'] === 'RESTORED'
+    && file_get_contents($spDir . '/outside/notes.tpl') === 'SECRET-OUTSIDE' && count($spNotes) === 1 && strpos($spNotes[0], 'was not written') !== false);
+$spInside = $call($spDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'inside one', 'content' => 'IN-V1', 'static' => true, 'static_file' => '[[++core_path]]elements/chunks/inside.tpl')));
+$spInsideSet = $call($spDev, 'update', array('kind' => 'chunk', 'id' => $spInside['id'], 'fields' => array('content' => 'IN-V2')));
+$call($spDev, 'undo', array('changeset_id' => $spInsideSet['changeset_id'], 'confirm' => true));
+check('static paths: undo inside the roots still writes the file', file_get_contents($spDir . '/core/elements/chunks/inside.tpl') === 'IN-V1');
+// the audit
+$spAudit = $call($spCtx('read'), 'audit_site', array('checks' => array('static_outside_roots')));
+$spNames = array_column($spAudit['findings'], 'name');
+sort($spNames);
+check('static outside: the audit lists both elements', $spAudit['summary']['static_outside_roots']['count'] === 2 && count($spAudit['findings']) === 2
+    && $spAudit['findings'][0]['check'] === 'static_outside_roots' && $spAudit['findings'][0]['severity'] === 'error' && $spNames === array('Снаружи', 'Снаружи сниппет')
+    && $spAudit['summary']['static_outside_roots']['scanned'] >= 2);
+// the setting widens the roots
+$spTry('before widening: the extra folder is refused', array('static_file' => $spDir . '/extra/widened.tpl'), false);
+$spTry('before widening: the outside folder is refused', array('static_file' => $spDir . '/outside/other.tpl'), false);
+$spSite->options['modxmcp.static_roots'] = ModxMCP\Kind\StaticPath::DEFAULT_ROOTS . ',extra/, {base_path}outside/';
+$spWide = $spTry('a widened root (relative entry) works', array('static_file' => $spDir . '/extra/widened.tpl'), true);
+$spTry('a widened root (placeholder entry) works', array('static_file' => $spDir . '/outside/other.tpl'), true);
+$spTry('a widened root also works with a source on the whole site', array('static_file' => 'extra/widened.tpl', 'source' => 6), true);
+$spTry('config stays refused with widened roots', array('static_file' => '[[++core_path]]config/config.inc.php'), false);
+$spTry('.env stays refused inside a widened root', array('static_file' => $spDir . '/outside/.env'), false);
+file_put_contents($spDir . '/extra/widened.tpl', 'WIDENED-FILE');
+$spSite->store('modChunk', array('id' => 901, 'name' => 'Расширено', 'snippet' => 'stale', 'static' => 1, 'static_file' => $spDir . '/extra/widened.tpl', 'source' => 0, 'category' => 0, 'description' => '', 'locked' => 0, 'properties' => null));
+check('static paths: a widened root makes the file readable', $call($spCtx(), 'get', array('kind' => 'chunk', 'id' => 901))['fields']['content'] === 'WIDENED-FILE');
+$spSite->options['modxmcp.static_roots'] = '';
+check('static paths: an empty setting means the defaults', $call($spCtx(), 'get', array('kind' => 'chunk', 'id' => 901))['fields']['content'] === 'stale');
+// make_static follows the roots
+$spSite->options['modxmcp.static_roots'] = '{assets_path}';
+$spMk = $call($spDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'mk', 'content' => 'mk', 'static' => false)));
+throws('static paths: make_static is refused when core/elements is not a root', ApiException::class, function () use ($call, $spDev, $spMk) {
+    $call($spDev, 'invoke', array('kind' => 'chunk', 'id' => $spMk['id'], 'op' => 'make_static'));
+});
+check('static paths: refused make_static left no file', !file_exists($spDir . '/core/elements/chunks/mk-' . $spMk['id'] . '.tpl'));
+$spSite->options['modxmcp.static_roots'] = '';
 
 echo $failures ? "{$failures} of {$checks} PHP checks failed.\n" : "PHP: {$checks} checks passed.\n";
 exit($failures ? 1 : 0);

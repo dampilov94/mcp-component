@@ -71,6 +71,8 @@ final class GetAction extends Action {
         // Values this token must not see are replaced (credentials of settings); flags such as "secret" are added.
         list($fields, $relations, $flags) = $kind->redact($context, $object, $fields, $relations);
         $id = $kind->keyOf($object);
+        $outside = Objects::staticOutsideWarning($kind, $object);
+        if ($outside !== null) { $context->warnings[] = $outside; }
         $result = array(
             'kind'      => $kind->name(),
             $kind->keyField() => $id,

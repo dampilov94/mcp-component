@@ -38,6 +38,7 @@ final class UpdateAction extends WriteAction {
         $kind->assertObjectWritable($context->modx, $object, 'update');
         $kind->assertUpdatable($context->modx, $object, $columns);
         $kind->assertKeepsSecret($context, $object, $columns, 'update');
+        Objects::assertStaticWrite($context, $kind, $object, $columns);
         $relations = isset($args['relations']) ? $args['relations'] : array();
         Objects::assertWritableRelations($kind, $relations, $context);
         // Refuse a relation this object cannot have before anything else, so a dry run says so too.

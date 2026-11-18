@@ -45,6 +45,8 @@ final class ViewCodeAction extends Action {
         $view = LineEdit::numbered($content[0], isset($args['start_line']) ? $args['start_line'] : null, isset($args['end_line']) ? $args['end_line'] : null);
         $id = $kind->keyOf($object);
         if ($content[3]) { $context->warnings[] = 'The static file of this element is missing.'; }
+        $outside = Objects::staticOutsideWarning($kind, $object);
+        if ($outside !== null) { $context->warnings[] = $outside; }
         return array(
             'kind' => $kind->name(), $kind->keyField() => $id, 'name' => (string) $kind->value($object, $kind->nameField()),
             'static' => $content[1], 'revision' => Snapshot::revision(Snapshot::capture($context->modx, $kind, $id)),

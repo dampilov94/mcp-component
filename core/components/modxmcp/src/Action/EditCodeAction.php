@@ -56,6 +56,9 @@ final class EditCodeAction extends WriteAction {
             if (!empty($before['static_file_missing'])) {
                 throw new ApiException('validation_failed', 'The static file of this element is missing. Restore it before editing.');
             }
+            if (!empty($before['static_file_outside_roots'])) {
+                throw new ApiException('validation_failed', 'The static file of this element is outside modxmcp.static_roots. Point it at a file inside the roots (modx_update) before editing its code.');
+            }
             $column = $kind->column($field);
             list($content, $linesBefore, $linesAfter) = LineEdit::apply($before['fields'][$column], $args['edits']);
             $lines = array('total_lines_before' => $linesBefore, 'total_lines_after' => $linesAfter, 'edits_applied' => count($args['edits']));

@@ -44,6 +44,9 @@ class FakeObject {
         }
     }
     public function initialize() { return true; }
+    /** Per-object options; setup mode switches off the static file synchronisation of save(), as in modElement::save(). */
+    private $options = array();
+    public function setOption($key, $value) { $this->options[$key] = $value; }
     /** The related one-to-one row of a relation alias (only the user's Profile is modelled). */
     public function getOne($alias) {
         if ($this->class === 'modUser' && $alias === 'Profile') { return $this->modx->getObject('modUserProfile', array('internalKey' => $this->fields['id'])); }
@@ -61,7 +64,19 @@ class FakeObject {
         return true;
     }
     public function getBasePath() { return (string) $this->get('basePath'); }
-    public function getSourceFile() { return !empty($this->fields['static']) ? str_replace('[[++core_path]]', $this->modx->getOption('core_path'), (string) $this->fields['static_file']) : false; }
+    public function getSourceFile() {
+        if (empty($this->fields['static'])) { return false; }
+        // Setting tags [[++name]] are filled in, and a streaming media source puts its base path in front (the real
+        // method also takes a path that does not exist as given from element_static_path; the fake does not).
+        $modx = $this->modx;
+        $file = preg_replace_callback('/\[\[\+\+([A-Za-z0-9_.\-]+)\]\]/', function ($m) use ($modx) { return (string) $modx->getOption($m[1]); }, (string) $this->fields['static_file']);
+        $source = isset($this->fields['source']) ? (int) $this->fields['source'] : 0;
+        if ($source > 0) {
+            $media = $modx->getObject('sources.modMediaSource', array('id' => $source));
+            if ($media && $media->get('is_stream')) { $file = $media->getBasePath() . $file; }
+        }
+        return $file;
+    }
     public function joinGroup($id) {
         if (!$this->modx->getObject('modResourceGroup', $id)) { return false; }
         $where = array('document' => $this->get('id'), 'document_group' => $id);
@@ -93,7 +108,7 @@ class FakeObject {
         $wasProduct = $this->class === 'modResource' && $stored && $stored['class_key'] === 'msProduct';
         if ($pk === 'id' && empty($this->fields['id'])) { $this->fields['id'] = $this->modx->nextId($this->class); }
         // Like modElement::save(): the static file is written only when the column changed.
-        if ($code && !empty($this->fields['static']) && !empty($this->fields['static_file'])
+        if ($code && empty($this->options[xPDO::OPT_SETUP]) && !empty($this->fields['static']) && !empty($this->fields['static_file'])
             && (!$stored || (string) $stored[$code] !== (string) $this->fields[$code])) {
             $path = $this->getSourceFile();
             // Like modScript::setFileContent(): snippet and plugin files get an opening PHP tag.
@@ -214,6 +229,7 @@ class FakeVirtualPageService {
 }
 
 class xPDO {
+    const OPT_SETUP = 'setup';
     public $pdo;
     public $options = array();
     public function getOption($key, $options = null, $default = null) {
@@ -1668,6 +1684,10 @@ function fakeSite($dir, array $options = array()) {
         'modxmcp.auto_static' => true,
         'modxmcp.core_path' => dirname(dirname(__DIR__)) . '/core/components/modxmcp/',
         'core_path' => $dir . '/core/',
+        'base_path' => $dir . '/',
+        'assets_path' => $dir . '/assets/',
+        // The older static-element tests keep their files anywhere below the site directory.
+        'modxmcp.static_roots' => './',
         'table_prefix' => 'modx_',
         'site_name' => 'Test site',
     );

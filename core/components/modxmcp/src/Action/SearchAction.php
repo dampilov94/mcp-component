@@ -34,10 +34,15 @@ final class SearchAction extends Action {
         $max = isset($args['max_matches']) ? $args['max_matches'] : 5;
         $results = array();
         $truncated = false;
+        $outsideWarned = false;
         foreach ($kinds as $kind) {
             $hits = array();
             foreach (CodeSearch::objects($context, $kind, $args['query']) as $entry) {
                 list($object, $content) = $entry;
+                if (!empty($content[4]) && !$outsideWarned) {
+                    $outsideWarned = true;
+                    $context->warnings[] = 'Some static elements have a file outside modxmcp.static_roots; their database copy was searched (see modx_audit_site, check static_outside_roots).';
+                }
                 $name = (string) $kind->value($object, $kind->nameField());
                 $nameMatch = CodeSearch::position($name, $args['query'], $sensitive) !== false;
                 $matches = array();

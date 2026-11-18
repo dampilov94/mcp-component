@@ -67,7 +67,6 @@
         <tr><td>{$l.endpoint}</td><td><code id="modxmcp-endpoint">{$overview.endpoint|escape}</code> <button type="button" class="o-btn" id="modxmcp-copy-endpoint">{$l.copy}</button> <span class="o-muted" id="modxmcp-copy-status"></span></td></tr>
         <tr><td>{$l.active_tokens}</td><td>{if $overview.active_tokens > 0}{$l.tokens_count|escape} &mdash; <a class="o-link" href="?a=tokens&amp;namespace=modxmcp">{$l.tokens_link}</a>{else}<span class="o-warn">{$l.no_tokens}</span> &mdash; <a class="o-link" href="?a=tokens&amp;namespace=modxmcp">{$l.tokens_link}</a>{/if}</td></tr>
         <tr><td>{$l.auto_static} (<code>modxmcp.auto_static</code>)</td><td>{if $overview.auto_static}{$l.on}{else}{$l.off}{/if}</td></tr>
-        <tr><td>{$l.audit_log} (<code>modxmcp.audit_log</code>)</td><td>{if $overview.audit_log}{$l.on}{else}{$l.off}{/if}</td></tr>
     </table>
 
     <div id="modxmcp-drafts" style="display:none;">

@@ -9,17 +9,14 @@ $_lang['setting_modxmcp.service_user_id_desc'] = 'The MODX user ID under which M
 $_lang['setting_modxmcp.debug'] = 'MCP debug mode';
 $_lang['setting_modxmcp.debug_desc'] = 'When enabled, the API returns internal error details in the response. It is recommended to keep this disabled in production.';
 
-$_lang['setting_modxmcp.audit_log'] = 'MCP audit log';
-$_lang['setting_modxmcp.audit_log_desc'] = 'When enabled, create/update/delete operations and TV updates are written to the MODX log for auditing and diagnostics.';
-
 $_lang['setting_modxmcp.max_payload_bytes'] = 'Maximum payload size';
 $_lang['setting_modxmcp.max_payload_bytes_desc'] = 'Maximum allowed size of the JSON request body in bytes. Protects the component from oversized or malformed requests.';
 
 $_lang['setting_modxmcp.allow_root_filesystem_read'] = 'Allow root Filesystem read';
 $_lang['setting_modxmcp.allow_root_filesystem_read_desc'] = 'When enabled, MCP may browse and read files through the root Filesystem media source. Keep disabled if you only want safe component-code inspection.';
 
-$_lang['setting_modxmcp.component_code_roots'] = 'Component code roots';
-$_lang['setting_modxmcp.component_code_roots_desc'] = 'Comma-separated list of directories that MCP may scan for installed component code, for example core/components,assets/components.';
+$_lang['setting_modxmcp.static_roots'] = 'Static element folders';
+$_lang['setting_modxmcp.static_roots_desc'] = 'Comma-separated folders where the files of static elements (chunks, snippets, templates, plugins) may live, relative to the site root or with placeholders such as {core_path}. The API refuses to point an element at a file elsewhere and never reads one. Files in config, cache, packages and modxmcp-data are never allowed.';
 
 $_lang['setting_modxmcp.core_path'] = 'Core path';
 $_lang['setting_modxmcp.core_path_desc'] = 'Filesystem path to the modxMCP core component directory. Defaults to {core_path}components/modxmcp/.';

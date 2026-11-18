@@ -555,23 +555,25 @@ abstract class Kind {
     /**
      * Code as the site runs it: the file for a static element, the database column otherwise.
      * Reads without synchronising the file back into the database.
-     * @return array [content, is static, absolute file path or null, file missing]
+     * A file outside the roots of modxmcp.static_roots is never read: the database column is returned and the fifth value is true.
+     * @return array [content, is static, absolute file path or null, file missing, file outside the roots]
      */
     public function effectiveContent($object) {
         $field = $this->codeField();
-        if ($field === null) { return array('', false, null, false); }
+        if ($field === null) { return array('', false, null, false, false); }
         $column = $this->column($field);
         $stored = (string) $object->get($column);
         if (!array_key_exists('static', $this->fields()) || !(bool) $object->get('static')) {
-            return array($stored, false, null, false);
+            return array($stored, false, null, false, false);
         }
         $path = $object->getSourceFile();
-        if (!$path || strpos($path, '://') !== false) { return array($stored, true, null, true); }
+        if (!$path || strpos($path, '://') !== false) { return array($stored, true, null, true, false); }
+        if (!StaticPath::allowed($object->xpdo, $path)) { return array($stored, true, null, false, true); }
         clearstatcache(true, $path);
-        if (!is_file($path)) { return array('', true, $path, true); }
+        if (!is_file($path)) { return array('', true, $path, true, false); }
         $content = @file_get_contents($path);
         if ($content === false) { throw new \RuntimeException('Cannot read the static file of ' . $this->name() . ' ' . $object->get('id') . '.'); }
-        return array($this->codeFromFile($content), true, $path, false);
+        return array($this->codeFromFile($content), true, $path, false, false);
     }
 
     /** API value of one field. */

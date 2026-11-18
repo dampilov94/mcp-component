@@ -63,6 +63,7 @@ final class DuplicateAction extends WriteAction {
             $newName = $values[$nameField];
         }
         $columns = Objects::normalize($kind, $values, true);
+        Objects::assertStaticWrite($context, $kind, null, $columns);
         if ($kind->uniqueNames() && $kind->find($context->modx, array('name' => $newName))) {
             throw new ApiException('validation_failed', "A {$kind->name()} named '{$newName}' already exists.");
         }
