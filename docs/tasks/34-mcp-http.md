@@ -148,3 +148,35 @@ exact counts only where they change.
 
 `npm run check`, `npm test`. Report as usual: which spec pages you read (with their revision),
 every place the brief and the spec disagreed, and what needs the stand (real clients).
+
+## Report
+
+Based on: main at e455b30. The executor wrote the server, the catalog, the 2026-07-28 handler,
+the client snippets, the token page, docs and lexicons (committed by the architect as the WIP
+commit 4c1e493 after the executor was interrupted three times by the host machine sleeping); the
+architect wrote the tests.
+
+- `src/Mcp/HttpServer.php` (handshake era, batches, notifications, methods, tool results,
+  errors), `src/Mcp/ModernEra.php` (2026-07-28 headers, `_meta`, `server/discover`),
+  `src/Mcp/Catalog.php` (manifest → MCP objects), `src/Mcp/RpcError.php`; `Kernel::route()`
+  sends JSON-RPC POSTs there and keeps protocol 2 for everything else; shared `guard()`,
+  `newContext()`, `dispatch()`.
+- `client/mapping.js`: the bridge's `toMcpTool` / `toMcpPrompt` moved out unchanged, so the tests
+  compare the PHP catalog with them.
+- `TokenService::configs()` (9 snippets, the bridge last; `config` kept as the bridge snippet);
+  token page select; README section; `getting_started.md` paragraph; setting
+  `modxmcp.allowed_origins` with lexicons.
+- Every write without `_request_id` gets a generated one, so it is replay-protected like through
+  the bridge.
+
+Tests: PHP 5134 → 5141 (snippets per client); node 35 → 37: the official SDK client
+(`StreamableHTTPClientTransport`) against the real kernel — tools/prompts/resources equal to the
+bridge mapping, read, write, journal under the session label, undo, a refusal as `isError`,
+unknown tool; raw requests — each handshake version, an unknown version, an older client without
+`outputSchema`/`structuredContent`, a read token without write tools, notifications 202, batch,
+`-32601`, bad version header 400, 401 with `WWW-Authenticate`, wrong token, foreign `Origin` 403,
+GET event stream 405, plain GET probe, DELETE 405, the 2026-07-28 path (`server/discover`, a tool
+call, `-32020` for a wrong `Mcp-Name` / `Mcp-Method`, missing `Mcp-Name`, unknown method 404, no
+session id), and the bridge protocol on the same URL. No existing assertion changed.
+
+Needs the stand: real MODX through HTTP with the SDK client; real clients (Claude Code first).
