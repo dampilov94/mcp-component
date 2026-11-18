@@ -38,6 +38,12 @@ if ($action === xPDOTransport::ACTION_INSTALL || $action === xPDOTransport::ACTI
         $store->install();
         (new \ModxMCP\Journal\Journal($modx))->install();
         (new \ModxMCP\Draft\DraftStore($modx))->install();
+        if ($action === xPDOTransport::ACTION_UPGRADE) {
+            // 1.x leftovers: files and settings the new package no longer has but MODX never deletes.
+            foreach (\ModxMCP\Setup\LegacyCleanup::run($modx, dirname($autoload, 2) . '/') as $line) {
+                $modx->log(modX::LOG_LEVEL_INFO, '[modxMCP] ' . $line);
+            }
+        }
         // The plugin that records manager edits; an upgrade that adds kinds also adds their events.
         \ModxMCP\Manager\Recorder::syncPlugin($modx);
         if (!$store->all()) {

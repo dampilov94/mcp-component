@@ -7654,5 +7654,76 @@ throws('static paths: make_static is refused when core/elements is not a root', 
 check('static paths: refused make_static left no file', !file_exists($spDir . '/core/elements/chunks/mk-' . $spMk['id'] . '.tpl'));
 $spSite->options['modxmcp.static_roots'] = '';
 
+// 1.x leftovers removed on an upgrade
+$lcDir = $siteDir . '/legacy-cleanup';
+mkdir($lcDir, 0755, true);
+$lcSite = fakeSite($lcDir);
+$lcTree = function ($root, $v1) {
+    $files = array('src/Kernel.php' => '<?php', 'docs/getting_started.md' => '# help', 'docs/graph.md' => 'g', 'processors/mgr/getstatus.class.php' => '<?php',
+        'processors/mgr/tokens/create.class.php' => '<?php', 'logs/audit.log' => 'старый журнал 1.x', 'elements/plugin.php' => '<?php', '../other/model/other.class.php' => '<?php');
+    if ($v1) {
+        $files += array('model/modxmcp.class.php' => '<?php', 'model/traits/files.trait.php' => '<?php', 'model/traits/deep/x.php' => '<?php',
+            'processors/mgr/regeneratetoken.class.php' => '<?php', 'processors/mgr/createtoken.class.php' => '<?php', 'processors/mgr/revoketoken.class.php' => '<?php',
+            'docs/acl.md' => 'acl', 'docs/minishop2.md' => 'ms2', 'docs/study_component.md' => 'study');
+    }
+    foreach ($files as $relative => $content) {
+        $path = $root . '/' . $relative;
+        if (!is_dir(dirname($path))) { mkdir(dirname($path), 0755, true); }
+        file_put_contents($path, $content);
+    }
+};
+$lcList = function ($root) {
+    $out = array();
+    $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::SELF_FIRST);
+    foreach ($it as $file) { $out[] = substr(str_replace('\\', '/', $file->getPathname()), strlen($root) + 1); }
+    sort($out);
+    return $out;
+};
+// an upgrade from 1.x
+$lcRoot = $lcDir . '/v1/core/components/modxmcp';
+$lcTree($lcRoot, true);
+file_put_contents($lcDir . '/v1/core/components/other/model/keep.txt', 'x');
+$lcBefore = $lcList($lcRoot);
+$lcSite->store('modSystemSetting', array('key' => 'modxmcp.audit_log', 'value' => '1', 'namespace' => 'modxmcp'));
+$lcSite->store('modSystemSetting', array('key' => 'modxmcp.component_code_roots', 'value' => 'core/components', 'namespace' => 'modxmcp'));
+$lcSite->store('modSystemSetting', array('key' => 'modxmcp.disabled_groups', 'value' => 'virtualpage,versionx,migx', 'namespace' => 'modxmcp'));
+$lcSite->store('modSystemSetting', array('key' => 'modxmcp.debug', 'value' => '1', 'namespace' => 'modxmcp'));
+$lcLog = ModxMCP\Setup\LegacyCleanup::run($lcSite, $lcRoot . '/');
+$lcAfter = $lcList($lcRoot);
+$lcGone = array_values(array_diff($lcBefore, $lcAfter));
+check('cleanup: removes exactly the listed 1.x items', $lcGone === array('docs/acl.md', 'docs/minishop2.md', 'docs/study_component.md', 'model', 'model/modxmcp.class.php', 'model/traits', 'model/traits/deep',
+    'model/traits/deep/x.php', 'model/traits/files.trait.php', 'processors/mgr/createtoken.class.php', 'processors/mgr/regeneratetoken.class.php', 'processors/mgr/revoketoken.class.php')
+    && array_values(array_diff($lcAfter, $lcBefore)) === array());
+check('cleanup: logs, 2.0 files and neighbours stay', is_file($lcRoot . '/logs/audit.log') && file_get_contents($lcRoot . '/logs/audit.log') === 'старый журнал 1.x'
+    && is_file($lcRoot . '/processors/mgr/tokens/create.class.php') && is_file($lcRoot . '/docs/getting_started.md') && is_file($lcDir . '/v1/core/components/other/model/other.class.php')
+    && is_file($lcDir . '/v1/core/components/other/model/keep.txt'));
+check('cleanup: the dead settings are removed, the others stay', $lcSite->row('modSystemSetting', 'modxmcp.audit_log') === null && $lcSite->row('modSystemSetting', 'modxmcp.component_code_roots') === null
+    && $lcSite->getObject('modSystemSetting', array('key' => 'modxmcp.debug')) !== null);
+check('cleanup: versionx leaves disabled_groups, the rest stays in order', $lcSite->getObject('modSystemSetting', array('key' => 'modxmcp.disabled_groups'))->get('value') === 'virtualpage,migx');
+check('cleanup: one log line per removed item', count($lcLog) === 3 + 3 + 1 + 2 + 1 && count(array_filter($lcLog, function ($l) { return strpos($l, 'model/') !== false; })) === 1);
+check('cleanup: a second run removes nothing', ModxMCP\Setup\LegacyCleanup::run($lcSite, $lcRoot . '/') === array() && $lcList($lcRoot) === $lcAfter);
+// a 2.0 install (nothing from 1.x, a help topic of the same name shipped later) is left alone
+$lcFresh = $lcDir . '/fresh/core/components/modxmcp';
+$lcTree($lcFresh, false);
+file_put_contents($lcFresh . '/docs/acl.md', 'shipped by a later stage');
+$lcFreshBefore = $lcList($lcFresh);
+$lcFreshSite = fakeSite($lcDir . '/fresh');
+check('cleanup: without 1.x leftovers nothing is removed, not even a help file of the listed name', ModxMCP\Setup\LegacyCleanup::run($lcFreshSite, $lcFresh . '/') === array() && $lcList($lcFresh) === $lcFreshBefore);
+check('cleanup: a missing directory is no error', ModxMCP\Setup\LegacyCleanup::run($lcFreshSite, $lcDir . '/nowhere/') === array());
+$lcSymlink = $lcDir . '/sym/core/components/modxmcp';
+$lcTree($lcSymlink, true);
+mkdir($lcDir . '/sym/target', 0755, true);
+file_put_contents($lcDir . '/sym/target/precious.txt', 'keep');
+if (function_exists('symlink')) { symlink($lcDir . '/sym/target', $lcSymlink . '/model/link'); }
+ModxMCP\Setup\LegacyCleanup::run(fakeSite($lcDir . '/sym'), $lcSymlink . '/');
+check('cleanup: a symbolic link inside the removed directory is not followed', is_file($lcDir . '/sym/target/precious.txt') && !file_exists($lcSymlink . '/model'));
+$lcShipped = array_map('basename', glob($component . 'docs/*.md'));
+check('cleanup: no help topic of the package is on the removal list', array_intersect(array_map('basename', ModxMCP\Setup\LegacyCleanup::HELP), $lcShipped) === array());
+check('cleanup: the resolver runs it on upgrades only', (function () {
+    $source = file_get_contents(dirname(__DIR__, 2) . '/_build/resolvers/resolve.token.php');
+    return preg_match('/if \(\$action === xPDOTransport::ACTION_UPGRADE\) \{[^}]*LegacyCleanup::run/s', $source) === 1;
+})());
+check('cleanup: the 1.x model directory is gone from the package', !is_dir($component . 'model'));
+
 echo $failures ? "{$failures} of {$checks} PHP checks failed.\n" : "PHP: {$checks} checks passed.\n";
 exit($failures ? 1 : 0);
