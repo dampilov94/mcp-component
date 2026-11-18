@@ -28,10 +28,10 @@ $action = isset($options[xPDOTransport::PACKAGE_ACTION]) ? $options[xPDOTranspor
 if ($action === xPDOTransport::ACTION_INSTALL || $action === xPDOTransport::ACTION_UPGRADE) {
     // Add-ons with dedicated modxMCP tooling. If present, those tools are usable here.
     $known = array(
-        'minishop2'   => 'miniShop2 (ms2_*)',
-        'migx'        => 'MIGX (migx_*)',
-        'versionx'    => 'VersionX (versionx_*)',
-        'virtualpage' => 'VirtualPage (virtualpage_*)',
+        'minishop2'   => 'miniShop2 (kinds ms2_*)',
+        'migx'        => 'MIGX (kind migx_config, MIGX TV values)',
+        'virtualpage' => 'VirtualPage (kinds vp_*)',
+        'pdotools'    => 'pdoTools (Fenom references and syntax check)',
     );
     $present = array();
     foreach ($known as $ns => $label) {
@@ -42,7 +42,7 @@ if ($action === xPDOTransport::ACTION_INSTALL || $action === xPDOTransport::ACTI
     $modx->log(
         modX::LOG_LEVEL_INFO,
         '[modxMCP] Dedicated integrations detected: ' . (empty($present) ? 'none' : implode(', ', $present)) .
-        '. Other add-ons (snippets/chunks) are handled via the generic element tools.'
+        '. Other add-ons (snippets/chunks) are handled by the generic object and code tools.'
     );
 }
 
