@@ -16,7 +16,6 @@ $defs = array(
     // key, value, xtype, area
     array('modxmcp.enabled', 1, 'combo-boolean', 'modxmcp:main'),
     array('modxmcp.service_user_id', 1, 'textfield', 'modxmcp:main'),
-    array('modxmcp.audit_log', 1, 'combo-boolean', 'modxmcp:main'),
     array('modxmcp.debug', 0, 'combo-boolean', 'modxmcp:main'),
     array('modxmcp.auto_static', 1, 'combo-boolean', 'modxmcp:main'),
     array('modxmcp.disabled_groups', 'virtualpage,minishop2,migx,access,property_sets,contexts,package_management,namespaces,lexicon', 'textfield', 'modxmcp:main'),
@@ -37,7 +36,7 @@ $defs = array(
     array('modxmcp.trusted_proxies', '', 'textfield', 'modxmcp:security'),
     array('modxmcp.allowed_ips', '', 'textfield', 'modxmcp:security'),
     array('modxmcp.allowed_origins', '', 'textfield', 'modxmcp:security'),
-    array('modxmcp.component_code_roots', 'core/components,assets/components', 'textfield', 'modxmcp:security'),
+    array('modxmcp.static_roots', '{base_path},{core_path}', 'textfield', 'modxmcp:security'),
     array('modxmcp.core_path', '{core_path}components/modxmcp/', 'textfield', 'modxmcp:paths'),
 );
 

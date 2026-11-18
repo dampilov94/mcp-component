@@ -3,6 +3,7 @@ namespace ModxMCP\Manager;
 
 use ModxMCP\ApiException;
 use ModxMCP\Context;
+use ModxMCP\Kernel;
 use ModxMCP\Kind\Kind;
 use ModxMCP\Kind\KindRegistry;
 use ModxMCP\Write\Transaction;
@@ -58,6 +59,8 @@ final class Recorder {
 
     /** Called by the plugin for every event of events(). Never throws. */
     public static function handle(\modX $modx, $eventName, array $params) {
+        // Everything the API does is not a manager change, also what runs MODX processors outside a write transaction.
+        if (Kernel::servingApi()) { return; }
         try {
             $table = self::table();
             if (!isset($table[$eventName])) { return; }

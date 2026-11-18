@@ -18,6 +18,8 @@ use ModxMCP\Manifest;
 use ModxMCP\Request\RequestStore;
 use ModxMCP\Request\RequestStoreException;
 use ModxMCP\Schema;
+use ModxMCP\Kind\Properties;
+use ModxMCP\Journal\Snapshot;
 
 $failures = 0;
 $checks = 0;
@@ -134,7 +136,7 @@ check('manifest: encodes', is_string(json_encode($tools, JSON_THROW_ON_ERROR)));
 
 $describe = $read->actions->get('describe');
 $list = $describe->run(array(), $read);
-check('describe: lists element kinds', array_column($list['kinds'], 'kind') === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source', 'user_group', 'role', 'resource_group', 'system_setting', 'context', 'context_setting', 'namespace', 'package', 'provider'));
+check('describe: lists element kinds', array_column($list['kinds'], 'kind') === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source', 'user_group', 'role', 'resource_group', 'system_setting', 'context', 'context_setting', 'namespace', 'package', 'provider', 'property_set', 'lexicon_entry'));
 $chunk = $describe->run(array('kind' => 'chunk'), $read);
 $fields = array_column($chunk['fields'], null, 'name');
 check('describe: chunk exposes content as code', !empty($fields['content']['code']) && $fields['name']['required'] === true && $fields['id']['read_only'] === true);
@@ -808,13 +810,14 @@ check('duplicate: static copy uses effective content without sharing the file', 
     && $staticGot['fields']['static_file'] === '' && $staticGot['fields']['content'] === $fileBefore
     && file_get_contents($file) === $fileBefore && $call($dev, 'get', array('kind' => 'chunk', 'id' => 10))['revision'] === $staticBefore['revision']);
 
+$site->store('modPropertySet', array('id' => 7, 'name' => 'plugin set', 'category' => 0, 'description' => '', 'properties' => null));
 $site->store('modElementPropertySet', array('element' => $plugin['id'], 'element_class' => 'modPlugin', 'property_set' => 7));
 $duplicateActor = $actor('develop');
 $pluginCopy = $call($duplicateActor, 'duplicate', array('kind' => 'plugin', 'id' => $plugin['id']));
 $pluginCopyGot = $call($dev, 'get', array('kind' => 'plugin', 'id' => $pluginCopy['id']));
 check('duplicate: plugin events are copied', $pluginCopyGot['relations']['events'] === $call($dev, 'get', array('kind' => 'plugin', 'id' => $plugin['id']))['relations']['events']);
-check('duplicate: non-writable relations are omitted with one warning', $pluginCopyGot['relations']['property_sets'] === array()
-    && $duplicateActor->warnings === array('Not copied: property_sets'));
+check('duplicate: property sets are now a writable relation and are copied without a warning', $pluginCopyGot['relations']['property_sets'] === array(7)
+    && $duplicateActor->warnings === array());
 $site->store('modSnippet', array('id' => $site->nextId('modSnippet'), 'name' => 'Broken duplicate source', 'snippet' => 'return (;'));
 $snippetCount = $site->getCount('modSnippet');
 $e = throws('duplicate: broken PHP fails lint', ApiException::class, function () use ($call, $dev) {
@@ -4105,7 +4108,7 @@ $sRelNames = function ($id, $ctx = null) use ($call, $sAdmin) { return array_key
 // ---- availability ----
 $sKinds = array_column($call($sAdmin, 'describe')['kinds'], 'kind');
 check('ms2: kind list with miniShop2 installed', $sKinds === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source', 'user_group', 'role', 'resource_group', 'system_setting', 'context', 'context_setting', 'namespace', 'user',
-    'access_policy', 'policy_template', 'context_access', 'resourcegroup_access', 'package', 'provider', 'ms2_option', 'ms2_link', 'ms2_product_link', 'ms2_order', 'ms2_order_status'));
+    'access_policy', 'policy_template', 'context_access', 'resourcegroup_access', 'package', 'provider', 'property_set', 'lexicon_entry', 'ms2_option', 'ms2_link', 'ms2_product_link', 'ms2_order', 'ms2_order_status'));
 check('ms2: kind list without miniShop2 is unchanged', !in_array('ms2_option', array_column($call($sPlain, 'describe')['kinds'], 'kind'), true));
 $e = throws('ms2: ms2_option is unavailable where miniShop2 is not installed', ApiException::class, function () use ($call, $sPlain) { $call($sPlain, 'describe', array('kind' => 'ms2_option')); });
 check('ms2: not installed is reported as unavailable', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'not_installed');
@@ -6175,6 +6178,27 @@ check('recorder: emptying the trash journals every removed resource as deleted',
 $rBackTrash = $call($rAdmin, 'undo', array('changeset_id' => $rEmpty['changeset_id'], 'confirm' => true));
 check('recorder: and the removed resource can be brought back', $rBackTrash['performed'] === true && $rSite->getCount('modResource', array('id' => $rA['id'])) === 1);
 
+// the API's own maintenance call is not a manager change, with the flag set by the kernel for the request
+$rTrashed = $call($rDev, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'в корзину', 'template' => 0)));
+$call($rDev, 'delete', array('kind' => 'resource', 'id' => $rTrashed['id']));
+$rBase = $rCount();
+Kernel::servingApi(true);
+$call($rAdmin, 'maintenance', array('operation' => 'empty_trash', 'confirm' => true));
+Kernel::servingApi(false);
+check('recorder: an API empty_trash is not journaled as a manager change', $rSite->getCount('modResource', array('id' => $rTrashed['id'])) === 0 && $rCount() === $rBase
+    && !Kernel::servingApi());
+$rTrashed = $call($rDev, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'в корзину 2', 'template' => 0)));
+$call($rDev, 'delete', array('kind' => 'resource', 'id' => $rTrashed['id']));
+$rBase = $rCount();
+$rSite->runProcessor('resource/emptyrecyclebin', array());
+check('recorder: without the flag the same processor is still recorded as a manager change', $rCount() === $rBase + 1 && $rLog()[0]['source'] === 'manager');
+Kernel::servingApi(true);
+$rToken2 = $rSite->getObject('modChunk', array('id' => $rHead['id']));
+Recorder::handle($rSite, 'OnBeforeChunkFormSave', array('mode' => 'upd', 'id' => $rHead['id'], 'chunk' => &$rToken2));
+check('recorder: while the API serves, handle() returns at once and opens nothing', Transaction::depth() === 0);
+Kernel::servingApi(false);
+check('recorder: the kernel sets the flag for the whole request', strpos(file_get_contents(dirname(__DIR__, 2) . '/core/components/modxmcp/src/Kernel.php'), 'self::servingApi(true);') !== false);
+
 // more than 500 objects: skipped, one log line
 $rMany = array();
 for ($i = 1; $i <= 501; $i++) { $rMany[] = $i; }
@@ -6458,7 +6482,7 @@ $audit = $call($aRead, 'audit_site');
 $aBy = array();
 foreach ($audit['findings'] as $finding) { $aBy[$finding['check']][] = $finding; }
 $aOne = function ($check) use ($aBy) { return isset($aBy[$check]) && count($aBy[$check]) === 1 ? $aBy[$check][0] : null; };
-check('audit: summary counts every problem exactly once', array_column($audit['summary'], 'count') === array(3, 1, 3, 1, 1, 2, 1, 0) && array_keys($audit['summary']) === SiteAudit::CHECKS
+check('audit: summary counts every problem exactly once', array_column($audit['summary'], 'count') === array(3, 1, 3, 1, 1, 2, 1, 0, 0) && array_keys($audit['summary']) === SiteAudit::CHECKS
     && count($audit['findings']) === 12 && array_sum(array_column($audit['summary'], 'truncated')) === 0);
 check('audit: findings come in the order of the checks', array_values(array_unique(array_column($audit['findings'], 'check'))) === array('broken_link', 'missing_element', 'unused_element', 'static_file_missing', 'duplicate_alias', 'php_syntax', 'missing_template'));
 
@@ -6614,6 +6638,9 @@ check('run text: cacheable and uncacheable tags are processed, a missing chunk s
     && $r['output'] === "Главная — Привет, Мир\nПривет, мир [[\$нет]]" && $r['unparsed_count'] === 1 && $r['unparsed_tags'] === array(array('tag' => '[[$нет]]', 'line' => 2)));
 check('run text: the cacheable pass, then the uncacheable one, and never the pass that removes unprocessed tags',
     $uSite->parser->passes[0] === array(false, false, 10) && in_array(array(true, false, 10), $uSite->parser->passes, true) && !in_array(true, array_column($uSite->parser->passes, 1), true));
+$uSite->parser->passes = array();
+$r = $call($uCtx(), 'run', array('text' => "{\$x} без квадратных скобок"));
+check('run text: the parser passes also run for a text without [[', $r['ok'] === true && $r['output'] === "{\$x} без квадратных скобок" && $uSite->parser->passes === array(array(false, false, 10), array(true, false, 10)));
 $r = $call($uCtx(), 'run', array('snippet' => 'tags'));
 check('run: unparsed tags carry their line', $r['unparsed_tags'] === array(array('tag' => '[[$нет]]', 'line' => 2), array('tag' => '[[+пусто]]', 'line' => 2)));
 $r = $call($uCtx(), 'run', array('snippet' => 'manytags'));
@@ -6872,7 +6899,7 @@ check('tokens page: manager actions name the token id', $tkSite->managerActions[
 $ovDir = sys_get_temp_dir() . '/modxmcp-overview-' . bin2hex(random_bytes(6));
 mkdir($ovDir . '/core', 0700, true);
 $ovSite = fakeSite($ovDir, array('site_url' => 'https://example.test/', 'assets_url' => '/assets/', 'modxmcp.allow_run' => '1', 'modxmcp.allow_run_processor' => '0',
-    'modxmcp.history_track_manager' => 1, 'modxmcp.lint_php' => '0', 'modxmcp.allowed_ips' => ' 10.0.0.1, 10.0.0.2 ', 'modxmcp.audit_log' => true));
+    'modxmcp.history_track_manager' => 1, 'modxmcp.lint_php' => '0', 'modxmcp.allowed_ips' => ' 10.0.0.1, 10.0.0.2 '));
 $ovSite->store('modUser', array('id' => 2, 'username' => 'Иванов', 'primary_group' => 0));
 $ovSite->user = $ovSite->getObject('modUser', 2);
 $ovOverview = new Overview($ovSite, $ovSite->user);
@@ -6903,7 +6930,7 @@ check('overview: five newest changesets with their authors and summaries', array
     && $ovData['recent'][0]['author'] === 'Иванов' && $ovData['recent'][1]['author'] === 'Рабочий' && $ovData['recent'][0]['source'] === 'manager' && $ovData['recent'][3]['source'] === 'external');
 check('overview: counts of the last 24 hours by source leave out older changesets', $ovData['counts_24h'] === array('mcp' => 3, 'manager' => 2, 'external' => 0));
 check('overview: active tokens leave out revoked ones, the rest of the status', $ovData['active_tokens'] === 2 && $ovData['enabled'] === true && $ovData['version'] === Kernel::VERSION
-    && $ovData['endpoint'] === 'https://example.test/assets/components/modxmcp/api.php' && $ovData['audit_log'] === true && $ovData['auto_static'] === true);
+    && $ovData['endpoint'] === 'https://example.test/assets/components/modxmcp/api.php' && $ovData['auto_static'] === true);
 check('overview: the result is plain JSON data without secrets', strpos(json_encode($ovData), 'mcp_') === false && json_decode(json_encode($ovData), true) === $ovData);
 
 // --- Drafts ---
@@ -7504,6 +7531,660 @@ check('prompts: texts are Russian and every tool they name exists', (function ()
     }
     return true;
 })());
+
+// --- Static paths and cleanup (task 35) ---
+$spDir = $siteDir . '/static-paths';
+foreach (array('core/elements/chunks', 'core/config', 'core/cache', 'core/components/shop', 'assets/inc', 'outside', 'extra') as $spSub) { mkdir($spDir . '/' . $spSub, 0755, true); }
+file_put_contents($spDir . '/core/config/config.inc.php', '<?php // DB PASSWORD');
+file_put_contents($spDir . '/outside/notes.tpl', 'SECRET-OUTSIDE');
+file_put_contents($spDir . '/outside/.env', 'KEY=1');
+file_put_contents($spDir . '/extra/widened.tpl', 'WIDENED-FILE');
+file_put_contents($spDir . '/outside/other.tpl', 'OTHER-FILE');
+file_put_contents($spDir . '/core/cache/exists.tpl', 'CACHE-FILE');
+file_put_contents($spDir . '/assets/inc/exists.tpl', 'ASSETS-FILE');
+// The refusals below are tested against a narrow list of roots (the default was this list in alpha1; it is the whole
+// site now, see the block "Static paths: the default" further down).
+$spNarrow = '{core_path}elements/,{core_path}components/,{assets_path}';
+$spRoots = $spNarrow;
+$spSite = fakeSite($spDir, array('modxmcp.static_roots' => $spNarrow));
+$spSite->store('sources.modMediaSource', array('id' => 5, 'name' => 'Config', 'class_key' => 'sources.modFileMediaSource', 'is_stream' => 1, 'basePath' => $spDir . '/core/config/'));
+$spSite->store('sources.modMediaSource', array('id' => 6, 'name' => 'Whole site', 'class_key' => 'sources.modFileMediaSource', 'is_stream' => 1, 'basePath' => $spDir . '/'));
+$spSite->store('sources.modMediaSource', array('id' => 7, 'name' => 'Assets', 'class_key' => 'sources.modFileMediaSource', 'is_stream' => 1, 'basePath' => $spDir . '/assets/'));
+$spCtx = function ($scope = 'develop') use ($spSite, $dev) {
+    $c = new Context($spSite, array('scope' => $scope) + $dev->token, $dev->corePath, function () {});
+    $c->sessionId = 'static-paths-session';
+    return $c;
+};
+$spDev = $spCtx();
+$spTry = function ($label, array $fields, $allowed, $op = 'create', $id = null) use ($call, $spCtx) {
+    $c = $spCtx();
+    try {
+        $r = $op === 'create' ? $call($c, 'create', array('kind' => 'chunk', 'fields' => $fields + array('name' => 'sp ' . md5(json_encode($fields) . $label), 'content' => 'x', 'static' => true)))
+            : $call($c, 'update', array('kind' => 'chunk', 'id' => $id, 'fields' => $fields));
+        check("static paths: {$label}", $allowed);
+        return $r;
+    } catch (ApiException $e) {
+        check("static paths: {$label}", !$allowed && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'modxmcp.static_roots') !== false);
+        return null;
+    }
+};
+// allowed places, Cyrillic names
+$spTry('core/elements (setting tag, Cyrillic name) works', array('static_file' => '[[++core_path]]elements/chunks/привет.tpl'), true);
+check('static paths: the file was written', file_get_contents($spDir . '/core/elements/chunks/привет.tpl') === 'x');
+$spTry('core/components works', array('static_file' => '[[++core_path]]components/shop/файл.tpl'), true);
+$spTry('assets works', array('static_file' => '[[++assets_path]]inc/блок.tpl'), true);
+$spTry('absolute path inside a root works', array('static_file' => $spDir . '/assets/inc/abs.tpl'), true);
+$spTry('media source below assets works', array('static_file' => 'inc/src.tpl', 'source' => 7), true);
+// refused places
+$spCreated = $spSite->getCount('modChunk');
+$spTry('config.inc.php through the setting tag', array('static_file' => '[[++core_path]]config/config.inc.php'), false);
+$spTry('traversal out of elements', array('static_file' => '[[++core_path]]elements/../config/config.inc.php'), false);
+$spTry('traversal in a relative path', array('static_file' => '../../outside/notes.tpl'), false);
+$spTry('absolute path outside the roots', array('static_file' => $spDir . '/outside/notes.tpl'), false);
+$spTry('a file of the site root', array('static_file' => $spDir . '/objects.json'), false);
+$spTry('media source on core/config', array('static_file' => 'config.inc.php', 'source' => 5), false);
+$spTry('media source on the site root, pointing at core/config', array('static_file' => 'core/config/config.inc.php', 'source' => 6), false);
+$spTry('media source on the site root, outside the roots', array('static_file' => 'outside/notes.tpl', 'source' => 6), false);
+$spTry('a credentials file name inside a root', array('static_file' => '[[++assets_path]]inc/.env'), false);
+$spTry('config.core.php inside assets', array('static_file' => '[[++assets_path]]config.core.php'), false);
+$spTry('an existing file in the cache directory', array('static_file' => '[[++core_path]]cache/exists.tpl'), false);
+$spTry('a stream wrapper', array('static_file' => 'php://filter/resource=' . $spDir . '/assets/a.tpl'), false);
+$spTry('another kind of tag', array('static_file' => '[[$chunk]]a.tpl'), false);
+$spTry('an empty path', array('static_file' => ''), false);
+if (function_exists('symlink')) {
+    symlink($spDir . '/outside', $spDir . '/core/elements/linked');
+    symlink($spDir . '/assets/inc', $spDir . '/core/elements/inner-link');
+    $spTry('a symlinked directory leading outside', array('static_file' => '[[++core_path]]elements/linked/other.tpl'), false);
+    $spTry('a symlinked directory leading inside the roots', array('static_file' => '[[++core_path]]elements/inner-link/exists.tpl'), false);
+}
+check('static paths: refused writes created nothing', $spSite->getCount('modChunk') === $spCreated);
+// update, flipping to static, source
+$spPlain = $call($spDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'sp plain', 'content' => 'plain', 'static' => false, 'static_file' => $spDir . '/outside/notes.tpl')));
+$spTry('update: pointing an element outside', array('static_file' => '[[++core_path]]config/config.inc.php', 'static' => true), false, 'update', $spPlain['id']);
+$spTry('update: switching static on with the stored outside path', array('static' => true), false, 'update', $spPlain['id']);
+$spTry('update: the stored outside path is fine while the element is not static', array('description' => 'd'), true, 'update', $spPlain['id']);
+$spTry('update: a media source that leads outside', array('source' => 6, 'static_file' => 'outside/notes.tpl', 'static' => true), false, 'update', $spPlain['id']);
+check('static paths: refused update changed nothing', $call($spDev, 'get', array('kind' => 'chunk', 'id' => $spPlain['id']))['fields']['static'] === false);
+$e = throws('static paths: dry run of a create is refused too', ApiException::class, function () use ($call, $spDev) {
+    $call($spDev, 'create', array('kind' => 'chunk', 'dry_run' => true, 'fields' => array('name' => 'dry', 'static' => true, 'static_file' => '[[++core_path]]config/config.inc.php')));
+});
+// duplicate of an element whose file is outside
+$spSite->store('modChunk', array('id' => 900, 'name' => 'Снаружи', 'snippet' => 'DB-COPY', 'static' => 1, 'static_file' => $spDir . '/outside/notes.tpl', 'source' => 0, 'category' => 0, 'description' => '', 'locked' => 0, 'properties' => null));
+$spSite->store('modSnippet', array('id' => 900, 'name' => 'Снаружи сниппет', 'snippet' => 'return "DB-COPY";', 'static' => 1, 'static_file' => '[[++core_path]]config/config.inc.php', 'source' => 0, 'category' => 0, 'description' => '', 'locked' => 0, 'properties' => null));
+$spOut = $spCtx();
+$spGot = $call($spOut, 'get', array('kind' => 'chunk', 'id' => 900));
+check('static outside: get returns the database copy, not the file', $spGot['fields']['content'] === 'DB-COPY' && strpos(json_encode($spGot), 'SECRET-OUTSIDE') === false
+    && count($spOut->warnings) === 1 && strpos($spOut->warnings[0], 'outside modxmcp.static_roots') !== false);
+$spOut = $spCtx();
+$spView = $call($spOut, 'view_code', array('kind' => 'chunk', 'id' => 900));
+check('static outside: view_code shows the database copy with a warning', strpos($spView['numbered'], 'DB-COPY') !== false && strpos($spView['numbered'], 'SECRET') === false && count($spOut->warnings) === 1);
+$spSnip = $call($spCtx(), 'get', array('kind' => 'snippet', 'id' => 900));
+check('static outside: a snippet pointing at config.inc.php does not reveal it', strpos(json_encode($spSnip), 'DB PASSWORD') === false && $spSnip['fields']['content'] === 'return "DB-COPY";');
+$spSearch = $call($spCtx(), 'search', array('query' => 'SECRET-OUTSIDE'));
+check('static outside: search does not find text of the file', $spSearch['objects'] === 0);
+$spOut = $spCtx();
+$spSearch = $call($spOut, 'search', array('query' => 'DB-COPY'));
+check('static outside: search finds the database copy and says so', $spSearch['objects'] === 2 && count($spOut->warnings) === 1);
+$spState = ModxMCP\Journal\Snapshot::capture($spSite, $spOut->kinds->get('chunk'), 900);
+check('static outside: the snapshot holds no bytes of the file and is flagged', strpos(ModxMCP\Journal\Snapshot::encode($spState), 'SECRET-OUTSIDE') === false
+    && $spState['static_file_outside_roots'] === true && $spState['fields']['snippet'] === 'DB-COPY');
+$e = throws('static outside: writing its code is refused', ApiException::class, function () use ($call, $spDev) {
+    $call($spDev, 'update', array('kind' => 'chunk', 'id' => 900, 'fields' => array('content' => 'new')));
+});
+check('static outside: refusal names the roots', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'modxmcp.static_roots') !== false);
+throws('static outside: edit_code is refused', ApiException::class, function () use ($call, $spDev) {
+    $call($spDev, 'edit_code', array('kind' => 'chunk', 'id' => 900, 'edits' => array(array('start_line' => 1, 'new_text' => 'x'))));
+});
+check('static outside: the file was never touched', file_get_contents($spDir . '/outside/notes.tpl') === 'SECRET-OUTSIDE' && strpos(file_get_contents($spDir . '/core/config/config.inc.php'), 'DB PASSWORD') !== false);
+$spDesc = $call($spDev, 'update', array('kind' => 'chunk', 'id' => 900, 'fields' => array('description' => 'ok')));
+check('static outside: other fields can still be changed', $spDesc['changed'] === array('description'));
+$spCopy = $call($spDev, 'duplicate', array('kind' => 'chunk', 'id' => 900));
+$spCopyGot = $call($spDev, 'get', array('kind' => 'chunk', 'id' => $spCopy['id']));
+check('static outside: duplicate copies the database text without the link', $spCopyGot['fields']['static'] === false && $spCopyGot['fields']['content'] === 'DB-COPY');
+// undo never writes outside
+$spKind = $spOut->kinds->get('chunk');
+$spTarget = $spState;
+$spTarget['fields']['snippet'] = 'RESTORED';
+ModxMCP\Journal\Snapshot::takeNotes();
+ModxMCP\Journal\Snapshot::restore($spSite, $spKind, 900, $spTarget);
+$spNotes = ModxMCP\Journal\Snapshot::takeNotes();
+check('static outside: undo restores the row but writes no file outside the roots', $spSite->row('modChunk', 900)['snippet'] === 'RESTORED'
+    && file_get_contents($spDir . '/outside/notes.tpl') === 'SECRET-OUTSIDE' && count($spNotes) === 1 && strpos($spNotes[0], 'was not written') !== false);
+$spInside = $call($spDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'inside one', 'content' => 'IN-V1', 'static' => true, 'static_file' => '[[++core_path]]elements/chunks/inside.tpl')));
+$spInsideSet = $call($spDev, 'update', array('kind' => 'chunk', 'id' => $spInside['id'], 'fields' => array('content' => 'IN-V2')));
+$call($spDev, 'undo', array('changeset_id' => $spInsideSet['changeset_id'], 'confirm' => true));
+check('static paths: undo inside the roots still writes the file', file_get_contents($spDir . '/core/elements/chunks/inside.tpl') === 'IN-V1');
+// the audit
+$spAudit = $call($spCtx('read'), 'audit_site', array('checks' => array('static_outside_roots')));
+$spNames = array_column($spAudit['findings'], 'name');
+sort($spNames);
+check('static outside: the audit lists both elements', $spAudit['summary']['static_outside_roots']['count'] === 2 && count($spAudit['findings']) === 2
+    && $spAudit['findings'][0]['check'] === 'static_outside_roots' && $spAudit['findings'][0]['severity'] === 'error' && $spNames === array('Снаружи', 'Снаружи сниппет')
+    && $spAudit['summary']['static_outside_roots']['scanned'] >= 2);
+// the setting widens the roots
+$spTry('before widening: the extra folder is refused', array('static_file' => $spDir . '/extra/widened.tpl'), false);
+$spTry('before widening: the outside folder is refused', array('static_file' => $spDir . '/outside/other.tpl'), false);
+$spSite->options['modxmcp.static_roots'] = $spNarrow . ',extra/, {base_path}outside/';
+$spWide = $spTry('a widened root (relative entry) works', array('static_file' => $spDir . '/extra/widened.tpl'), true);
+$spTry('a widened root (placeholder entry) works', array('static_file' => $spDir . '/outside/other.tpl'), true);
+$spTry('a widened root also works with a source on the whole site', array('static_file' => 'extra/widened.tpl', 'source' => 6), true);
+$spTry('config stays refused with widened roots', array('static_file' => '[[++core_path]]config/config.inc.php'), false);
+$spTry('.env stays refused inside a widened root', array('static_file' => $spDir . '/outside/.env'), false);
+file_put_contents($spDir . '/extra/widened.tpl', 'WIDENED-FILE');
+$spSite->store('modChunk', array('id' => 901, 'name' => 'Расширено', 'snippet' => 'stale', 'static' => 1, 'static_file' => $spDir . '/extra/widened.tpl', 'source' => 0, 'category' => 0, 'description' => '', 'locked' => 0, 'properties' => null));
+check('static paths: a widened root makes the file readable', $call($spCtx(), 'get', array('kind' => 'chunk', 'id' => 901))['fields']['content'] === 'WIDENED-FILE');
+$spSite->options['modxmcp.static_roots'] = $spNarrow;
+check('static paths: narrowing again hides the file', $call($spCtx(), 'get', array('kind' => 'chunk', 'id' => 901))['fields']['content'] === 'stale');
+$spSite->options['modxmcp.static_roots'] = '';
+check('static paths: an empty setting means the default, the whole site', $call($spCtx(), 'get', array('kind' => 'chunk', 'id' => 901))['fields']['content'] === 'WIDENED-FILE');
+$spSite->options['modxmcp.static_roots'] = $spNarrow;
+// make_static follows the roots
+$spSite->options['modxmcp.static_roots'] = '{assets_path}';
+$spMk = $call($spDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'mk', 'content' => 'mk', 'static' => false)));
+throws('static paths: make_static is refused when core/elements is not a root', ApiException::class, function () use ($call, $spDev, $spMk) {
+    $call($spDev, 'invoke', array('kind' => 'chunk', 'id' => $spMk['id'], 'op' => 'make_static'));
+});
+check('static paths: refused make_static left no file', !file_exists($spDir . '/core/elements/chunks/mk-' . $spMk['id'] . '.tpl'));
+
+// Static paths: the default (the whole site and core). Custom folders such as core/api work, secrets stay closed,
+// MODX's own code can be read but never written through a static element.
+$spSite->options['modxmcp.static_roots'] = '';
+foreach (array('core/api', 'core/model/modx', 'manager/controllers') as $spSub) { if (!is_dir($spDir . '/' . $spSub)) { mkdir($spDir . '/' . $spSub, 0755, true); } }
+file_put_contents($spDir . '/core/api/router.php', "<?php\nreturn 'роутер';");
+file_put_contents($spDir . '/core/model/modx/modx.class.php', '<?php // MODX CORE');
+file_put_contents($spDir . '/manager/controllers/x.php', '<?php // MANAGER');
+$spApi = $call($spDev, 'create', array('kind' => 'plugin', 'fields' => array('name' => 'router', 'content' => "return 'роутер';", 'static' => true, 'static_file' => 'core/api/router.php', 'source' => 6)));
+check('static default: a plugin in a custom folder (core/api) reads its file', $call($spDev, 'get', array('kind' => 'plugin', 'id' => $spApi['id']))['fields']['content'] === "return 'роутер';");
+$call($spDev, 'update', array('kind' => 'plugin', 'id' => $spApi['id'], 'fields' => array('content' => "return 'роутер 2';")));
+check('static default: and writes it', strpos(file_get_contents($spDir . '/core/api/router.php'), "роутер 2") !== false);
+$spTry('default: config stays refused', array('static_file' => '[[++core_path]]config/config.inc.php'), false);
+$spTry('default: cache stays refused', array('static_file' => $spDir . '/core/cache/exists.tpl'), false);
+$spTry('default: .env stays refused', array('static_file' => $spDir . '/outside/.env'), false);
+$spTry('default: MODX code cannot be written through a static element', array('static_file' => $spDir . '/core/model/modx/modx.class.php'), false);
+$spTry('default: the manager cannot be written through a static element', array('static_file' => 'manager/controllers/x.php', 'source' => 6), false);
+check('static default: refused writes left MODX code untouched', file_get_contents($spDir . '/core/model/modx/modx.class.php') === '<?php // MODX CORE'
+    && file_get_contents($spDir . '/manager/controllers/x.php') === '<?php // MANAGER');
+$spSite->store('modSnippet', array('id' => 905, 'name' => 'Код MODX', 'snippet' => 'stale', 'static' => 1, 'static_file' => $spDir . '/core/model/modx/modx.class.php', 'source' => 0, 'category' => 0, 'description' => '', 'locked' => 0, 'properties' => null));
+check('static default: MODX code can still be read', strpos($call($spDev, 'get', array('kind' => 'snippet', 'id' => 905))['fields']['content'], 'MODX CORE') !== false);
+$spSite->options['modxmcp.static_roots'] = $spNarrow;
+
+// 1.x leftovers removed on an upgrade
+$lcDir = $siteDir . '/legacy-cleanup';
+mkdir($lcDir, 0755, true);
+$lcSite = fakeSite($lcDir);
+$lcTree = function ($root, $v1) {
+    $files = array('src/Kernel.php' => '<?php', 'docs/getting_started.md' => '# help', 'docs/graph.md' => 'g', 'processors/mgr/getstatus.class.php' => '<?php',
+        'processors/mgr/tokens/create.class.php' => '<?php', 'logs/audit.log' => 'старый журнал 1.x', 'elements/plugin.php' => '<?php', '../other/model/other.class.php' => '<?php');
+    if ($v1) {
+        $files += array('model/modxmcp.class.php' => '<?php', 'model/traits/files.trait.php' => '<?php', 'model/traits/deep/x.php' => '<?php',
+            'processors/mgr/regeneratetoken.class.php' => '<?php', 'processors/mgr/createtoken.class.php' => '<?php', 'processors/mgr/revoketoken.class.php' => '<?php',
+            'docs/acl.md' => 'acl', 'docs/minishop2.md' => 'ms2', 'docs/study_component.md' => 'study');
+    }
+    foreach ($files as $relative => $content) {
+        $path = $root . '/' . $relative;
+        if (!is_dir(dirname($path))) { mkdir(dirname($path), 0755, true); }
+        file_put_contents($path, $content);
+    }
+};
+$lcList = function ($root) {
+    $out = array();
+    $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::SELF_FIRST);
+    foreach ($it as $file) { $out[] = substr(str_replace('\\', '/', $file->getPathname()), strlen($root) + 1); }
+    sort($out);
+    return $out;
+};
+// an upgrade from 1.x
+$lcRoot = $lcDir . '/v1/core/components/modxmcp';
+$lcTree($lcRoot, true);
+file_put_contents($lcDir . '/v1/core/components/other/model/keep.txt', 'x');
+$lcBefore = $lcList($lcRoot);
+$lcSite->store('modSystemSetting', array('key' => 'modxmcp.audit_log', 'value' => '1', 'namespace' => 'modxmcp'));
+$lcSite->store('modSystemSetting', array('key' => 'modxmcp.component_code_roots', 'value' => 'core/components', 'namespace' => 'modxmcp'));
+$lcSite->store('modSystemSetting', array('key' => 'modxmcp.disabled_groups', 'value' => 'virtualpage,versionx,migx', 'namespace' => 'modxmcp'));
+$lcSite->store('modSystemSetting', array('key' => 'modxmcp.debug', 'value' => '1', 'namespace' => 'modxmcp'));
+$lcLog = ModxMCP\Setup\LegacyCleanup::run($lcSite, $lcRoot . '/');
+$lcAfter = $lcList($lcRoot);
+$lcGone = array_values(array_diff($lcBefore, $lcAfter));
+check('cleanup: removes exactly the listed 1.x items', $lcGone === array('docs/acl.md', 'docs/minishop2.md', 'docs/study_component.md', 'model', 'model/modxmcp.class.php', 'model/traits', 'model/traits/deep',
+    'model/traits/deep/x.php', 'model/traits/files.trait.php', 'processors/mgr/createtoken.class.php', 'processors/mgr/regeneratetoken.class.php', 'processors/mgr/revoketoken.class.php')
+    && array_values(array_diff($lcAfter, $lcBefore)) === array());
+check('cleanup: logs, 2.0 files and neighbours stay', is_file($lcRoot . '/logs/audit.log') && file_get_contents($lcRoot . '/logs/audit.log') === 'старый журнал 1.x'
+    && is_file($lcRoot . '/processors/mgr/tokens/create.class.php') && is_file($lcRoot . '/docs/getting_started.md') && is_file($lcDir . '/v1/core/components/other/model/other.class.php')
+    && is_file($lcDir . '/v1/core/components/other/model/keep.txt'));
+check('cleanup: the dead settings are removed, the others stay', $lcSite->row('modSystemSetting', 'modxmcp.audit_log') === null && $lcSite->row('modSystemSetting', 'modxmcp.component_code_roots') === null
+    && $lcSite->getObject('modSystemSetting', array('key' => 'modxmcp.debug')) !== null);
+check('cleanup: versionx leaves disabled_groups, the rest stays in order', $lcSite->getObject('modSystemSetting', array('key' => 'modxmcp.disabled_groups'))->get('value') === 'virtualpage,migx');
+check('cleanup: one log line per removed item', count($lcLog) === 3 + 3 + 1 + 2 + 1 && count(array_filter($lcLog, function ($l) { return strpos($l, 'model/') !== false; })) === 1);
+check('cleanup: a second run removes nothing', ModxMCP\Setup\LegacyCleanup::run($lcSite, $lcRoot . '/') === array() && $lcList($lcRoot) === $lcAfter);
+// a 2.0 install (nothing from 1.x, a help topic of the same name shipped later) is left alone
+$lcFresh = $lcDir . '/fresh/core/components/modxmcp';
+$lcTree($lcFresh, false);
+file_put_contents($lcFresh . '/docs/acl.md', 'shipped by a later stage');
+$lcFreshBefore = $lcList($lcFresh);
+$lcFreshSite = fakeSite($lcDir . '/fresh');
+check('cleanup: without 1.x leftovers nothing is removed, not even a help file of the listed name', ModxMCP\Setup\LegacyCleanup::run($lcFreshSite, $lcFresh . '/') === array() && $lcList($lcFresh) === $lcFreshBefore);
+check('cleanup: a missing directory is no error', ModxMCP\Setup\LegacyCleanup::run($lcFreshSite, $lcDir . '/nowhere/') === array());
+$lcSymlink = $lcDir . '/sym/core/components/modxmcp';
+$lcTree($lcSymlink, true);
+mkdir($lcDir . '/sym/target', 0755, true);
+file_put_contents($lcDir . '/sym/target/precious.txt', 'keep');
+if (function_exists('symlink')) { symlink($lcDir . '/sym/target', $lcSymlink . '/model/link'); }
+ModxMCP\Setup\LegacyCleanup::run(fakeSite($lcDir . '/sym'), $lcSymlink . '/');
+check('cleanup: a symbolic link inside the removed directory is not followed', is_file($lcDir . '/sym/target/precious.txt') && !file_exists($lcSymlink . '/model'));
+$lcShipped = array_map('basename', glob(dirname(__DIR__, 2) . '/core/components/modxmcp/docs/*.md'));
+check('cleanup: the shipped help topics were found', in_array('getting_started.md', $lcShipped, true));
+check('cleanup: no help topic of the package is on the removal list', array_intersect(array_map('basename', ModxMCP\Setup\LegacyCleanup::HELP), $lcShipped) === array());
+check('cleanup: the resolver runs it on upgrades only', (function () {
+    $source = file_get_contents(dirname(__DIR__, 2) . '/_build/resolvers/resolve.token.php');
+    return preg_match('/if \(\$action === xPDOTransport::ACTION_UPGRADE\) \{[^}]*LegacyCleanup::run/s', $source) === 1;
+})());
+check('cleanup: the 1.x model directory is gone from the package', !is_dir(dirname(__DIR__, 2) . '/core/components/modxmcp/model'));
+
+// --- Small fixes (task 35): TV ranks, comment tags and LIKE escaping in the graph ---
+$tvDir = $siteDir . '/small-fixes';
+mkdir($tvDir . '/core', 0700, true);
+$tvSite = fakeSite($tvDir);
+$tvDev = new Context($tvSite, array('scope' => 'develop') + $dev->token, $dev->corePath, function () {});
+$tvDev->sessionId = 'small-fixes-session';
+foreach (array(1 => 'Первый', 2 => 'Второй', 3 => 'Третий') as $tvTplId => $tvTplName) {
+    $tvSite->store('modTemplate', array('id' => $tvTplId, 'templatename' => $tvTplName, 'content' => '', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => '', 'icon' => ''));
+}
+$tvMade = $call($tvDev, 'create', array('kind' => 'tv', 'fields' => array('name' => 'ранги', 'type' => 'text'), 'relations' => array('templates' => array(1, 2))));
+$tvSite->getObject('modTemplateVarTemplate', array('tmplvarid' => $tvMade['id'], 'templateid' => 1))->fromArray(array('rank' => 4), '', true, true);
+foreach (array(1 => 4, 2 => 7) as $tvTplId => $tvRank) {
+    $tvRow = $tvSite->getObject('modTemplateVarTemplate', array('tmplvarid' => $tvMade['id'], 'templateid' => $tvTplId));
+    $tvRow->set('rank', $tvRank);
+    $tvRow->save();
+}
+$call($tvDev, 'update', array('kind' => 'tv', 'id' => $tvMade['id'], 'relations' => array('templates' => array(2, 3))));
+$tvRanks = array();
+foreach ($tvSite->getCollection('modTemplateVarTemplate', array('tmplvarid' => $tvMade['id'])) as $tvRow) { $tvRanks[(int) $tvRow->get('templateid')] = (int) $tvRow->get('rank'); }
+ksort($tvRanks);
+check('tv: templates that stay attached keep their rank, a new one gets 0, a removed one is gone', $tvRanks === array(2 => 7, 3 => 0));
+$call($tvDev, 'undo', array('last' => 1, 'confirm' => true));
+$tvRanks = array();
+foreach ($tvSite->getCollection('modTemplateVarTemplate', array('tmplvarid' => $tvMade['id'])) as $tvRow) { $tvRanks[(int) $tvRow->get('templateid')] = (int) $tvRow->get('rank'); }
+ksort($tvRanks);
+check('tv: undo restores the ranks as they were', $tvRanks === array(1 => 4, 2 => 7));
+
+$gcDir = $siteDir . '/graph-small';
+mkdir($gcDir . '/core', 0700, true);
+$gcSite = fakeSite($gcDir);
+$gcRead = new Context($gcSite, array('scope' => 'read') + $dev->token, $dev->corePath, function () {});
+$gcSite->store('modTemplate', array('id' => 1, 'templatename' => 'Основной', 'content' => "[[- [[\$призрак]] [[\$в_комментарии]] ]]\n[[\$живой]]"));
+foreach (array(1 => 'живой', 2 => 'в_комментарии', 3 => 'a_b', 4 => 'used_in_page', 5 => 'only_deleted') as $gcId => $gcName) {
+    $gcSite->store('modChunk', array('id' => $gcId, 'name' => $gcName, 'snippet' => 'текст', 'category' => 0));
+}
+$gcSite->store('modResource', array('id' => 10, 'pagetitle' => 'Страница', 'template' => 1, 'deleted' => 0, 'published' => 1, 'content' => 'Текст [[$aXb]] и [[$used_in_page]]'));
+$gcSite->store('modResource', array('id' => 11, 'pagetitle' => 'Удалённая', 'template' => 1, 'deleted' => 1, 'published' => 0, 'content' => '[[$only_deleted]]'));
+$gcGraph = $call($gcRead, 'dependency_graph');
+$gcOrphans = array_column($gcGraph['orphans'], 'name');
+sort($gcOrphans);
+$gcExpected = array('a_b', 'only_deleted', 'в_комментарии');
+sort($gcExpected);
+check('graph: a chunk named only in a comment tag is an orphan, not used', $gcOrphans === $gcExpected);
+check('graph: a chunk called only inside a comment tag is not reported missing', $gcGraph['missing'] === array());
+check('graph: the edges leave out everything inside the comment', array_column(array_filter($gcGraph['edges'], function ($e) { return $e[0] === 0; }), 1) !== array() && count(array_filter($gcGraph['edges'], function ($e) { return $e[0] === 0; })) === 1);
+check('graph: _ in a name is not a wildcard, and a deleted page uses nothing', in_array('a_b', $gcOrphans, true) && in_array('only_deleted', $gcOrphans, true) && !in_array('used_in_page', $gcOrphans, true));
+check('graph: comment tags are skipped by the audit link scan too', (function () use ($gcSite) {
+    $gcSite->store('modResource', array('id' => 12, 'pagetitle' => 'Ссылки', 'template' => 1, 'deleted' => 0, 'published' => 1, 'content' => '[[- [[~999]] ]] [[~10]]'));
+    return (new \ModxMCP\Graph\GraphBuilder($gcSite))->linkTargets('[[- [[~999]] ]] [[~10]] [[-- [[~998]] ]]') === array(10);
+})());
+
+// --- Property sets, lexicon, media source properties (task 36) ---
+$qDir = $siteDir . '/property-sets';
+mkdir($qDir . '/core', 0700, true);
+$qSite = fakeSite($qDir, array('modxmcp.auto_static' => false));
+$qCtx = function ($scope = 'develop', array $denied = array()) use ($qSite, $dev) {
+    $c = new Context($qSite, array('scope' => $scope, 'denied_groups' => $denied) + $dev->token, $dev->corePath, function () {});
+    $c->sessionId = 'property-sets-session';
+    return $c;
+};
+$qDev = $qCtx();
+$qA = function ($value) { return json_decode(json_encode($value), true); };
+$qRaw = function ($class, $id) use ($qSite) { $row = $qSite->row($class, $id); return $row === null ? null : $row; };
+$qSets = function ($class, $id) use ($qSite) {
+    $out = array();
+    foreach ($qSite->getCollection('modElementPropertySet', array('element' => $id, 'element_class' => $class)) as $r) { $out[] = (int) $r->get('property_set'); }
+    sort($out);
+    return $out;
+};
+$qLinks = function ($setId) use ($qSite) {
+    $out = array();
+    foreach ($qSite->getCollection('modElementPropertySet', array('property_set' => $setId)) as $r) { $out[] = $r->get('element_class') . ':' . $r->get('element'); }
+    sort($out);
+    return $out;
+};
+// create, read back, the stored form
+$qProps = array('tpl' => array('type' => 'textfield', 'value' => 'строкаTpl', 'desc' => 'Чанк строки'), 'limit' => array('type' => 'numberfield', 'value' => 10),
+    'показать' => array('type' => 'combo-boolean', 'value' => 1), 'вид' => array('type' => 'list', 'value' => 'a', 'options' => array(array('text' => 'Альфа', 'value' => 'a'), array('text' => 'Бета', 'value' => 'b')), 'area' => 'Вид'));
+$qSet = $call($qDev, 'create', array('kind' => 'property_set', 'fields' => array('name' => 'Мои параметры', 'description' => 'Для списка', 'properties' => $qProps)));
+$qGot = $call($qDev, 'get', array('kind' => 'property_set', 'id' => $qSet['id']));
+check('property_set: create and get, Cyrillic names and values', $qGot['fields']['name'] === 'Мои параметры' && $qGot['fields']['description'] === 'Для списка' && $qGot['fields']['category'] === 0
+    && $qA($qGot['fields']['properties'])['tpl'] === array('type' => 'textfield', 'value' => 'строкаTpl', 'desc' => 'Чанк строки') && $qA($qGot['fields']['properties'])['limit'] === array('type' => 'numberfield', 'value' => 10)
+    && $qA($qGot['fields']['properties'])['показать'] === array('type' => 'combo-boolean', 'value' => true)
+    && $qA($qGot['fields']['properties'])['вид']['options'] === array(array('text' => 'Альфа', 'value' => 'a'), array('text' => 'Бета', 'value' => 'b')) && $qA($qGot['fields']['properties'])['вид']['area'] === 'Вид'
+    && $qGot['relations']['elements'] === array());
+$qStored = Properties::decode($qSite->row('modPropertySet', $qSet['id'])['properties']);
+check('property_set: stored the way MODX stores it, a map name => {name, desc, type, options, value, lexicon, area}', array_keys($qStored) === array('limit', 'tpl', 'вид', 'показать')
+    && $qStored['tpl'] === array('name' => 'tpl', 'desc' => 'Чанк строки', 'type' => 'textfield', 'options' => array(), 'value' => 'строкаTpl', 'lexicon' => null, 'area' => '') && $qStored['показать']['value'] === true);
+check('property_set: list and describe', $call($qCtx('read'), 'list', array('kind' => 'property_set', 'query' => 'параметры'))['total'] === 1
+    && array_column($call($qCtx('read'), 'describe', array('kind' => 'property_set'))['relations'], 'name') === array('elements')
+    && $call($qCtx('read'), 'describe', array('kind' => 'property_set'))['group'] === 'property_sets');
+// writing the properties replaces the map; other fields leave it alone
+$qBefore = $qSite->row('modPropertySet', $qSet['id'])['properties'];
+$call($qDev, 'update', array('kind' => 'property_set', 'id' => $qSet['id'], 'fields' => array('description' => 'Другое')));
+check('property_set: an update of another field does not touch the properties', $qSite->row('modPropertySet', $qSet['id'])['properties'] === $qBefore);
+$qUpdated = $call($qDev, 'update', array('kind' => 'property_set', 'id' => $qSet['id'], 'fields' => array('properties' => array('only' => array('value' => 'один')))));
+$qGot = $call($qDev, 'get', array('kind' => 'property_set', 'id' => $qSet['id']));
+check('property_set: writing properties replaces the whole map, a type defaults to textfield', array_keys($qA($qGot['fields']['properties'])) === array('only') && $qA($qGot['fields']['properties'])['only'] === array('type' => 'textfield', 'value' => 'один')
+    && $qUpdated['changed'] === array('properties'));
+$call($qDev, 'undo', array('changeset_id' => $qUpdated['changeset_id'], 'confirm' => true));
+check('property_set: undo restores the map as it was', $qSite->row('modPropertySet', $qSet['id'])['properties'] === $qBefore);
+foreach (array('a list' => array(array('value' => 1)), 'no value' => array('a' => array('type' => 'textfield')), 'an array value' => array('a' => array('value' => array(1))), 'an unknown key' => array('a' => array('value' => 1, 'x' => 1)),
+    'a bad option' => array('a' => array('value' => 1, 'options' => array('x'))), 'an empty name' => array('' => array('value' => 1))) as $qLabel => $qBad) {
+    $e = throws("property_set: {$qLabel} is refused", ApiException::class, function () use ($call, $qDev, $qSet, $qBad) { $call($qDev, 'update', array('kind' => 'property_set', 'id' => $qSet['id'], 'fields' => array('properties' => $qBad))); });
+    check("property_set: {$qLabel} is validation_failed", $e && $e->errorCode === 'validation_failed');
+}
+$e = throws('property_set: a duplicate name', ApiException::class, function () use ($call, $qDev) { $call($qDev, 'create', array('kind' => 'property_set', 'fields' => array('name' => 'Мои параметры'))); });
+check('property_set: a duplicate name is validation_failed', $e && $e->errorCode === 'validation_failed');
+// elements: both directions
+$qChunk = $call($qDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'строка', 'content' => 'x')));
+$qSnippet = $call($qDev, 'create', array('kind' => 'snippet', 'fields' => array('name' => 'Список', 'content' => 'return 1;')));
+$qSet2 = $call($qDev, 'create', array('kind' => 'property_set', 'fields' => array('name' => 'Второй набор'), 'relations' => array('elements' => array(array('kind' => 'chunk', 'id' => $qChunk['id'])))));
+check('property_set: a set created with elements links them', $qLinks($qSet2['id']) === array('modChunk:' . $qChunk['id']) && $qSets('modChunk', $qChunk['id']) === array($qSet2['id'])
+    && $call($qDev, 'get', array('kind' => 'chunk', 'id' => $qChunk['id']))['relations']['property_sets'] === array($qSet2['id'])
+    && $call($qDev, 'get', array('kind' => 'property_set', 'id' => $qSet2['id']))['relations']['elements'] === array(array('kind' => 'chunk', 'id' => $qChunk['id'])));
+$qLinked = $call($qDev, 'update', array('kind' => 'property_set', 'id' => $qSet['id'], 'relations' => array('elements' => array(array('kind' => 'chunk', 'id' => $qChunk['id']), array('kind' => 'snippet', 'id' => $qSnippet['id'])))));
+check('property_set: writing elements adds links and the chunk shows the set too', $qLinks($qSet['id']) === array('modChunk:' . $qChunk['id'], 'modSnippet:' . $qSnippet['id'])
+    && $qSets('modChunk', $qChunk['id']) === array($qSet['id'], $qSet2['id']) && $qLinked['changed'] === array('elements'));
+$qLog = $call($qDev, 'history', array('limit' => 1))['changesets'][0];
+check('property_set: the same changeset journals the elements whose links changed', count($qLog['objects']) === 3 && array_column($qLog['objects'], 'kind') === array('property_set', 'chunk', 'snippet'));
+$call($qDev, 'update', array('kind' => 'chunk', 'id' => $qChunk['id'], 'relations' => array('property_sets' => array($qSet2['id']))));
+check('property_set: writing property_sets of an element removes the other link, in both views', $qLinks($qSet['id']) === array('modSnippet:' . $qSnippet['id']) && $qSets('modChunk', $qChunk['id']) === array($qSet2['id'])
+    && $call($qDev, 'get', array('kind' => 'property_set', 'id' => $qSet['id']))['relations']['elements'] === array(array('kind' => 'snippet', 'id' => $qSnippet['id'])));
+$qHistory = $call($qDev, 'history', array('limit' => 1))['changesets'][0];
+$call($qDev, 'undo', array('changeset_id' => $qHistory['changeset_id'], 'confirm' => true));
+check('property_set: undo of the element-side write puts both views back', $qLinks($qSet['id']) === array('modChunk:' . $qChunk['id'], 'modSnippet:' . $qSnippet['id']) && $qSets('modChunk', $qChunk['id']) === array($qSet['id'], $qSet2['id']));
+$call($qDev, 'update', array('kind' => 'property_set', 'id' => $qSet['id'], 'relations' => array('elements' => array())));
+check('property_set: an empty list detaches everything', $qLinks($qSet['id']) === array());
+foreach (array('an unknown kind' => array(array('kind' => 'resource', 'id' => 1)), 'a missing element' => array(array('kind' => 'chunk', 'id' => 9999)), 'a bare id' => array(5), 'an extra key' => array(array('kind' => 'chunk', 'id' => $qChunk['id'], 'x' => 1))) as $qLabel => $qBad) {
+    $e = throws("property_set: elements with {$qLabel}", ApiException::class, function () use ($call, $qDev, $qSet, $qBad) { $call($qDev, 'update', array('kind' => 'property_set', 'id' => $qSet['id'], 'relations' => array('elements' => $qBad))); });
+    check("property_set: elements with {$qLabel} are validation_failed", $e && $e->errorCode === 'validation_failed');
+}
+$e = throws('property_set: a missing set in property_sets of an element', ApiException::class, function () use ($call, $qDev, $qChunk) { $call($qDev, 'update', array('kind' => 'chunk', 'id' => $qChunk['id'], 'relations' => array('property_sets' => array(9999)))); });
+check('property_set: a missing set is validation_failed', $e && $e->errorCode === 'validation_failed' && $qSets('modChunk', $qChunk['id']) === array($qSet2['id']));
+// assign / unassign
+$qAssign = $call($qDev, 'invoke', array('kind' => 'property_set', 'id' => $qSet['id'], 'op' => 'assign', 'args' => array('kind' => 'chunk', 'id' => $qChunk['id'])));
+check('property_set: assign links the element and journals it', $qAssign['status'] === 'assigned' && $qLinks($qSet['id']) === array('modChunk:' . $qChunk['id']) && $qAssign['changeset_id'] !== null
+    && count($call($qDev, 'history', array('limit' => 1))['changesets'][0]['objects']) === 2);
+$qAgain = $call($qDev, 'invoke', array('kind' => 'property_set', 'id' => $qSet['id'], 'op' => 'assign', 'args' => array('kind' => 'chunk', 'id' => $qChunk['id'])));
+check('property_set: assigning again changes nothing', $qAgain['status'] === 'already_assigned' && $qAgain['changeset_id'] === null);
+$call($qDev, 'undo', array('changeset_id' => $qAssign['changeset_id'], 'confirm' => true));
+check('property_set: undo of assign removes the link', $qLinks($qSet['id']) === array());
+$call($qDev, 'invoke', array('kind' => 'property_set', 'id' => $qSet['id'], 'op' => 'assign', 'args' => array('kind' => 'snippet', 'id' => $qSnippet['id'])));
+$qOff = $call($qDev, 'invoke', array('kind' => 'property_set', 'id' => $qSet['id'], 'op' => 'unassign', 'args' => array('kind' => 'snippet', 'id' => $qSnippet['id'])));
+check('property_set: unassign removes it, and a second one is a no-op', $qOff['status'] === 'unassigned' && $qLinks($qSet['id']) === array()
+    && $call($qDev, 'invoke', array('kind' => 'property_set', 'id' => $qSet['id'], 'op' => 'unassign', 'args' => array('kind' => 'snippet', 'id' => $qSnippet['id'])))['status'] === 'not_assigned');
+$e = throws('property_set: assign needs a known element kind', ApiException::class, function () use ($call, $qDev, $qSet) { $call($qDev, 'invoke', array('kind' => 'property_set', 'id' => $qSet['id'], 'op' => 'assign', 'args' => array('kind' => 'resource', 'id' => 1))); });
+$e = throws('property_set: assign needs an existing element', ApiException::class, function () use ($call, $qDev, $qSet) { $call($qDev, 'invoke', array('kind' => 'property_set', 'id' => $qSet['id'], 'op' => 'assign', 'args' => array('kind' => 'chunk', 'id' => 9999))); });
+check('property_set: assign of a missing element is validation_failed', $e && $e->errorCode === 'validation_failed');
+// delete takes the links and undo brings them back
+$call($qDev, 'update', array('kind' => 'property_set', 'id' => $qSet['id'], 'relations' => array('elements' => array(array('kind' => 'chunk', 'id' => $qChunk['id'])))));
+$qRev = $call($qDev, 'get', array('kind' => 'property_set', 'id' => $qSet['id']))['revision'];
+$qDeleted = $call($qDev, 'delete', array('kind' => 'property_set', 'id' => $qSet['id']));
+check('property_set: delete removes the set and its links', $qSite->row('modPropertySet', $qSet['id']) === null && $qLinks($qSet['id']) === array() && $qSets('modChunk', $qChunk['id']) === array($qSet2['id']));
+$call($qDev, 'undo', array('changeset_id' => $qDeleted['changeset_id'], 'confirm' => true));
+check('property_set: undo of delete brings back the set, its map and its links with the same revision', $call($qDev, 'get', array('kind' => 'property_set', 'id' => $qSet['id']))['revision'] === $qRev
+    && $qLinks($qSet['id']) === array('modChunk:' . $qChunk['id']) && $qSite->row('modPropertySet', $qSet['id'])['properties'] === $qBefore);
+$qCreatedUndo = $call($qDev, 'create', array('kind' => 'property_set', 'fields' => array('name' => 'Временный', 'properties' => array('a' => array('value' => 'я')))));
+$call($qDev, 'undo', array('changeset_id' => $qCreatedUndo['changeset_id'], 'confirm' => true));
+check('property_set: undo of create removes it', $qSite->row('modPropertySet', $qCreatedUndo['id']) === null);
+$qDup = $call($qDev, 'duplicate', array('kind' => 'property_set', 'id' => $qSet['id']));
+check('property_set: duplicate copies the map and the elements', $qA($call($qDev, 'get', array('kind' => 'property_set', 'id' => $qDup['id']))['fields']['properties']) === $qA($call($qDev, 'get', array('kind' => 'property_set', 'id' => $qSet['id']))['fields']['properties'])
+    && $qLinks($qDup['id']) === array('modChunk:' . $qChunk['id']));
+// the default properties of the elements
+foreach (array('chunk', 'snippet', 'template', 'plugin', 'tv') as $qKind) {
+    $qFields = array('name' => 'свойства ' . $qKind) + ($qKind === 'tv' ? array('type' => 'text') : array());
+    $qEl = $call($qDev, 'create', array('kind' => $qKind, 'fields' => $qFields + array('properties' => array('tpl' => array('type' => 'textfield', 'value' => 'один', 'desc' => 'Описание'), 'n' => array('type' => 'numberfield', 'value' => 3)))));
+    $qElGot = $call($qDev, 'get', array('kind' => $qKind, 'id' => $qEl['id']));
+    check("element properties: {$qKind} created with default properties and read back", $qA($qElGot['fields']['properties']) === array('n' => array('type' => 'numberfield', 'value' => 3), 'tpl' => array('type' => 'textfield', 'value' => 'один', 'desc' => 'Описание')));
+    $qBeforeRaw = $qSite->row($qKind === 'tv' ? 'modTemplateVar' : 'mod' . ucfirst($qKind), $qEl['id'])['properties'];
+    $call($qDev, 'update', array('kind' => $qKind, 'id' => $qEl['id'], 'fields' => array('description' => 'Описание')));
+    check("element properties: {$qKind}: another field leaves them as they are", $qSite->row($qKind === 'tv' ? 'modTemplateVar' : 'mod' . ucfirst($qKind), $qEl['id'])['properties'] === $qBeforeRaw);
+    $qEdit = $call($qDev, 'update', array('kind' => $qKind, 'id' => $qEl['id'], 'fields' => array('properties' => array('новое' => array('value' => 'значение')))));
+    check("element properties: {$qKind}: writing replaces the map", $qA($call($qDev, 'get', array('kind' => $qKind, 'id' => $qEl['id']))['fields']['properties']) === array('новое' => array('type' => 'textfield', 'value' => 'значение')) && $qEdit['changed'] === array('properties'));
+    $call($qDev, 'undo', array('changeset_id' => $qEdit['changeset_id'], 'confirm' => true));
+    check("element properties: {$qKind}: undo restores them", $qSite->row($qKind === 'tv' ? 'modTemplateVar' : 'mod' . ucfirst($qKind), $qEl['id'])['properties'] === $qBeforeRaw);
+}
+$e = throws('element properties: cannot be a filter', ApiException::class, function () use ($call, $qDev) { $call($qDev, 'list', array('kind' => 'chunk', 'where' => array('properties' => 'x'))); });
+// groups
+$qAll = array_column($call($qCtx('admin'), 'describe')['kinds'], 'kind');
+$qSite->options['modxmcp.disabled_groups'] = 'property_sets';
+$qWithout = array_column($call($qCtx('admin'), 'describe')['kinds'], 'kind');
+check('property_set: a disabled property_sets group hides exactly this kind', in_array('property_set', $qAll, true) && $qWithout === array_values(array_diff($qAll, array('property_set'))));
+$e = throws('property_set: unavailable when the group is disabled', ApiException::class, function () use ($call, $qCtx) { $call($qCtx('admin'), 'list', array('kind' => 'property_set')); });
+check('property_set: unavailable with the reason', $e && $e->errorCode === 'unavailable');
+check('property_set: the property_sets relation of an element is hidden too', !isset($qA($call($qCtx('admin'), 'get', array('kind' => 'chunk', 'id' => $qChunk['id']))['relations'])['property_sets']));
+$qSite->options['modxmcp.disabled_groups'] = '';
+$e = throws('property_set: a token with the group denied cannot use it', ApiException::class, function () use ($call, $qCtx) { $call($qCtx('develop', array('property_sets')), 'create', array('kind' => 'property_set', 'fields' => array('name' => 'Нельзя'))); });
+check('property_set: a denied group is unavailable and the kind leaves its list', $e && $e->errorCode === 'unavailable'
+    && !in_array('property_set', array_column($call($qCtx('admin', array('property_sets')), 'describe')['kinds'], 'kind'), true));
+$e = throws('property_set: a read token cannot write', ApiException::class, function () use ($call, $qCtx) { $call($qCtx('read'), 'create', array('kind' => 'property_set', 'fields' => array('name' => 'Нельзя'))); });
+check('property_set: a read token is refused by scope', $e && $e->errorCode === 'forbidden_scope');
+
+// lexicon entries
+$lxDir = $siteDir . '/lexicon';
+foreach (array('core/lexicon/ru', 'core/lexicon/en', 'core/components/demo/lexicon/ru') as $lxSub) { mkdir($lxDir . '/' . $lxSub, 0755, true); }
+file_put_contents($lxDir . '/core/lexicon/ru/default.inc.php', "<?php\n\$_lang['error'] = 'Ошибка';\n\$_lang['save'] = 'Сохранить';\n\$_lang['percent_name'] = '100% готово';\n\$_lang['under_score'] = 'один_два';\n");
+file_put_contents($lxDir . '/core/lexicon/ru/resource.inc.php', "<?php\n\$_lang['resource'] = 'Ресурс';\n");
+file_put_contents($lxDir . '/core/lexicon/en/default.inc.php', "<?php\n\$_lang['error'] = 'Error';\n\$_lang['save'] = 'Save';\n");
+file_put_contents($lxDir . '/core/components/demo/lexicon/ru/blog.inc.php', "<?php\n\$_lang['post'] = 'Запись блога';\n");
+$lxSite = fakeSite($lxDir, array('modxmcp.auto_static' => false));
+$lxSite->store('modNamespace', array('name' => 'demo', 'path' => '{core_path}components/demo/', 'assets_path' => ''));
+$lxCtx = function ($scope = 'develop', array $denied = array()) use ($lxSite, $dev) {
+    $c = new Context($lxSite, array('scope' => $scope, 'denied_groups' => $denied) + $dev->token, $dev->corePath, function () {});
+    $c->sessionId = 'lexicon-session';
+    return $c;
+};
+$lxDev = $lxCtx();
+$lxRows = function () use ($lxSite) {
+    $out = array();
+    foreach ($lxSite->getCollection('modLexiconEntry') as $r) { $out[] = $r->get('namespace') . ':' . $r->get('topic') . ':' . $r->get('language') . ':' . $r->get('name') . '=' . $r->get('value'); }
+    sort($out);
+    return $out;
+};
+$lxKey = 'core:default:ru:error';
+$lxGot = $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => $lxKey));
+check('lexicon: a file entry is read with its source', $lxGot['key'] === $lxKey && $lxGot['fields']['value'] === 'Ошибка' && $lxGot['fields']['source'] === 'file' && $lxGot['fields']['overridden'] === false
+    && $lxGot['fields']['file_value'] === 'Ошибка' && $lxGot['fields']['namespace'] === 'core' && $lxGot['fields']['topic'] === 'default' && $lxGot['fields']['language'] === 'ru' && $lxGot['fields']['name'] === 'error'
+    && $lxGot['fields']['id'] === 0 && preg_match('/^[a-f0-9]{64}$/', $lxGot['revision']) === 1);
+check('lexicon: another namespace and the name as an alias of the key', $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'name' => 'demo:blog:ru:post'))['fields']['value'] === 'Запись блога');
+// list
+$lxList = $call($lxDev, 'list', array('kind' => 'lexicon_entry', 'where' => array('namespace' => 'core', 'language' => 'ru', 'topic' => 'default')));
+check('lexicon: list reads the file entries, ordered by name, with overridden', $lxList['total'] === 4 && array_column($lxList['items'], 'name') === array('error', 'percent_name', 'save', 'under_score')
+    && array_column($lxList['items'], 'overridden') === array(false, false, false, false) && $lxList['items'][0]['key'] === $lxKey && $lxList['items'][0]['value'] === 'Ошибка');
+check('lexicon: list of a language lists every topic of it', array_column($call($lxDev, 'list', array('kind' => 'lexicon_entry', 'where' => array('namespace' => 'core', 'language' => 'ru')))['items'], 'topic') === array('default', 'default', 'default', 'default', 'resource'));
+check('lexicon: list by topic over the languages', array_column($call($lxDev, 'list', array('kind' => 'lexicon_entry', 'where' => array('namespace' => 'core', 'topic' => 'default'), 'fields' => array('language', 'name')))['items'], 'language') === array('en', 'en', 'ru', 'ru', 'ru', 'ru'));
+check('lexicon: the query looks in names and values, also in Cyrillic and without regard to case', array_column($call($lxDev, 'list', array('kind' => 'lexicon_entry', 'query' => 'ОШИБ', 'where' => array('namespace' => 'core', 'language' => 'ru')))['items'], 'name') === array('error')
+    && array_column($call($lxDev, 'list', array('kind' => 'lexicon_entry', 'query' => 'save', 'where' => array('namespace' => 'core', 'language' => 'ru')))['items'], 'name') === array('save')
+    && array_column($call($lxDev, 'list', array('kind' => 'lexicon_entry', 'query' => 'блога'))['items'], 'key') === array('demo:blog:ru:post'));
+check('lexicon: % and _ in a query are text', array_column($call($lxDev, 'list', array('kind' => 'lexicon_entry', 'query' => '100%', 'where' => array('namespace' => 'core')))['items'], 'name') === array('percent_name')
+    && $call($lxDev, 'list', array('kind' => 'lexicon_entry', 'query' => 'один_два', 'where' => array('namespace' => 'core')))['total'] === 1 && $call($lxDev, 'list', array('kind' => 'lexicon_entry', 'query' => 'один-два', 'where' => array('namespace' => 'core')))['total'] === 0);
+$lxPage = $call($lxDev, 'list', array('kind' => 'lexicon_entry', 'where' => array('namespace' => 'core', 'language' => 'ru'), 'limit' => 2, 'start' => 1));
+check('lexicon: paging', $lxPage['total'] === 5 && count($lxPage['items']) === 2 && $lxPage['next_start'] === 3 && $lxPage['items'][0]['name'] === 'percent_name');
+$e = throws('lexicon: an unbounded list is refused', ApiException::class, function () use ($call, $lxDev) { $call($lxDev, 'list', array('kind' => 'lexicon_entry')); });
+check('lexicon: an unbounded list is validation_failed', $e && $e->errorCode === 'validation_failed');
+$e = throws('lexicon: a filter that is not a field', ApiException::class, function () use ($call, $lxDev) { $call($lxDev, 'list', array('kind' => 'lexicon_entry', 'where' => array('overridden' => true))); });
+// the override
+$lxBefore = Snapshot::revision(Snapshot::capture($lxSite, $lxCtx()->kinds->get('lexicon_entry'), $lxKey));
+$lxSite->lexicon->cleared = array();
+$lxEdit = $call($lxDev, 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'expected_revision' => $lxGot['revision'], 'fields' => array('value' => 'Сбой «системы»')));
+$lxNow = $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => $lxKey));
+check('lexicon: update stores a database override and says where the value comes from now', $lxNow['fields']['value'] === 'Сбой «системы»' && $lxNow['fields']['source'] === 'database' && $lxNow['fields']['overridden'] === true
+    && $lxNow['fields']['file_value'] === 'Ошибка' && $lxNow['fields']['id'] > 0 && $lxRows() === array('core:default:ru:error=Сбой «системы»') && $lxEdit['changed'] === array('value', 'id')
+    && $lxNow['revision'] === $lxEdit['revision'] && $lxNow['revision'] !== $lxGot['revision']);
+check('lexicon: the lexicon cache of the topic is cleared', in_array('ru/core/default.cache.php', $lxSite->lexicon->cleared, true));
+check('lexicon: the list shows the override', array_column(array_filter($call($lxDev, 'list', array('kind' => 'lexicon_entry', 'where' => array('namespace' => 'core', 'language' => 'ru', 'topic' => 'default')))['items'], function ($i) { return $i['overridden']; }), 'value') === array('Сбой «системы»'));
+$e = throws('lexicon: a stale revision is a conflict', ApiException::class, function () use ($call, $lxDev, $lxKey, $lxGot) { $call($lxDev, 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'expected_revision' => $lxGot['revision'], 'fields' => array('value' => 'x'))); });
+check('lexicon: revision_conflict', $e && $e->errorCode === 'revision_conflict');
+$lxEdit2 = $call($lxDev, 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'fields' => array('value' => 'Второе значение')));
+check('lexicon: changing an override changes only the value', $lxEdit2['changed'] === array('value') && $lxRows() === array('core:default:ru:error=Второе значение'));
+$call($lxDev, 'undo', array('changeset_id' => $lxEdit2['changeset_id'], 'confirm' => true));
+check('lexicon: undo of that change restores the earlier override', $lxRows() === array('core:default:ru:error=Сбой «системы»'));
+$call($lxDev, 'undo', array('changeset_id' => $lxEdit['changeset_id'], 'confirm' => true));
+$lxAfterUndo = $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => $lxKey));
+check('lexicon: undo of the first write removes the override, the file value applies again, the revision is the first', $lxRows() === array() && $lxAfterUndo['fields']['value'] === 'Ошибка' && $lxAfterUndo['fields']['source'] === 'file'
+    && $lxAfterUndo['revision'] === $lxGot['revision'] && $lxBefore === $lxGot['revision']);
+$lxNone = $call($lxDev, 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'fields' => array('value' => 'Ошибка')));
+check('lexicon: writing the file value to an entry without override does nothing', $lxNone['changeset_id'] === null && $lxRows() === array());
+$call($lxDev, 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'fields' => array('value' => 'Другое')));
+$lxSame = $call($lxDev, 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'fields' => array('value' => 'Ошибка')));
+check('lexicon: writing the file value over an override removes it, as the manager does', $lxRows() === array() && $lxSame['changeset_id'] !== null && $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => $lxKey))['fields']['source'] === 'file');
+$e = throws('lexicon: an immutable part of the key', ApiException::class, function () use ($call, $lxDev, $lxKey) { $call($lxDev, 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'fields' => array('name' => 'other'))); });
+check('lexicon: the key cannot be changed', $e && $e->errorCode === 'validation_failed');
+// delete the override
+$call($lxDev, 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'fields' => array('value' => 'Временно')));
+$lxPlan = $call($lxDev, 'delete', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'dry_run' => true));
+check('lexicon: a dry-run delete changes nothing', $lxPlan['dry_run'] === true && $lxRows() === array('core:default:ru:error=Временно'));
+$lxDel = $call($lxDev, 'delete', array('kind' => 'lexicon_entry', 'key' => $lxKey));
+check('lexicon: delete removes the override and the file value applies', $lxRows() === array() && $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => $lxKey))['fields']['value'] === 'Ошибка' && $lxDel['deleted'] === true);
+$call($lxDev, 'undo', array('changeset_id' => $lxDel['changeset_id'], 'confirm' => true));
+check('lexicon: undo of delete brings the override back', $lxRows() === array('core:default:ru:error=Временно'));
+$call($lxDev, 'delete', array('kind' => 'lexicon_entry', 'key' => $lxKey));
+$e = throws('lexicon: deleting an entry that has no override', ApiException::class, function () use ($call, $lxDev, $lxKey) { $call($lxDev, 'delete', array('kind' => 'lexicon_entry', 'key' => $lxKey)); });
+check('lexicon: nothing to delete is validation_failed with the reason', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'lexicon file') !== false);
+// create
+$lxMade = $call($lxDev, 'create', array('kind' => 'lexicon_entry', 'fields' => array('namespace' => 'demo', 'topic' => 'blog', 'language' => 'ru', 'name' => 'новая_запись', 'value' => 'Новая запись')));
+$lxMadeGot = $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => 'demo:blog:ru:новая_запись'));
+check('lexicon: create makes an override of a name the file does not have', $lxMade['key'] === 'demo:blog:ru:новая_запись' && $lxMadeGot['fields']['source'] === 'database' && $lxMadeGot['fields']['overridden'] === false
+    && $lxMadeGot['fields']['file_value'] === '' && $lxMadeGot['fields']['value'] === 'Новая запись');
+check('lexicon: list shows entries that only the database has', in_array('новая_запись', array_column($call($lxDev, 'list', array('kind' => 'lexicon_entry', 'where' => array('namespace' => 'demo')))['items'], 'name'), true));
+$e = throws('lexicon: create over an existing override', ApiException::class, function () use ($call, $lxDev) { $call($lxDev, 'create', array('kind' => 'lexicon_entry', 'fields' => array('namespace' => 'demo', 'topic' => 'blog', 'language' => 'ru', 'name' => 'новая_запись', 'value' => 'x'))); });
+check('lexicon: refused with a pointer to update', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'modx_update') !== false);
+$lxOver = $call($lxDev, 'create', array('kind' => 'lexicon_entry', 'fields' => array('namespace' => 'demo', 'topic' => 'blog', 'language' => 'ru', 'name' => 'post', 'value' => 'Пост')));
+check('lexicon: create over a file entry is an override', $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => 'demo:blog:ru:post'))['fields']['overridden'] === true);
+$call($lxDev, 'undo', array('changeset_id' => $lxOver['changeset_id'], 'confirm' => true));
+check('lexicon: undo of create leaves the file entry', $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => 'demo:blog:ru:post'))['fields']['value'] === 'Запись блога');
+$lxDelOnly = $call($lxDev, 'delete', array('kind' => 'lexicon_entry', 'key' => 'demo:blog:ru:новая_запись'));
+check('lexicon: deleting an entry the file does not have removes it altogether', $call($lxDev, 'history', array('limit' => 1))['changesets'][0]['objects'][0]['op'] === 'delete');
+$e = throws('lexicon: and it is gone', ApiException::class, function () use ($call, $lxDev) { $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => 'demo:blog:ru:новая_запись')); });
+check('lexicon: not_found', $e && $e->errorCode === 'not_found');
+$call($lxDev, 'undo', array('changeset_id' => $lxDelOnly['changeset_id'], 'confirm' => true));
+check('lexicon: undo brings it back with its value', $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => 'demo:blog:ru:новая_запись'))['fields']['value'] === 'Новая запись');
+foreach (array('a namespace that does not exist' => array('namespace' => 'нет', 'topic' => 'a', 'language' => 'ru', 'name' => 'x'), 'a traversing topic' => array('namespace' => 'core', 'topic' => '../x', 'language' => 'ru', 'name' => 'x'),
+    'a traversing language' => array('namespace' => 'core', 'topic' => 'a', 'language' => '../ru', 'name' => 'x'), 'an unknown namespace' => array('namespace' => 'nothing', 'topic' => 'a', 'language' => 'ru', 'name' => 'x'),
+    'an empty name' => array('namespace' => 'core', 'topic' => 'a', 'language' => 'ru', 'name' => '')) as $lxLabel => $lxBad) {
+    $e = throws("lexicon: create with {$lxLabel}", ApiException::class, function () use ($call, $lxDev, $lxBad) { $call($lxDev, 'create', array('kind' => 'lexicon_entry', 'fields' => $lxBad + array('value' => 'v'))); });
+    check("lexicon: {$lxLabel} is validation_failed", $e && $e->errorCode === 'validation_failed');
+}
+$e = throws('lexicon: create without a value', ApiException::class, function () use ($call, $lxDev) { $call($lxDev, 'create', array('kind' => 'lexicon_entry', 'fields' => array('namespace' => 'core', 'topic' => 'default', 'language' => 'ru', 'name' => 'zzz'))); });
+check('lexicon: value is required on create', $e && $e->errorCode === 'validation_failed');
+foreach (array('core:default:ru', 'core:../x:ru:a', 'core:default:ru/..:a') as $lxBadKey) {
+    $e = throws("lexicon: key {$lxBadKey}", ApiException::class, function () use ($call, $lxDev, $lxBadKey) { $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => $lxBadKey)); });
+    check("lexicon: key {$lxBadKey} is validation_failed", $e && $e->errorCode === 'validation_failed');
+}
+$e = throws('lexicon: an unknown entry', ApiException::class, function () use ($call, $lxDev) { $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => 'core:default:ru:нет_такого')); });
+check('lexicon: an unknown entry is not_found', $e && $e->errorCode === 'not_found');
+$e = throws('lexicon: duplicate is refused', ApiException::class, function () use ($call, $lxDev, $lxKey) { $call($lxDev, 'duplicate', array('kind' => 'lexicon_entry', 'key' => $lxKey)); });
+check('lexicon: an entry cannot be duplicated', $e && $e->errorCode === 'validation_failed');
+check('lexicon: history lists the writes with the key as the object', array_unique(array_column(array_column(array_column($call($lxDev, 'history', array('kind' => 'lexicon_entry', 'limit' => 50))['changesets'], 'objects'), 0), 'key')) !== array());
+// scopes and groups
+check('lexicon: a read token reads and lists', $call($lxCtx('read'), 'get', array('kind' => 'lexicon_entry', 'key' => $lxKey))['fields']['value'] === 'Ошибка' && $call($lxCtx('read'), 'list', array('kind' => 'lexicon_entry', 'where' => array('namespace' => 'demo')))['total'] === 2);
+$e = throws('lexicon: a read token cannot write', ApiException::class, function () use ($call, $lxCtx, $lxKey) { $call($lxCtx('read'), 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'fields' => array('value' => 'x'))); });
+check('lexicon: refused by scope', $e && $e->errorCode === 'forbidden_scope');
+$lxAll = array_column($call($lxCtx('admin'), 'describe')['kinds'], 'kind');
+$lxSite->options['modxmcp.disabled_groups'] = 'lexicon';
+check('lexicon: a disabled lexicon group hides exactly this kind', in_array('lexicon_entry', $lxAll, true) && array_column($call($lxCtx('admin'), 'describe')['kinds'], 'kind') === array_values(array_diff($lxAll, array('lexicon_entry'))));
+$e = throws('lexicon: unavailable when the group is disabled', ApiException::class, function () use ($call, $lxCtx, $lxKey) { $call($lxCtx('admin'), 'get', array('kind' => 'lexicon_entry', 'key' => $lxKey)); });
+check('lexicon: unavailable with the reason', $e && $e->errorCode === 'unavailable');
+$lxSite->options['modxmcp.disabled_groups'] = '';
+$e = throws('lexicon: a token with the group denied', ApiException::class, function () use ($call, $lxCtx, $lxKey) { $call($lxCtx('develop', array('lexicon')), 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'fields' => array('value' => 'x'))); });
+check('lexicon: a denied group is unavailable and the kind leaves its list', $e && $e->errorCode === 'unavailable' && !in_array('lexicon_entry', array_column($call($lxCtx('admin', array('lexicon')), 'describe')['kinds'], 'kind'), true));
+
+// media source properties
+$msDir = $siteDir . '/media-props';
+foreach (array('assets/images', 'core/config', 'core/modxmcp-data') as $msSub) { mkdir($msDir . '/' . $msSub, 0755, true); }
+mkdir($siteDir . '/elsewhere', 0755, true);
+$msSite = fakeSite($msDir, array('modxmcp.auto_static' => false));
+$msCtx = function ($scope = 'admin') use ($msSite, $dev) {
+    $c = new Context($msSite, array('scope' => $scope) + $dev->token, $dev->corePath, function () {});
+    $c->sessionId = 'media-props-session';
+    return $c;
+};
+$msAdmin = $msCtx();
+$msMade = $call($msAdmin, 'create', array('kind' => 'media_source', 'fields' => array('name' => 'Картинки', 'description' => 'Каталог', 'properties' => array('basePath' => 'assets/images/', 'baseUrl' => 'assets/images/'))));
+$msGot = $call($msAdmin, 'get', array('kind' => 'media_source', 'id' => $msMade['id']));
+$msProps = function ($result) { return json_decode(json_encode($result['fields']['properties']), true); };
+check('media source: created with properties, read as the effective values (stored over the class defaults)', $msProps($msGot)['basePath'] === 'assets/images/' && $msProps($msGot)['baseUrl'] === 'assets/images/'
+    && $msProps($msGot)['basePathRelative'] === true && $msProps($msGot)['imageExtensions'] === 'jpg,jpeg,png,gif,svg,webp' && array_keys($msProps($msGot)) === array('allowedFileTypes', 'basePath', 'basePathRelative', 'baseUrl', 'baseUrlRelative', 'imageExtensions', 'skipFiles')
+    && $msGot['fields']['base_path'] === $msDir . '/assets/images/');
+$msStored = Properties::decode($msSite->row('sources.modMediaSource', $msMade['id'])['properties']);
+check('media source: stored with the type and description of each property', array_keys($msStored) === array('basePath', 'baseUrl') && $msStored['basePath']['type'] === 'textfield' && $msStored['basePath']['desc'] === 'prop_file.basePath_desc' && $msStored['basePath']['lexicon'] === 'core:source');
+$msBeforeRaw = $msSite->row('sources.modMediaSource', $msMade['id'])['properties'];
+$call($msAdmin, 'update', array('kind' => 'media_source', 'id' => $msMade['id'], 'fields' => array('description' => 'Другое')));
+check('media source: another field leaves the properties alone', $msSite->row('sources.modMediaSource', $msMade['id'])['properties'] === $msBeforeRaw);
+$msEdit = $call($msAdmin, 'update', array('kind' => 'media_source', 'id' => $msMade['id'], 'fields' => array('properties' => array('allowedFileTypes' => 'jpg,png', 'skipFiles' => '.git,пропуск', 'basePathRelative' => true))));
+$msStored = Properties::decode($msSite->row('sources.modMediaSource', $msMade['id'])['properties']);
+ksort($msStored);
+check('media source: writing merges into the stored definition and keeps type and description', array_keys($msStored) === array('allowedFileTypes', 'basePath', 'baseUrl', 'skipFiles') && $msStored['basePath']['value'] === 'assets/images/'
+    && $msStored['allowedFileTypes'] === array('name' => 'allowedFileTypes', 'desc' => 'prop_file.allowedFileTypes_desc', 'type' => 'textfield', 'options' => '', 'value' => 'jpg,png', 'lexicon' => 'core:source')
+    && $msStored['skipFiles']['value'] === '.git,пропуск' && $msEdit['changed'] === array('properties'));
+check('media source: a value equal to the class default is not stored (as MODX does) and still reads as that value', !isset($msStored['basePathRelative']) && $msProps($call($msAdmin, 'get', array('kind' => 'media_source', 'id' => $msMade['id'])))['basePathRelative'] === true);
+$call($msAdmin, 'update', array('kind' => 'media_source', 'id' => $msMade['id'], 'fields' => array('properties' => array('basePathRelative' => false, 'basePath' => $msDir . '/assets/images/'))));
+check('media source: a yes/no property takes a boolean, the absolute base path resolves', $msProps($call($msAdmin, 'get', array('kind' => 'media_source', 'id' => $msMade['id'])))['basePathRelative'] === false
+    && $call($msAdmin, 'get', array('kind' => 'media_source', 'id' => $msMade['id']))['fields']['base_path'] === $msDir . '/assets/images/');
+$call($msAdmin, 'update', array('kind' => 'media_source', 'id' => $msMade['id'], 'fields' => array('properties' => array('basePathRelative' => 'true', 'basePath' => 'assets/images/'))));
+check('media source: "true" is read as a boolean', $msProps($call($msAdmin, 'get', array('kind' => 'media_source', 'id' => $msMade['id'])))['basePathRelative'] === true);
+$call($msAdmin, 'undo', array('last' => 2, 'confirm' => true));
+check('media source: undo restores the stored definition byte for byte', $msSite->row('sources.modMediaSource', $msMade['id'])['properties'] !== $msBeforeRaw && Properties::decode($msSite->row('sources.modMediaSource', $msMade['id'])['properties'])['allowedFileTypes']['value'] === 'jpg,png');
+$call($msAdmin, 'undo', array('changeset_id' => $msEdit['changeset_id'], 'confirm' => true));
+check('media source: undo of the merge restores the earlier definition', $msSite->row('sources.modMediaSource', $msMade['id'])['properties'] === $msBeforeRaw);
+foreach (array('an unknown property' => array('nope' => 'x'), 'an array value' => array('baseUrl' => array('a')), 'a yes/no setting given text' => array('basePathRelative' => 'maybe')) as $msLabel => $msBad) {
+    $e = throws("media source: {$msLabel}", ApiException::class, function () use ($call, $msAdmin, $msMade, $msBad) { $call($msAdmin, 'update', array('kind' => 'media_source', 'id' => $msMade['id'], 'fields' => array('properties' => $msBad))); });
+    check("media source: {$msLabel} is validation_failed", $e && $e->errorCode === 'validation_failed');
+}
+check('media source: refused writes changed nothing', $msSite->row('sources.modMediaSource', $msMade['id'])['properties'] === $msBeforeRaw);
+// protected paths
+$msReset = function () use ($msSite, $msMade, $msBeforeRaw) { $r = $msSite->row('sources.modMediaSource', $msMade['id']); $r['properties'] = $msBeforeRaw; $msSite->store('sources.modMediaSource', $r); };
+$msTry = function ($label, array $properties, $allowed, $flag = false) use ($call, $msSite, $msCtx, $msMade, $msReset) {
+    $msSite->options['modxmcp.allow_root_filesystem_read'] = $flag;
+    $c = $msCtx();
+    try {
+        $call($c, 'update', array('kind' => 'media_source', 'id' => $msMade['id'], 'fields' => array('properties' => $properties)));
+        check("media source path: {$label}", $allowed);
+        return count($c->warnings) === 1 && strpos($c->warnings[0], 'protected') !== false;
+    } catch (ApiException $e) {
+        check("media source path: {$label}", !$allowed && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'modxmcp.allow_root_filesystem_read') !== false);
+        return false;
+    }
+};
+$msCases = array(
+    'core/config, relative' => array('basePath' => 'core/config/'),
+    'core/config, absolute' => array('basePath' => $msDir . '/core/config/', 'basePathRelative' => false),
+    'a file directly in core/config through a tag' => array('basePath' => '[[++core_path]]config/', 'basePathRelative' => false),
+    'modxmcp-data' => array('basePath' => 'core/modxmcp-data/'),
+    'a directory outside the site' => array('basePath' => $siteDir . '/elsewhere/', 'basePathRelative' => false),
+    'a relative path that climbs out' => array('basePath' => '../elsewhere/'),
+);
+foreach ($msCases as $msLabel => $msProps2) {
+    $msTry($msLabel . ' is refused', $msProps2, false);
+    $msReset();
+    check("media source path: {$msLabel} needs the setting, admin token", $msTry($msLabel . ' is allowed with modxmcp.allow_root_filesystem_read (and warns)', $msProps2, true, true) === true);
+    $msReset();
+}
+$msSite->options['modxmcp.allow_root_filesystem_read'] = false;
+foreach (array('inside the site' => array('basePath' => 'assets/other/'), 'inside core, by tag' => array('basePath' => '[[++core_path]]components/', 'basePathRelative' => false), 'the site root' => array('basePath' => ''), 'absolute inside the site' => array('basePath' => $msDir . '/assets/', 'basePathRelative' => false)) as $msLabel => $msProps2) {
+    $msTry($msLabel . ' needs nothing', $msProps2, true);
+    $msReset();
+}
+$e = throws('media source: create with a protected basePath', ApiException::class, function () use ($call, $msAdmin) { $call($msAdmin, 'create', array('kind' => 'media_source', 'fields' => array('name' => 'Конфиг', 'properties' => array('basePath' => 'core/config/')))); });
+check('media source: a create is judged like an update', $e && $e->errorCode === 'validation_failed' && $msSite->getCount('sources.modMediaSource', array('name' => 'Конфиг')) === 0);
+$e = throws('media source: a develop token cannot write a source', ApiException::class, function () use ($call, $msCtx, $msMade) { $call($msCtx('develop'), 'update', array('kind' => 'media_source', 'id' => $msMade['id'], 'fields' => array('properties' => array('baseUrl' => 'x')))); });
+check('media source: refused by scope before anything else, also with the setting on', $e && $e->errorCode === 'forbidden_scope');
+check('media source: a read token reads the properties', $msProps($call($msCtx('read'), 'get', array('kind' => 'media_source', 'id' => $msMade['id'])))['basePath'] === 'assets/images/');
+$msS3 = $call($msAdmin, 'create', array('kind' => 'media_source', 'fields' => array('name' => 'Облако', 'class_key' => 'sources.modS3MediaSource', 'properties' => array('baseUrl' => 'https://cdn.example/'))));
+check('media source: a source that is not a local directory is not judged by its basePath', $msProps($call($msAdmin, 'get', array('kind' => 'media_source', 'id' => $msS3['id'])))['baseUrl'] === 'https://cdn.example/');
 
 echo $failures ? "{$failures} of {$checks} PHP checks failed.\n" : "PHP: {$checks} checks passed.\n";
 exit($failures ? 1 : 0);

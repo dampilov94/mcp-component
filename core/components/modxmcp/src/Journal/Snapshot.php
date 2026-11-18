@@ -3,6 +3,7 @@ namespace ModxMCP\Journal;
 
 use ModxMCP\Kind\Kind;
 use ModxMCP\Kind\StaticFiles;
+use ModxMCP\Kind\StaticPath;
 
 /**
  * Canonical state of one object: its raw columns plus the related rows the kind declares.
@@ -10,6 +11,16 @@ use ModxMCP\Kind\StaticFiles;
  * state in read results, write results and the journal.
  */
 final class Snapshot {
+    /** @var string[] What restore() left undone on purpose since the last takeNotes(). */
+    private static $notes = array();
+
+    /** Notes of the restores since the last call (a static file that was not written), and forget them. */
+    public static function takeNotes() {
+        $notes = self::$notes;
+        self::$notes = array();
+        return $notes;
+    }
+
     /** Current state of an object, or null when it does not exist. */
     public static function capture(\modX $modx, Kind $kind, $key) {
         $key = $kind->normalizeKey($key);
@@ -23,6 +34,8 @@ final class Snapshot {
             $content = $kind->effectiveContent($object);
             $fields[$kind->column($kind->codeField())] = $content[0];
             if ($content[3]) { $state['static_file_missing'] = true; }
+            // The file is outside modxmcp.static_roots: its bytes are not read, the database column stands in.
+            if (!empty($content[4])) { $state['static_file_outside_roots'] = true; }
         }
         $state['fields'] = $fields;
         $state['relations'] = self::relations($modx, $kind, $object, false);
@@ -205,7 +218,11 @@ final class Snapshot {
         // and would otherwise pull stale file content back into the database.
         if ($kind->codeField() !== null && isset($fields['static']) && $fields['static'] === '1' && empty($state['static_file_missing'])) {
             $path = $object->getSourceFile();
-            if ($path && strpos($path, '://') === false) {
+            if ($path && strpos($path, '://') === false && !StaticPath::writable($modx, $path)) {
+                // modElement::save() would read this file into the row or write the content to it; setup mode switches both off.
+                $object->setOption(\xPDO::OPT_SETUP, true);
+                self::$notes[] = "{$kind->name()} {$key}: the static file is outside modxmcp.static_roots or in MODX\'s own code; the database row was restored but the file was not written.";
+            } elseif ($path && strpos($path, '://') === false) {
                 self::writeFile($path, $kind->fileContent((string) $fields[$kind->column($kind->codeField())]));
             }
         }

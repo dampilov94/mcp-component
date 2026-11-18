@@ -4,6 +4,7 @@ namespace ModxMCP\Action;
 use ModxMCP\ApiException;
 use ModxMCP\Context;
 use ModxMCP\Draft\DraftStore;
+use ModxMCP\Journal\Snapshot;
 use ModxMCP\Journal\Subjects;
 use ModxMCP\Journal\Undo;
 use ModxMCP\Schema;
@@ -96,10 +97,12 @@ final class UndoAction extends WriteAction {
         }
 
         list(, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $plan, $ids) {
+            Snapshot::takeNotes();
             foreach ($plan['items'] as $item) {
                 if ($item['open']) { $context->warnings[] = "{$item['subject']->kindName()} {$item['key']} is open in the manager by {$item['open']['username']}; undone anyway because force is set."; }
                 $tx->touchSubject($item['subject']);
                 $item['subject']->restore($item['target'], $item['extra']);
+                foreach (Snapshot::takeNotes() as $note) { $context->warnings[] = $note; }
             }
             $cache = $context->modx->getCacheManager();
             if ($cache) { $cache->refresh(); }

@@ -44,6 +44,9 @@ class FakeObject {
         }
     }
     public function initialize() { return true; }
+    /** Per-object options; setup mode switches off the static file synchronisation of save(), as in modElement::save(). */
+    private $options = array();
+    public function setOption($key, $value) { $this->options[$key] = $value; }
     /** The related one-to-one row of a relation alias (only the user's Profile is modelled). */
     public function getOne($alias) {
         if ($this->class === 'modUser' && $alias === 'Profile') { return $this->modx->getObject('modUserProfile', array('internalKey' => $this->fields['id'])); }
@@ -60,8 +63,37 @@ class FakeObject {
         $this->modx->unlockResource($this->fields['id']);
         return true;
     }
-    public function getBasePath() { return (string) $this->get('basePath'); }
-    public function getSourceFile() { return !empty($this->fields['static']) ? str_replace('[[++core_path]]', $this->modx->getOption('core_path'), (string) $this->fields['static_file']) : false; }
+    /** modFileMediaSource::getBasePath(): the basePath property (relative to base_path when basePathRelative, the default), else the old test column. */
+    public function getBasePath() {
+        $stored = json_decode((string) (isset($this->fields['properties']) ? (is_array($this->fields['properties']) ? json_encode($this->fields['properties']) : $this->fields['properties']) : ''), true);
+        if (is_array($stored) && isset($stored['basePath'])) {
+            $relative = isset($stored['basePathRelative']) ? (bool) $stored['basePathRelative']['value'] : true;
+            return ($relative ? $this->modx->getOption('base_path') : '') . $stored['basePath']['value'];
+        }
+        if (is_array($stored) && (isset($stored['basePathRelative']) && $stored['basePathRelative']['value'] === true)) { return (string) $this->modx->getOption('base_path'); }
+        return (string) $this->get('basePath');
+    }
+    /** modFileMediaSource::getDefaultProperties(), the part the tests need. */
+    public function getDefaultProperties() {
+        if (strpos($this->class, 'sources.mod') !== 0) { return array(); }
+        $make = function ($name, $type, $value) { return array('name' => $name, 'desc' => 'prop_file.' . $name . '_desc', 'type' => $type, 'options' => '', 'value' => $value, 'lexicon' => 'core:source'); };
+        return array('basePath' => $make('basePath', 'textfield', ''), 'basePathRelative' => $make('basePathRelative', 'combo-boolean', true), 'baseUrl' => $make('baseUrl', 'textfield', ''),
+            'baseUrlRelative' => $make('baseUrlRelative', 'combo-boolean', true), 'allowedFileTypes' => $make('allowedFileTypes', 'textfield', ''), 'imageExtensions' => $make('imageExtensions', 'textfield', 'jpg,jpeg,png,gif,svg,webp'),
+            'skipFiles' => $make('skipFiles', 'textfield', '.svn,.git,_notes,nbproject,.idea,.DS_Store'));
+    }
+    public function getSourceFile() {
+        if (empty($this->fields['static'])) { return false; }
+        // Setting tags [[++name]] are filled in, and a streaming media source puts its base path in front (the real
+        // method also takes a path that does not exist as given from element_static_path; the fake does not).
+        $modx = $this->modx;
+        $file = preg_replace_callback('/\[\[\+\+([A-Za-z0-9_.\-]+)\]\]/', function ($m) use ($modx) { return (string) $modx->getOption($m[1]); }, (string) $this->fields['static_file']);
+        $source = isset($this->fields['source']) ? (int) $this->fields['source'] : 0;
+        if ($source > 0) {
+            $media = $modx->getObject('sources.modMediaSource', array('id' => $source));
+            if ($media && $media->get('is_stream')) { $file = $media->getBasePath() . $file; }
+        }
+        return $file;
+    }
     public function joinGroup($id) {
         if (!$this->modx->getObject('modResourceGroup', $id)) { return false; }
         $where = array('document' => $this->get('id'), 'document_group' => $id);
@@ -93,7 +125,7 @@ class FakeObject {
         $wasProduct = $this->class === 'modResource' && $stored && $stored['class_key'] === 'msProduct';
         if ($pk === 'id' && empty($this->fields['id'])) { $this->fields['id'] = $this->modx->nextId($this->class); }
         // Like modElement::save(): the static file is written only when the column changed.
-        if ($code && !empty($this->fields['static']) && !empty($this->fields['static_file'])
+        if ($code && empty($this->options[xPDO::OPT_SETUP]) && !empty($this->fields['static']) && !empty($this->fields['static_file'])
             && (!$stored || (string) $stored[$code] !== (string) $this->fields[$code])) {
             $path = $this->getSourceFile();
             // Like modScript::setFileContent(): snippet and plugin files get an opening PHP tag.
@@ -213,7 +245,52 @@ class FakeVirtualPageService {
     public function clearAllCache() { $this->clears++; }
 }
 
+/**
+ * Stand-in for modLexicon: lexicon files are read from <namespace path>/lexicon/<language>/<topic>.inc.php like getFileTopic() does,
+ * the language and topic lists are the directories plus what the database holds, and the cache clearing is recorded.
+ */
+class FakeLexicon {
+    private $modx;
+    public $cleared = array();
+    public function __construct(modX $modx) { $this->modx = $modx; }
+    public function getNamespacePath($namespace = 'core') {
+        $path = $this->modx->getOption('core_path');
+        if ($namespace !== 'core') {
+            $row = $this->modx->getObject('modNamespace', array('name' => $namespace));
+            if ($row) { $path = str_replace(array('{core_path}', '{base_path}', '{assets_path}'), array($this->modx->getOption('core_path'), $this->modx->getOption('base_path'), $this->modx->getOption('assets_path')), (string) $row->get('path')); }
+        }
+        return $path;
+    }
+    public function getFileTopic($language = 'en', $namespace = 'core', $topic = 'default') {
+        $path = str_replace('//', '/', $this->getNamespacePath($namespace) . '/lexicon/' . $language . '/' . $topic . '.inc.php');
+        if (!file_exists($path)) { return false; }
+        $_lang = array();
+        include $path;
+        return $_lang;
+    }
+    public function getLanguageList($namespace = 'core') {
+        $out = array();
+        $dir = str_replace('//', '/', $this->getNamespacePath($namespace) . '/lexicon/');
+        if (is_dir($dir)) { foreach (scandir($dir) as $entry) { if ($entry[0] !== '.' && is_dir($dir . $entry)) { $out[] = $entry; } } }
+        foreach ($this->modx->getCollection('modLexiconEntry', array('namespace' => $namespace)) as $row) { $out[] = $row->get('language'); }
+        $out = array_values(array_unique($out));
+        sort($out);
+        return $out;
+    }
+    public function getTopicList($language = 'en', $namespace = 'core') {
+        $out = array();
+        $dir = str_replace('//', '/', $this->getNamespacePath($namespace) . '/lexicon/' . $language . '/');
+        if (is_dir($dir)) { foreach (scandir($dir) as $entry) { if (substr($entry, -8) === '.inc.php') { $out[] = substr($entry, 0, -8); } } }
+        foreach ($this->modx->getCollection('modLexiconEntry', array('namespace' => $namespace)) as $row) { $out[] = $row->get('topic'); }
+        $out = array_values(array_unique($out));
+        sort($out);
+        return $out;
+    }
+    public function clearCache($path = '') { $this->cleared[] = $path; return true; }
+}
+
 class xPDO {
+    const OPT_SETUP = 'setup';
     public $pdo;
     public $options = array();
     public function getOption($key, $options = null, $default = null) {
@@ -821,6 +898,7 @@ class modX extends xPDO {
     public $snippetRunners = array();
     public $runCalls = array();
     public $parser;
+    public $lexicon;
     const LOG_LEVEL_ERROR = 1;
     public $user;
     public $events = array();
@@ -858,6 +936,8 @@ class modX extends xPDO {
         array('modAccessPolicy', 'modAccessPolicy', 'parent', array()),
         array('modAccessPolicyTemplate', 'modAccessPermission', 'template', array()),
         array('modAccessPolicyTemplate', 'modAccessPolicy', 'template', array()),
+        // A property set takes its links to elements with it (xPDO composite 'Elements').
+        array('modPropertySet', 'modElementPropertySet', 'property_set', array()),
     );
     private static $processors = array(
         'element/chunk/' => array('modChunk', 'name'), 'element/snippet/' => array('modSnippet', 'name'),
@@ -873,6 +953,7 @@ class modX extends xPDO {
         $this->cache = new FakeCache();
         $this->context = new FakeContext('mgr');
         $this->parser = new FakeParser($this);
+        $this->lexicon = new FakeLexicon($this);
         if ($file && is_file($file)) { $this->tables = json_decode(file_get_contents($file), true); }
     }
     public static function codeColumn($class) {
@@ -881,7 +962,7 @@ class modX extends xPDO {
     }
     private function persist() { if ($this->file) { file_put_contents($this->file, json_encode($this->tables)); } }
     /** Primary key column(s) per class; rows of other classes are matched by id (or by their whole content without one). */
-    public static $primaryKeys = array('modSystemSetting' => 'key', 'modContext' => 'key', 'modNamespace' => 'name', 'modContextSetting' => array('context_key', 'key'), 'modUserSetting' => array('user', 'key'), 'transport.modTransportPackage' => 'signature',
+    public static $primaryKeys = array('modElementPropertySet' => array('element', 'element_class', 'property_set'), 'modSystemSetting' => 'key', 'modContext' => 'key', 'modNamespace' => 'name', 'modContextSetting' => array('context_key', 'key'), 'modUserSetting' => array('user', 'key'), 'transport.modTransportPackage' => 'signature',
         'msCategoryMember' => array('product_id', 'category_id'), 'msCategoryOption' => array('option_id', 'category_id'), 'msProductLink' => array('link', 'master', 'slave'),
         // xPDO class without a primary key: rows are told apart by their whole content.
         'msProductOption' => null);
@@ -1401,6 +1482,123 @@ class modX extends xPDO {
     }
 
     /** workspace/namespace/*: the core namespace cannot be removed; removing one removes its settings and lexicon entries. */
+    /**
+     * element/propertyset/{create,update,remove,addelement,removeelement} (MODX 2.8.8). create and update strip the characters MODX
+     * strips from a name; addelement and removeelement take the set as `propertyset` and the element as `element` + `element_class`.
+     * `properties` arrives as the stored map (an array) and is kept as it is.
+     */
+    private function propertySetProcessor($action, array $data) {
+        if ($action === 'addelement' || $action === 'removeelement') {
+            $set = $this->getObject('modPropertySet', array('id' => isset($data['propertyset']) ? $data['propertyset'] : 0));
+            if (!$set) { return new FakeResponse('Property set not found.'); }
+            if (empty($data['element_class']) || empty($data['element']) || !$this->getObject($data['element_class'], array('id' => $data['element']))) { return new FakeResponse('Element not found.'); }
+            $where = array('element' => $data['element'], 'element_class' => $data['element_class'], 'property_set' => $set->get('id'));
+            $row = $this->getObject('modElementPropertySet', $where);
+            if ($action === 'addelement') {
+                if ($row) { return new FakeResponse('The element could not be added to the property set.'); }
+                $row = $this->newObject('modElementPropertySet');
+                $row->fromArray($where, '', true, true);
+                $row->save();
+            } else {
+                if (!$row) { return new FakeResponse('The element is not in the property set.'); }
+                $row->remove();
+            }
+            return new FakeResponse(null, $where);
+        }
+        if ($action === 'remove') {
+            $object = $this->getObject('modPropertySet', array('id' => isset($data['id']) ? $data['id'] : 0));
+            if (!$object) { return new FakeResponse('Property set not found.'); }
+            $object->remove();
+            return new FakeResponse(null, array('id' => $data['id']));
+        }
+        $name = isset($data['name']) ? str_replace(array('!', '@', '?', '`', '&amp;', '&'), '', $data['name']) : '';
+        if ($name === '') { return new FakeResponse('Please specify a name.'); }
+        $data['name'] = $name;
+        foreach ($this->match('modPropertySet', array('name' => $name)) as $row) {
+            if ($action === 'create' || (string) $row['id'] !== (string) $data['id']) { return new FakeResponse('A property set with that name already exists.'); }
+        }
+        if (!empty($data['category']) && !$this->getObject('modCategory', array('id' => $data['category']))) { return new FakeResponse('Category not found.'); }
+        if ($action === 'create') {
+            $object = $this->newObject('modPropertySet');
+            $data += array('description' => '', 'category' => 0, 'properties' => null);
+        } else {
+            $object = $this->getObject('modPropertySet', array('id' => $data['id']));
+            if (!$object) { return new FakeResponse('Property set not found.'); }
+            if (empty($data['category'])) { $data['category'] = 0; }
+        }
+        $object->fromArray($data, '', false, true);
+        $object->save();
+        return new FakeResponse(null, array('id' => $object->get('id')));
+    }
+
+    /**
+     * workspace/lexicon/{create,updatefromgrid,revert} (MODX 2.8.8): create refuses an existing override; updatefromgrid stores an override
+     * or removes it when the value is the file's (and dies on a missing entry in that case, as the real one does); revert removes it.
+     * Every write clears the cache of the topic.
+     */
+    private function lexiconProcessor($action, array $data) {
+        if ($action === 'updatefromgrid') { $data = json_decode($data['data'], true); }
+        $where = array('name' => $data['name'], 'namespace' => $data['namespace'], 'language' => $data['language'], 'topic' => $data['topic']);
+        $entry = $this->getObject('modLexiconEntry', $where);
+        $cache = $data['language'] . '/' . $data['namespace'] . '/' . $data['topic'] . '.cache.php';
+        if ($action === 'create') {
+            if ($entry) { return new FakeResponse('This entry already exists.'); }
+            $entry = $this->newObject('modLexiconEntry');
+            $entry->fromArray($where + array('value' => (string) $data['value'], 'editedon' => date('Y-m-d h:i:s'), 'createdon' => date('Y-m-d H:i:s')));
+            $entry->save();
+            $this->lexicon->clearCache($cache);
+            return new FakeResponse(null);
+        }
+        if ($action === 'revert') {
+            if ($entry) { $entry->remove(); $this->lexicon->clearCache($cache); }
+            return new FakeResponse(null);
+        }
+        $file = $this->lexicon->getFileTopic($data['language'], $data['namespace'], $data['topic']);
+        if (!empty($file[$data['name']]) && $file[$data['name']] == $data['value']) {
+            if ($entry) { $entry->remove(); $this->lexicon->clearCache($cache); }
+            else { throw new Error('Call to a member function get() on null'); }
+        } else {
+            if (!$entry) { $entry = $this->newObject('modLexiconEntry'); $entry->fromArray($where); }
+            $entry->fromArray(array('value' => (string) $data['value'], 'editedon' => date('Y-m-d H:i:s')));
+            $entry->save();
+            $this->lexicon->clearCache($cache);
+        }
+        return new FakeResponse(null);
+    }
+
+    /**
+     * source/{create,update,remove} (MODX 2.8.8): create requires a unique name and takes `properties` as it is; update goes through
+     * modMediaSource::setProperties(), which keeps only the properties whose value differs from the class default.
+     */
+    private function sourceProcessor($action, array $data) {
+        if ($action === 'remove') {
+            $object = $this->getObject('sources.modMediaSource', array('id' => isset($data['id']) ? $data['id'] : 0));
+            if (!$object) { return new FakeResponse('Media source not found.'); }
+            $object->remove();
+            return new FakeResponse(null, array('id' => $data['id']));
+        }
+        if (!isset($data['name']) || $data['name'] === '') { return new FakeResponse('Please specify a name.'); }
+        foreach ($this->match('sources.modMediaSource', array('name' => $data['name'])) as $row) {
+            if ($action === 'create' || (string) $row['id'] !== (string) $data['id']) { return new FakeResponse('A media source with that name already exists.'); }
+        }
+        if ($action === 'create') {
+            $object = $this->newObject('sources.modMediaSource');
+            $data += array('class_key' => 'sources.modFileMediaSource', 'description' => '', 'is_stream' => 1, 'properties' => null);
+        } else {
+            $object = $this->getObject('sources.modMediaSource', array('id' => $data['id']));
+            if (!$object) { return new FakeResponse('Media source not found.'); }
+            if (isset($data['properties']) && is_array($data['properties'])) {
+                $defaults = $object->getDefaultProperties();
+                foreach ($data['properties'] as $key => $entry) {
+                    if (is_array($entry) && isset($defaults[$entry['name']]) && $entry['value'] == $defaults[$entry['name']]['value']) { unset($data['properties'][$key]); }
+                }
+            }
+        }
+        $object->fromArray($data, '', true, true);
+        $object->save();
+        return new FakeResponse(null, array('id' => $object->get('id')));
+    }
+
     private function namespaceProcessor($action, array $data) {
         if (!isset($data['name']) || $data['name'] === '') { return new FakeResponse('Please specify a name.'); }
         $object = $this->getObject('modNamespace', array('name' => $data['name']));
@@ -1589,6 +1787,9 @@ class modX extends xPDO {
         if ($base === 'context/setting/') { return $this->settingProcessor($action, $data, $path, 'modContextSetting'); }
         if ($base === 'context/') { return $this->contextProcessor($action, $data); }
         if ($base === 'workspace/namespace/') { return $this->namespaceProcessor($action, $data); }
+        if ($base === 'element/propertyset/') { return $this->propertySetProcessor($action, $data); }
+        if ($base === 'workspace/lexicon/') { return $this->lexiconProcessor($action, $data); }
+        if ($base === 'source/') { return $this->sourceProcessor($action, $data); }
         if (in_array($base, array('security/group/', 'security/role/', 'security/resourcegroup/'), true)) { return $this->accessProcessor($base, $action, $data); }
         if ($base === 'resource/') { return $this->resourceProcessor($action, $data, $path); }
         if (!isset(self::$processors[$base])) { return null; }
@@ -1668,6 +1869,10 @@ function fakeSite($dir, array $options = array()) {
         'modxmcp.auto_static' => true,
         'modxmcp.core_path' => dirname(dirname(__DIR__)) . '/core/components/modxmcp/',
         'core_path' => $dir . '/core/',
+        'base_path' => $dir . '/',
+        'assets_path' => $dir . '/assets/',
+        // The older static-element tests keep their files anywhere below the site directory.
+        'modxmcp.static_roots' => './',
         'table_prefix' => 'modx_',
         'site_name' => 'Test site',
     );

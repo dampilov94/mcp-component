@@ -163,6 +163,26 @@ Rules that keep a live site safe:
   `modx_request_status` with the reported `request_id`, or retry the identical call with
   that ID as `_request_id`.
 
+## Property sets, default properties, lexicon, media source settings
+
+- Kind `property_set` (`properties`: `{name: {type, value, desc?, options?, lexicon?, area?}}`,
+  relation `elements`: a list of `{kind, id}` with kind chunk, snippet, template, plugin or tv).
+  The same links are the `property_sets` relation (a list of ids) of those elements, so either
+  side can be written. `modx_invoke {kind: "property_set", id, op: "assign" | "unassign",
+  args: {kind, id}}` attaches or detaches one element. Writing `properties` replaces the whole map.
+- Chunks, snippets, templates, plugins and TVs have the field `properties` (their default
+  parameters, e.g. the `&tpl` of a pdoTools snippet) in the same shape.
+- Kind `lexicon_entry`, key `namespace:topic:language:name` (e.g. `core:default:ru:error`).
+  A read gives the value the site shows plus `source` (`file` or `database`), `overridden` and
+  `file_value`. `modx_list` needs a `namespace`, `topic`, `language` or `query` and lists the
+  entries of the lexicon files too. `modx_update` (or `modx_create`) writes a database override;
+  writing the value of the file removes the override; `modx_delete` removes it so the file value
+  applies again. All of it is journaled and can be undone.
+- Kind `media_source` has `properties` as `{name: value}` (`basePath`, `basePathRelative`,
+  `baseUrl`, `allowedFileTypes`, ...): a write merges the given names into the stored settings. A
+  `basePath` that leads into `core/config` or `modxmcp-data`, or outside the site and core
+  directories, is refused unless `modxmcp.allow_root_filesystem_read` is on.
+
 ## Finding and replacing across code
 
 - `modx_search {query}` — literal search in the code of chunks, snippets, templates and
@@ -200,7 +220,8 @@ Rules that keep a live site safe:
 - `modx_audit_site {checks?, limit?}` lists concrete problems, each tied to an object: `broken_link`
   (a `[[~id]]` to a missing page is an error, to a deleted or unpublished one a warning),
   `missing_element`, `unused_element`, `static_file_missing`, `duplicate_alias`, `php_syntax`,
-  `missing_template`, `fenom_syntax` (a chunk or template whose Fenom does not compile; needs
+  `missing_template`, `static_outside_roots` (a static element whose file is outside the folders of
+  `modxmcp.static_roots`; the tools do not read such a file), `fenom_syntax` (a chunk or template whose Fenom does not compile; needs
   pdoTools). With pdoTools, Fenom calls (`{include 'chunk'}`, `{'chunk' | chunk}`,
   `{$_modx->runSnippet('name')}`, `makeUrl`) count as references in chunks and templates. `summary` gives the real `count` per check even when `limit` (default 50)
   lists fewer; `truncated` means a scan cap was hit. Findings are candidates to look at, not

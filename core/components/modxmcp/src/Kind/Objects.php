@@ -263,6 +263,37 @@ final class Objects {
     }
 
     /**
+     * Refuse a write that would point a static element at a file outside modxmcp.static_roots, or write the code of an
+     * element whose existing static file is there. $object is null for a create; $columns are the normalised columns sent.
+     */
+    public static function assertStaticWrite(Context $context, Kind $kind, $object, array $columns) {
+        $fields = $kind->fields();
+        if (!isset($fields['static'], $fields['static_file'])) { return; }
+        $field = $kind->codeField();
+        $touchesPath = false;
+        foreach (array('static', 'static_file', 'source') as $name) {
+            if (array_key_exists($kind->column($name), $columns)) { $touchesPath = true; }
+        }
+        $touchesCode = $field !== null && array_key_exists($kind->column($field), $columns);
+        if (!$touchesPath && !$touchesCode) { return; }
+        $value = function ($name, $default) use ($kind, $columns, $object) {
+            $column = $kind->column($name);
+            if (array_key_exists($column, $columns)) { return $columns[$column]; }
+            return $object ? $object->get($column) : $default;
+        };
+        if (!(bool) $value('static', 0)) { return; }
+        StaticPath::assertAllowed($context->modx, $value('static_file', ''), isset($fields['source']) ? $value('source', 0) : 0);
+    }
+
+    /** The warning for an element whose static file is outside modxmcp.static_roots (its code shown is the database copy), or null. */
+    public static function staticOutsideWarning(Kind $kind, $object) {
+        if ($kind->codeField() === null || !isset($kind->fields()['static']) || !$object->get('static')) { return null; }
+        $content = $kind->effectiveContent($object);
+        return empty($content[4]) ? null : "The static file of {$kind->name()} " . $kind->keyOf($object)
+            . ' is outside modxmcp.static_roots and was not read; the code shown is the copy in the database.';
+    }
+
+    /**
      * Create or update one object through the core processors, then apply relation changes.
      * The object must already be touched in the transaction (update) or is registered after
      * creation. Returns the object key.
@@ -270,6 +301,7 @@ final class Objects {
     public static function save(Context $context, Transaction $tx, Kind $kind, $id, array $columns, array $relations) {
         $modx = $context->modx;
         $creating = $id === null;
+        self::assertStaticWrite($context, $kind, $creating ? null : $kind->findByKey($modx, $id), $columns);
         foreach ($kind->alsoAffected($modx, $id, $columns, $id === null ? 'create' : 'update') as $other) {
             $tx->touch($kind, $other);
         }
@@ -315,6 +347,13 @@ final class Objects {
         }
         if ($relations) {
             $object = $kind->findByKey($modx, $id);
+            foreach ($relations as $name => $value) {
+                // Other objects whose state changes with this relation are journaled with the call.
+                foreach ($kind->relationAffects($modx, $object, $name, $value) as $other) {
+                    $otherKind = $context->kinds->get($other[0]);
+                    if ($otherKind) { $tx->touch($otherKind, $other[1]); }
+                }
+            }
             foreach ($relations as $name => $value) { $kind->writeRelation($modx, $object, $name, $value); }
             $cache = $modx->getCacheManager();
             if ($cache) { $cache->refresh(); }

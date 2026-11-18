@@ -21,6 +21,9 @@ final class Kernel {
     const VERSION = '2.0.0';
     const PROTOCOL = 2;
 
+    /** @var bool True for the whole of an API request (see servingApi()). */
+    private static $serving = false;
+
     private $modx;
     private $bufferLevel;
     private $maxResponse = 4194304;
@@ -34,8 +37,19 @@ final class Kernel {
         $this->bufferLevel = (int) $bufferLevel;
     }
 
+    /**
+     * Whether the request being served comes through the API. The manager recorder stays silent then: whatever
+     * the API does is journaled by its own transaction or, for operations that are not journaled (emptying the
+     * trash, modx_run, packages), deliberately not at all. Passing a value sets the flag; tests use it.
+     */
+    public static function servingApi($set = null) {
+        if ($set !== null) { self::$serving = (bool) $set; }
+        return self::$serving;
+    }
+
     /** Handle the current HTTP request and terminate. */
     public function handle(array $server) {
+        self::servingApi(true);
         $requestId = null;
         try {
             $frame = $this->route($server, $requestId);

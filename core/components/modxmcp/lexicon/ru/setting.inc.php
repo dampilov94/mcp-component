@@ -9,17 +9,14 @@ $_lang['setting_modxmcp.service_user_id_desc'] = 'ID пользователя MO
 $_lang['setting_modxmcp.debug'] = 'Режим отладки MCP';
 $_lang['setting_modxmcp.debug_desc'] = 'Если включено, API будет возвращать подробности внутренних ошибок в ответе. В продакшене рекомендуется держать выключенным.';
 
-$_lang['setting_modxmcp.audit_log'] = 'Аудит-лог MCP';
-$_lang['setting_modxmcp.audit_log_desc'] = 'Если включено, операции create/update/delete и обновления TV будут записываться в лог MODX для аудита и диагностики.';
-
 $_lang['setting_modxmcp.max_payload_bytes'] = 'Максимальный размер payload';
 $_lang['setting_modxmcp.max_payload_bytes_desc'] = 'Максимально допустимый размер JSON-запроса к API в байтах. Защищает компонент от слишком больших или ошибочных запросов.';
 
 $_lang['setting_modxmcp.allow_root_filesystem_read'] = 'Разрешить чтение корневого Filesystem';
 $_lang['setting_modxmcp.allow_root_filesystem_read_desc'] = 'Если включено, MCP сможет просматривать и читать файлы через корневой media source Filesystem. Лучше держать выключенной, если нужно только безопасное изучение кода компонентов.';
 
-$_lang['setting_modxmcp.component_code_roots'] = 'Корни кода компонентов';
-$_lang['setting_modxmcp.component_code_roots_desc'] = 'Список каталогов через запятую, которые MCP может сканировать для изучения кода компонентов, например core/components,assets/components.';
+$_lang['setting_modxmcp.static_roots'] = 'Каталоги статических элементов';
+$_lang['setting_modxmcp.static_roots_desc'] = 'Каталоги через запятую, где могут лежать файлы статических элементов ({base_path}, {core_path}, {assets_path} или пути от корня сайта; по умолчанию — весь сайт и core). Закрыты всегда, что бы здесь ни было: core/config, core/cache, core/packages, core/modxmcp-data, файлы с паролями и символические ссылки; собственный код MODX (core/model, manager, connectors…) можно читать, но не записывать.';
 
 $_lang['setting_modxmcp.core_path'] = 'Путь к ядру';
 $_lang['setting_modxmcp.core_path_desc'] = 'Путь в файловой системе к директории ядра компонента modxMCP. По умолчанию {core_path}components/modxmcp/.';

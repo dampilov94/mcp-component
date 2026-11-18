@@ -61,7 +61,6 @@ class ModxmcpIndexManagerController extends modExtraManagerController {
         $overview = array(
             'enabled' => (bool) $this->modx->getOption('modxmcp.enabled'), 'version' => \ModxMCP\Kernel::VERSION, 'endpoint' => '',
             'active_tokens' => 0, 'auto_static' => (bool) $this->modx->getOption('modxmcp.auto_static'),
-            'audit_log' => (bool) $this->modx->getOption('modxmcp.audit_log'),
             'recent' => array(), 'counts_24h' => array('mcp' => 0, 'manager' => 0, 'external' => 0), 'dangerous' => array(),
         );
         $integrations = array();
@@ -113,7 +112,7 @@ class ModxmcpIndexManagerController extends modExtraManagerController {
         }
 
         $labelKeys = array(
-            'intro', 'endpoint', 'enabled', 'yes', 'no', 'enable_hint', 'auto_static', 'audit_log',
+            'intro', 'endpoint', 'enabled', 'yes', 'no', 'enable_hint', 'auto_static',
             'on', 'off', 'settings_hint', 'integrations', 'integrations_intro',
             'heading_status', 'version', 'active_tokens', 'no_tokens', 'tokens_link', 'copy',
             'recent_title', 'recent_empty', 'recent_24h', 'recent_all',

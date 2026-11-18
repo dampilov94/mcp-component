@@ -28,6 +28,7 @@ final class CreateAction extends WriteAction {
         $kind = Objects::kind($context, $args['kind'], true);
         Objects::assertGenericWrites($kind);
         $columns = Objects::normalize($kind, $args['fields'], true);
+        Objects::assertStaticWrite($context, $kind, null, $columns);
         $relations = isset($args['relations']) ? $args['relations'] : array();
         Objects::assertWritableRelations($kind, $relations, $context);
         Objects::lint($context, $kind, $columns, !empty($args['skip_lint']));

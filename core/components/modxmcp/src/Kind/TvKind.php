@@ -34,6 +34,7 @@ final class TvKind extends Kind {
             'display'      => array('type' => 'string', 'description' => 'Output type.'),
             'rank'         => array('type' => 'integer', 'description' => 'Sort order.'),
             'locked'       => array('type' => 'boolean', 'description' => 'Locked for editing in the manager.'),
+            'properties'   => self::propertiesField('Default properties of the TV.'),
             'input_properties' => array('type' => 'object', 'json' => true,
                 'description' => 'Options of the input type as {name: value}, e.g. {"configs": "gallery"} binds a MIGX TV to its configuration. Writing replaces the map.'),
         );
@@ -41,6 +42,7 @@ final class TvKind extends Kind {
 
     /** The TV processors read input options only from properties named inopt_<name>. */
     public function processorData($op, array $data) {
+        $data = $this->propertiesData($data);
         if (!array_key_exists('input_properties', $data)) { return $data; }
         $options = $data['input_properties'];
         unset($data['input_properties']);
@@ -83,10 +85,13 @@ final class TvKind extends Kind {
             $ids[$item] = true;
         }
         $id = (int) $object->get('id');
+        // A template that stays attached keeps its rank (the order of the TV tabs in the manager); a new one gets 0, as in MODX.
+        $ranks = array();
+        foreach ($modx->getCollection('modTemplateVarTemplate', array('tmplvarid' => $id)) as $existing) { $ranks[(int) $existing->get('templateid')] = $existing->get('rank'); }
         $modx->removeCollection('modTemplateVarTemplate', array('tmplvarid' => $id));
         foreach (array_keys($ids) as $template) {
             $row = $modx->newObject('modTemplateVarTemplate');
-            $row->fromArray(array('tmplvarid' => $id, 'templateid' => $template, 'rank' => 0), '', true, true);
+            $row->fromArray(array('tmplvarid' => $id, 'templateid' => $template, 'rank' => isset($ranks[$template]) ? $ranks[$template] : 0), '', true, true);
             if (!$row->save()) { throw new \RuntimeException('Cannot attach the TV to a template.'); }
         }
     }

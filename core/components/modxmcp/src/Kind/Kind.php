@@ -40,6 +40,8 @@ abstract class Kind {
      *               through viaRow(); sent to the processors like any field, never filterable, not a column
      *               of the model class (snapshots keep it in the relation's rows)
      *   write_only  accepted on write, never read, listed or sent back (a password)
+     *   stored_properties  the `properties` column of an element or property set (see Properties): shown as {name: {type, value, ...}},
+     *               written as that object and sent to the processors as the stored map; an unchanged value is not sent at all
      *   json        with type "object": any JSON object (not only name => boolean), stored as JSON text; shown as the
      *               object it is, written as an object (nested empty objects cannot be told from empty lists)
      *
@@ -176,6 +178,18 @@ abstract class Kind {
 
     /** Properties of the final create/update processor call, e.g. defaults a processor insists on. $op is "create" or "update". */
     public function processorData($op, array $data) {
+        return $this->propertiesData($data);
+    }
+
+    /** Fields of the stored_properties kind: a new value (JSON text) becomes the stored map; the unchanged value is not sent. */
+    protected function propertiesData(array $data) {
+        foreach ($this->fields() as $name => $definition) {
+            if (empty($definition['stored_properties'])) { continue; }
+            $column = $this->column($name);
+            if (!array_key_exists($column, $data)) { continue; }
+            if (is_string($data[$column])) { $data[$column] = Properties::fromApi(json_decode($data[$column], true)); }
+            else { unset($data[$column]); }
+        }
         return $data;
     }
 
@@ -236,6 +250,11 @@ abstract class Kind {
 
     /** Why this token cannot use a relation (a denied group), or null. Checked by modx_get and before relations are written. */
     public function relationBlockReason(Context $context, $name) {
+        // The property sets of an element are a view of the property_set kind: a token that cannot use that kind does not see them.
+        if ($name === 'property_sets' && !empty($this->relationSpecs()[$name]['writable']) && $this->modelClass() !== 'modPropertySet') {
+            $other = $context->kinds->get('property_set');
+            return $other ? $context->kinds->blockReason($other, $context) : null;
+        }
         return null;
     }
 
@@ -450,8 +469,31 @@ abstract class Kind {
         return StaticFiles::makeStatic($context, $tx, $this, $this->keyOf($object));
     }
 
+    /**
+     * Objects of other kinds whose own state changes when this relation is written, as [kind name, key] pairs: the write
+     * touches them first so the change is journaled with them. $value is the API form of the new rows.
+     */
+    public function relationAffects(\modX $modx, $object, $name, $value) {
+        if ($name === 'property_sets' && !empty($this->relationSpecs()[$name]['writable']) && $this->modelClass() !== 'modPropertySet') {
+            return PropertySets::affectedByElement($modx, $this->modelClass(), (int) $object->get('id'), $value);
+        }
+        return array();
+    }
+
+    /**
+     * Like listCriteria() for a kind whose objects are not (only) rows: return [total, objects] for the given filters, or null for the
+     * generic query. $criteria are the exact filters (column => value), $query the text of the `query` argument.
+     */
+    public function customList(Context $context, array $criteria, $query, $start, $limit) {
+        return null;
+    }
+
     /** Replace a writable relation. $value is the API form (a list). */
     public function writeRelation(\modX $modx, $object, $name, $value) {
+        if ($name === 'property_sets' && !empty($this->relationSpecs()[$name]['writable']) && $this->modelClass() !== 'modPropertySet') {
+            PropertySets::writeForElement($modx, $this->modelClass(), (int) $object->get('id'), $value);
+            return;
+        }
         throw new ApiException('validation_failed', "Relation '{$name}' of {$this->name()} cannot be changed through the API.");
     }
 
@@ -493,7 +535,8 @@ abstract class Kind {
     protected function propertySetRelation() {
         return array(
             'class' => 'modElementPropertySet', 'fk' => 'element', 'where' => array('element_class' => $this->modelClass()),
-            'present' => 'property_set', 'description' => 'Ids of property sets attached to the element.',
+            'present' => 'property_set', 'writable' => true,
+            'description' => 'Ids of property sets attached to the element. Writing replaces the list (it is the same link as the elements of a property set).',
         );
     }
 
@@ -513,7 +556,14 @@ abstract class Kind {
             'static_file' => array('type' => 'string', 'description' => 'File path of a static element.'),
             'source'      => array('type' => 'integer', 'description' => 'Media source id of the static file, 0 for none.'),
             'locked'      => array('type' => 'boolean', 'description' => 'Locked for editing in the manager.'),
+            'properties'  => self::propertiesField('Default properties of the element (the &name=`value` parameters of a snippet call).'),
         );
+    }
+
+    /** Definition of a field that holds name => {type, value, desc?, options?, lexicon?, area?}; writing replaces the whole map. */
+    protected static function propertiesField($description) {
+        return array('type' => 'object', 'json' => true, 'stored_properties' => true, 'no_filter' => true,
+            'description' => $description . ' {name: {type, value, desc?, options?, lexicon?, area?}}; writing replaces the whole map.');
     }
 
     /**
@@ -555,23 +605,25 @@ abstract class Kind {
     /**
      * Code as the site runs it: the file for a static element, the database column otherwise.
      * Reads without synchronising the file back into the database.
-     * @return array [content, is static, absolute file path or null, file missing]
+     * A file outside the roots of modxmcp.static_roots is never read: the database column is returned and the fifth value is true.
+     * @return array [content, is static, absolute file path or null, file missing, file outside the roots]
      */
     public function effectiveContent($object) {
         $field = $this->codeField();
-        if ($field === null) { return array('', false, null, false); }
+        if ($field === null) { return array('', false, null, false, false); }
         $column = $this->column($field);
         $stored = (string) $object->get($column);
         if (!array_key_exists('static', $this->fields()) || !(bool) $object->get('static')) {
-            return array($stored, false, null, false);
+            return array($stored, false, null, false, false);
         }
         $path = $object->getSourceFile();
-        if (!$path || strpos($path, '://') !== false) { return array($stored, true, null, true); }
+        if (!$path || strpos($path, '://') !== false) { return array($stored, true, null, true, false); }
+        if (!StaticPath::allowed($object->xpdo, $path)) { return array($stored, true, null, false, true); }
         clearstatcache(true, $path);
-        if (!is_file($path)) { return array('', true, $path, true); }
+        if (!is_file($path)) { return array('', true, $path, true, false); }
         $content = @file_get_contents($path);
         if ($content === false) { throw new \RuntimeException('Cannot read the static file of ' . $this->name() . ' ' . $object->get('id') . '.'); }
-        return array($this->codeFromFile($content), true, $path, false);
+        return array($this->codeFromFile($content), true, $path, false, false);
     }
 
     /** API value of one field. */
@@ -582,6 +634,7 @@ abstract class Kind {
             return $content[0];
         }
         if (!empty($fields[$field]['write_only'])) { return ''; }
+        if (!empty($fields[$field]['stored_properties'])) { return Properties::present(Properties::stored($object)); }
         $raw = $this->rawValue($object, $field);
         if ($fields[$field]['type'] === 'json') { return self::jsonDecoded($raw); }
         if ($fields[$field]['type'] === 'object') { return !empty($fields[$field]['json']) ? self::jsonValue($raw) : self::objectValue($raw); }
@@ -650,6 +703,7 @@ abstract class Kind {
     /** Current value of a field in the form the core processors expect. */
     public function processorValue($object, $field) {
         $fields = $this->fields();
+        if (!empty($fields[$field]['stored_properties'])) { return Properties::stored($object); }
         if (isset($fields[$field]['format']) && $fields[$field]['format'] === 'datetime') {
             return self::datetime($this->rawValue($object, $field));
         }

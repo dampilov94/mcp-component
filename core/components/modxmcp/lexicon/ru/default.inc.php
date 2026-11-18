@@ -90,7 +90,6 @@ $_lang['modxmcp_cmp_token'] = 'API-токен';
 $_lang['modxmcp_cmp_token_set'] = 'задан';
 $_lang['modxmcp_cmp_token_notset'] = 'не задан — нажмите «Сгенерировать» ниже';
 $_lang['modxmcp_cmp_auto_static'] = 'Авто-статика';
-$_lang['modxmcp_cmp_audit_log'] = 'Журнал аудита';
 $_lang['modxmcp_cmp_package_install'] = 'Установка пакетов';
 $_lang['modxmcp_cmp_on'] = 'Вкл';
 $_lang['modxmcp_cmp_off'] = 'Выкл';

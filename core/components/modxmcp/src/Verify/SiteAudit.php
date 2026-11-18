@@ -5,6 +5,7 @@ use ModxMCP\Context;
 use ModxMCP\Code\FenomCheck;
 use ModxMCP\Draft\DraftStore;
 use ModxMCP\Graph\GraphBuilder;
+use ModxMCP\Kind\StaticPath;
 use ModxMCP\Lint\PhpLint;
 
 /**
@@ -12,7 +13,7 @@ use ModxMCP\Lint\PhpLint;
  * supplies missing_element and unused_element so the tag parsing exists only once.
  */
 final class SiteAudit {
-    const CHECKS = array('broken_link', 'missing_element', 'unused_element', 'static_file_missing', 'duplicate_alias', 'php_syntax', 'missing_template', 'fenom_syntax');
+    const CHECKS = array('broken_link', 'missing_element', 'unused_element', 'static_file_missing', 'duplicate_alias', 'php_syntax', 'missing_template', 'static_outside_roots', 'fenom_syntax');
 
     /** The per-resource checks look at no more resources than this (the most recently edited when there are more). */
     public static $maxResources = 5000;
@@ -60,7 +61,7 @@ final class SiteAudit {
 
     private function execute() {
         $resourcePass = $this->wants('broken_link') || $this->wants('duplicate_alias') || $this->wants('missing_template');
-        $elementPass = $this->wants('broken_link') || $this->wants('static_file_missing') || $this->wants('php_syntax') || $this->wants('fenom_syntax');
+        $elementPass = $this->wants('broken_link') || $this->wants('static_file_missing') || $this->wants('php_syntax') || $this->wants('fenom_syntax') || $this->wants('static_outside_roots');
         if ($resourcePass) { $this->scanResources(); }
         if ($elementPass) { $this->scanElements(); }
         if ($this->wants('broken_link')) { $this->reportBrokenLinks(); }
@@ -207,6 +208,7 @@ final class SiteAudit {
                         $effective = $kind->effectiveContent($object);
                         $content = $effective[3] ? null : $effective[0];
                         if ($effective[3]) { $this->staticMissing($kindName, $id, $name, $object, 'missing'); }
+                        if (!empty($effective[4])) { $this->staticOutside($kindName, $id, $name, $object); }
                     } catch (\RuntimeException $e) {
                         $this->staticMissing($kindName, $id, $name, $object, 'unreadable');
                     }
@@ -214,6 +216,7 @@ final class SiteAudit {
                     $this->checkPlainStatic($kindName, $id, $name, $object);
                 }
                 if ($this->wants('static_file_missing') && $static) { $this->summary['static_file_missing']['scanned']++; }
+                if ($this->wants('static_outside_roots') && $static) { $this->summary['static_outside_roots']['scanned']++; }
                 if ($graph && $isCode) {
                     $this->summary['broken_link']['scanned']++;
                     // Fenom is read in chunks and templates only: code of a snippet or a plugin can look like it without being it.
@@ -250,10 +253,19 @@ final class SiteAudit {
             array('static_file' => $file, 'reason' => $reason));
     }
 
+    private function staticOutside($kindName, $id, $name, $object) {
+        if (!$this->wants('static_outside_roots')) { return; }
+        $file = (string) $object->get('static_file');
+        $this->add('static_outside_roots', 'error', $kindName, $id, $name,
+            'The static file is outside modxmcp.static_roots, so its content is not read by the tools (the database copy is shown instead)' . ($file !== '' ? ": {$file}." : '.'),
+            array('static_file' => $file, 'source' => (int) $object->get('source'), 'roots' => StaticPath::rootsSetting($this->modx)));
+    }
+
     /** A static element that has no code field (a TV): its file is checked directly. */
     private function checkPlainStatic($kindName, $id, $name, $object) {
-        if (!$this->wants('static_file_missing')) { return; }
         $path = $object->getSourceFile();
+        if ($path && strpos($path, '://') === false && !StaticPath::allowed($this->modx, $path)) { $this->staticOutside($kindName, $id, $name, $object); return; }
+        if (!$this->wants('static_file_missing')) { return; }
         if (!$path || strpos($path, '://') !== false || !is_file($path)) { $this->staticMissing($kindName, $id, $name, $object, 'missing'); return; }
         if (!is_readable($path)) { $this->staticMissing($kindName, $id, $name, $object, 'unreadable'); }
     }

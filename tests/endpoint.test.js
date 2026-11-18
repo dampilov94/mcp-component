@@ -169,11 +169,11 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
     assert.equal(caps.body.result.integrations.length, 3);
 
     const kinds = await call(read, "describe");
-    // The user and the four access kinds need the admin scope even to be read, so a read token sees 17 of the 22 kinds (the two package kinds are readable).
-    assert.equal(kinds.body.result.kinds.length, 17);
+    // The user and the four access kinds need the admin scope even to be read, so a read token sees 19 of the 24 kinds (the two package kinds are readable).
+    assert.equal(kinds.body.result.kinds.length, 19);
     assert.ok(!kinds.body.result.kinds.some((kind) => kind.kind === "user"));
     const adminKinds = await call(admin, "describe");
-    assert.equal(adminKinds.body.result.kinds.length, 22);
+    assert.equal(adminKinds.body.result.kinds.length, 24);
     for (const name of ["access_policy", "policy_template", "context_access", "resourcegroup_access"]) {
       assert.ok(adminKinds.body.result.kinds.some((kind) => kind.kind === name), name);
       assert.ok(!kinds.body.result.kinds.some((kind) => kind.kind === name), name);
@@ -390,12 +390,12 @@ test("miniShop2: the option kind and the product relations appear when it is ins
   t.after(site.stop);
   const { admin, read } = site.info.tokens;
   const call = (token, action, args = {}) => site.post(token, { v: 2, action, args });
-  // 22 kinds without miniShop2 (see "kernel: wire protocol"), five more with it; a read token reads all of them but the orders.
+  // 24 kinds without miniShop2 (see "kernel: wire protocol"), five more with it; a read token reads all of them but the orders.
   const adminKinds = (await call(admin, "describe")).body.result.kinds.map((kind) => kind.kind);
-  assert.equal(adminKinds.length, 27);
+  assert.equal(adminKinds.length, 29);
   assert.deepEqual(adminKinds.slice(-5), ["ms2_option", "ms2_link", "ms2_product_link", "ms2_order", "ms2_order_status"]);
   const readKinds = (await call(read, "describe")).body.result.kinds.map((kind) => kind.kind);
-  assert.equal(readKinds.length, 21);
+  assert.equal(readKinds.length, 23);
   assert.deepEqual(readKinds.slice(-4), ["ms2_option", "ms2_link", "ms2_product_link", "ms2_order_status"]);
   assert.ok(!readKinds.includes("ms2_order"));
   assert.equal((await call(read, "get", { kind: "ms2_order", id: 1 })).body.error.code, "forbidden_scope");
@@ -433,12 +433,12 @@ test("MIGX: the configuration kind and MIGX TV values appear when it is installe
   t.after(site.stop);
   const { admin, read } = site.info.tokens;
   const call = (token, action, args = {}) => site.post(token, { v: 2, action, args });
-  // 22 kinds without MIGX (see "kernel: wire protocol"), one more with it; a read token reads it.
+  // 24 kinds without MIGX (see "kernel: wire protocol"), one more with it; a read token reads it.
   const adminKinds = (await call(admin, "describe")).body.result.kinds.map((kind) => kind.kind);
-  assert.equal(adminKinds.length, 23);
+  assert.equal(adminKinds.length, 25);
   assert.equal(adminKinds[adminKinds.length - 1], "migx_config");
   const readKinds = (await call(read, "describe")).body.result.kinds.map((kind) => kind.kind);
-  assert.equal(readKinds.length, 18);
+  assert.equal(readKinds.length, 20);
   assert.equal(readKinds[readKinds.length - 1], "migx_config");
   const integration = (await call(read, "capabilities")).body.result.integrations.find((item) => item.key === "migx");
   assert.equal(integration.available, true);
@@ -494,12 +494,12 @@ test("VirtualPage: the three kinds, the route tester and the help appear when it
   t.after(site.stop);
   const { admin, read } = site.info.tokens;
   const call = (token, action, args = {}) => site.post(token, { v: 2, action, args });
-  // 22 kinds without VirtualPage (see "kernel: wire protocol"), three more with it; a read token reads them.
+  // 24 kinds without VirtualPage (see "kernel: wire protocol"), three more with it; a read token reads them.
   const adminKinds = (await call(admin, "describe")).body.result.kinds.map((kind) => kind.kind);
-  assert.equal(adminKinds.length, 25);
+  assert.equal(adminKinds.length, 27);
   assert.deepEqual(adminKinds.slice(-3), ["vp_event", "vp_handler", "vp_route"]);
   const readKinds = (await call(read, "describe")).body.result.kinds.map((kind) => kind.kind);
-  assert.equal(readKinds.length, 20);
+  assert.equal(readKinds.length, 22);
   assert.deepEqual(readKinds.slice(-3), ["vp_event", "vp_handler", "vp_route"]);
   const integration = (await call(read, "capabilities")).body.result.integrations.find((item) => item.key === "virtualpage");
   assert.equal(integration.available, true);
