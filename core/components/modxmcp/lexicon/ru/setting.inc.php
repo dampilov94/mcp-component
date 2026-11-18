@@ -57,6 +57,9 @@ $_lang['setting_modxmcp.require_https_desc'] = 'Отклонять POST-запр
 $_lang['setting_modxmcp.allowed_ips'] = 'Разрешённые IP-адреса';
 $_lang['setting_modxmcp.allowed_ips_desc'] = 'IP-адреса или диапазоны CIDR через запятую (IPv4/IPv6), проверяемые по REMOTE_ADDR. Пустой список разрешает все адреса. X-Forwarded-For не используется для авторизации, неверные правила игнорируются.';
 
+$_lang['setting_modxmcp.allowed_origins'] = 'Разрешённые Origin';
+$_lang['setting_modxmcp.allowed_origins_desc'] = 'Origin через запятую (например https://inspector.example.com), которые браузерный MCP-клиент может прислать в заголовке Origin, помимо адреса самого сайта. Запросы без Origin (консольные клиенты) не затрагиваются; любой другой Origin отклоняется с кодом 403. Пусто разрешает только сам сайт.';
+
 $_lang['setting_modxmcp.lint_php'] = 'Проверять PHP перед сохранением';
 $_lang['setting_modxmcp.lint_php_desc'] = 'Код сниппетов и плагинов проверяется на синтаксические ошибки до записи; так же проверяется Fenom в чанках и шаблонах, если установлен pdoTools. Код с ошибкой не сохраняется.';
 $_lang['setting_modxmcp.history_track_manager'] = 'Записывать правки в админке в историю';

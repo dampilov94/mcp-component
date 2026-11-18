@@ -3,6 +3,7 @@ namespace ModxMCP;
 
 use ModxMCP\Auth\Security;
 use ModxMCP\Auth\TokenStore;
+use ModxMCP\Mcp\HttpServer;
 use ModxMCP\Request\RequestStore;
 use ModxMCP\Request\RequestStoreException;
 
@@ -12,6 +13,9 @@ use ModxMCP\Request\RequestStoreException;
  * Request:  POST JSON {"v":2,"action":"…","args":{…},"request_id":"…","session_id":"…"}
  *           with the token in X-MCP-Token (or Authorization: Bearer).
  * Response: {"ok":true,"result":{…},"meta":{…}} or {"ok":false,"error":{"code","message",…},"meta":{…}}
+ *
+ * The same URL also speaks MCP over Streamable HTTP: a POST whose body is JSON-RPC goes to Mcp\HttpServer
+ * (see route()). Authentication, limits and the action pipeline are shared.
  */
 final class Kernel {
     const VERSION = '2.0.0';
@@ -34,7 +38,7 @@ final class Kernel {
     public function handle(array $server) {
         $requestId = null;
         try {
-            $frame = $this->process($server, $requestId);
+            $frame = $this->route($server, $requestId);
         } catch (\Throwable $e) {
             list($status, $body) = $this->errorBody($e, 'endpoint');
             if ($requestId !== null) { $body['meta'] = array('request_id' => $requestId); }
@@ -49,7 +53,7 @@ final class Kernel {
             if (!@ob_end_clean()) { break; }
         }
         http_response_code($frame['status']);
-        header('Content-Type: application/json; charset=utf-8');
+        if ($frame['body'] !== '') { header('Content-Type: application/json; charset=utf-8'); }
         header('Cache-Control: no-store');
         if (!empty($frame['headers'])) {
             foreach ($frame['headers'] as $header) { header($header); }
@@ -57,6 +61,67 @@ final class Kernel {
         if (!empty($frame['replayed'])) { header('X-MCP-Replayed: 1'); }
         echo $frame['body'];
         exit;
+    }
+
+    /** Decide between MCP over HTTP and protocol 2; everything the MCP side does not claim stays protocol 2. */
+    private function route(array $server, &$requestId) {
+        $method = isset($server['REQUEST_METHOD']) ? $server['REQUEST_METHOD'] : '';
+        if ($method === 'GET' && HttpServer::wantsStream($server)) { return HttpServer::methodNotAllowed(); }
+        if ($method === 'DELETE') { return HttpServer::methodNotAllowed(); }
+        if ($method === 'POST') {
+            $maxPayload = (int) $this->modx->getOption('modxmcp.max_payload_bytes', null, 1048576);
+            if ($maxPayload < 0) { $maxPayload = 1048576; }
+            $declared = isset($server['CONTENT_LENGTH']) ? (string) $server['CONTENT_LENGTH'] : '';
+            $raw = $maxPayload > 0 ? file_get_contents('php://input', false, null, 0, $maxPayload + 1) : file_get_contents('php://input');
+            if ($raw !== false) {
+                $oversize = $maxPayload > 0 && (strlen($raw) > $maxPayload || (ctype_digit($declared) && (float) $declared > $maxPayload));
+                if (HttpServer::isJsonRpc($raw, $oversize)) { return $this->mcpFrame($server, $raw, $oversize); }
+            }
+        }
+        return $this->process($server, $requestId);
+    }
+
+    /**
+     * Answer one MCP request: the checks protocol 2 makes, then the MCP handler. Returns a frame; never sends.
+     * @param string $raw  request body, at most max_payload_bytes + 1 bytes
+     */
+    public function mcpFrame(array $server, $raw, $oversize = false) {
+        try {
+            $this->guard($server);
+            HttpServer::checkOrigin($server, $this->modx);
+            $presented = self::presentedToken($server);
+            $token = (new TokenStore($this->modx))->authenticate($presented);
+            if ($token === null) { throw new ApiException('unauthorized', 'Unauthorized'); }
+            return (new HttpServer($this, $this->modx))->handle($server, $raw, (bool) $oversize, $token, $presented);
+        } catch (ApiException $e) {
+            return HttpServer::refusal($e);
+        } catch (\Throwable $e) {
+            list($status, $body) = $this->errorBody($e, 'mcp');
+            return HttpServer::internalFrame($body['error']);
+        }
+    }
+
+    /** The checks every authenticated request passes: enabled, HTTPS, client IP. */
+    private function guard(array $server) {
+        $modx = $this->modx;
+        if (!$modx->getOption('modxmcp.enabled', null, false)) {
+            throw new ApiException('disabled', 'modxMCP is disabled.');
+        }
+
+        // Direct HTTPS must be reported by the web server. Forwarded protocol is trusted only
+        // from a configured socket peer; a port number or an untrusted header proves nothing.
+        if ((bool) $modx->getOption('modxmcp.require_https', null, false)
+            && !Security::isHttps($server, (string) $modx->getOption('modxmcp.trusted_proxies', null, ''))) {
+            throw new ApiException('https_required', 'HTTPS required (modxmcp.require_https).');
+        }
+        // Match REMOTE_ADDR only. X-Forwarded-For is not an authorization source.
+        $allowedIps = trim((string) $modx->getOption('modxmcp.allowed_ips', null, ''));
+        if ($allowedIps !== '') {
+            $peer = isset($server['REMOTE_ADDR']) ? (string) $server['REMOTE_ADDR'] : '';
+            if (!Security::matchesIpList($peer, $allowedIps)) {
+                throw new ApiException('ip_not_allowed', 'Forbidden: client IP is not allowed (modxmcp.allowed_ips).');
+            }
+        }
     }
 
     private function process(array $server, &$requestId) {
@@ -77,24 +142,7 @@ final class Kernel {
             $frame['headers'] = array('Allow: GET, POST');
             return $frame;
         }
-        if (!$modx->getOption('modxmcp.enabled', null, false)) {
-            throw new ApiException('disabled', 'modxMCP is disabled.');
-        }
-
-        // Direct HTTPS must be reported by the web server. Forwarded protocol is trusted only
-        // from a configured socket peer; a port number or an untrusted header proves nothing.
-        if ((bool) $modx->getOption('modxmcp.require_https', null, false)
-            && !Security::isHttps($server, (string) $modx->getOption('modxmcp.trusted_proxies', null, ''))) {
-            throw new ApiException('https_required', 'HTTPS required (modxmcp.require_https).');
-        }
-        // Match REMOTE_ADDR only. X-Forwarded-For is not an authorization source.
-        $allowedIps = trim((string) $modx->getOption('modxmcp.allowed_ips', null, ''));
-        if ($allowedIps !== '') {
-            $peer = isset($server['REMOTE_ADDR']) ? (string) $server['REMOTE_ADDR'] : '';
-            if (!Security::matchesIpList($peer, $allowedIps)) {
-                throw new ApiException('ip_not_allowed', 'Forbidden: client IP is not allowed (modxmcp.allowed_ips).');
-            }
-        }
+        $this->guard($server);
 
         $token = (new TokenStore($modx))->authenticate(self::presentedToken($server));
         if ($token === null) {
@@ -134,6 +182,13 @@ final class Kernel {
             $sessionId = $request['session_id'];
         }
 
+        $context = $this->newContext($token, $sessionId, $requestId);
+        return $this->dispatch($context, $actionName, $args, $shapeArgs, $requestId);
+    }
+
+    /** The context of one request. Also fixes the response size limit this kernel enforces. */
+    public function newContext(array $token, $sessionId, $requestId) {
+        $modx = $this->modx;
         $this->maxResponse = max(1024, (int) $modx->getOption('modxmcp.max_response_bytes', null, 4194304));
         $maxResponse = $this->maxResponse;
         $storeFactory = function () use ($modx, $maxResponse) {
@@ -147,7 +202,16 @@ final class Kernel {
         $context = new Context($modx, $token, $corePath, $storeFactory);
         $context->sessionId = $sessionId;
         $context->requestId = $requestId;
+        return $context;
+    }
 
+    /**
+     * Run one action: scope, group, argument validation, service user, replay protection for a write with a request
+     * ID. Returns a protocol-2 frame (ok or error envelope); refusals before the action starts are thrown.
+     * @param mixed $shapeArgs the arguments as decoded objects, for schema validation
+     */
+    public function dispatch(Context $context, $actionName, array $args, $shapeArgs, $requestId) {
+        $token = $context->token;
         $action = $context->actions->get($actionName);
         if ($action === null) {
             throw new ApiException('unknown_action', "Unknown action '{$actionName}'.");
@@ -185,7 +249,7 @@ final class Kernel {
                 JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR
             ));
             ignore_user_abort(true);
-            return $storeFactory()->execute($requestId, $fingerprint, $execute);
+            return $context->requestStore()->execute($requestId, $fingerprint, $execute);
         }
         return $execute();
     }
@@ -241,7 +305,7 @@ final class Kernel {
     }
 
     /** Actions run as the configured service user; what a token may do is decided by its scope. */
-    private function actAsServiceUser() {
+    public function actAsServiceUser() {
         $id = (int) $this->modx->getOption('modxmcp.service_user_id', null, 1);
         $user = $this->modx->getObject('modUser', array('id' => $id));
         if (!$user) { throw new ApiException('validation_failed', "Service user not found: {$id}."); }
@@ -264,7 +328,7 @@ final class Kernel {
     }
 
     /** @return array [http status, body] */
-    private function errorBody(\Throwable $e, $where) {
+    public function errorBody(\Throwable $e, $where) {
         if ($e instanceof ApiException) {
             $error = array('code' => $e->errorCode, 'message' => $e->getMessage());
             if ($e->details) { $error['details'] = $e->details; }

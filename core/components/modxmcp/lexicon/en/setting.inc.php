@@ -57,6 +57,9 @@ $_lang['setting_modxmcp.require_https_desc'] = 'Reject POST requests without ser
 $_lang['setting_modxmcp.allowed_ips'] = 'Allowed client IPs';
 $_lang['setting_modxmcp.allowed_ips_desc'] = 'Comma-separated IPs or CIDR ranges (IPv4/IPv6), matched against REMOTE_ADDR. Empty allows all peers. X-Forwarded-For is not an authorization source; invalid rules are ignored.';
 
+$_lang['setting_modxmcp.allowed_origins'] = 'Allowed origins';
+$_lang['setting_modxmcp.allowed_origins_desc'] = 'Comma-separated origins (for example https://inspector.example.com) a browser-based MCP client may send in the Origin header, in addition to the site\'s own origin. Requests without an Origin header (command-line clients) are not affected; any other Origin is refused with 403. Empty allows only the site itself.';
+
 $_lang['setting_modxmcp.lint_php'] = 'Check PHP before saving';
 $_lang['setting_modxmcp.lint_php_desc'] = 'Snippet and plugin code is checked for syntax errors before it is written, and so is Fenom in chunks and templates when pdoTools is installed. Code with an error is not saved.';
 $_lang['setting_modxmcp.history_track_manager'] = 'Record manager edits in the history';

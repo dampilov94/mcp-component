@@ -188,6 +188,14 @@ Stage 8 — drafts and Fenom:
   Claude Code they are `/mcp__modx__<name>`. Arguments are passed to the model as quoted data;
   every scenario ends with the same safety rules.
 
+- MCP over HTTP straight from the site, without Node: `api.php` answers JSON-RPC POSTs as a
+  stateless Streamable HTTP server (handshake versions 2024-11-05 … 2025-11-25 and revision
+  2026-07-28), same tokens (header `X-MCP-Token` or `Authorization: Bearer`), tools, prompts, help
+  resources, journal and limits; the bridge protocol keeps working on the same URL. The Tokens
+  page gives ready settings for Claude Code, Codex CLI, Gemini CLI, opencode, Cursor, VS Code,
+  Cline, Zed and the Node bridge. Setting `modxmcp.allowed_origins`. Over HTTP the tool list
+  refreshes on reconnect. OAuth (claude.ai / ChatGPT web) is not supported.
+
 Stage 7 — manager:
 
 - History page (Components > modxMCP > История): everything recorded in the journal with source,

@@ -11,6 +11,12 @@ be undone, and the site is edited by people in the manager at the same time.
 3. `modx_describe` — without arguments lists the object kinds; with `kind` returns its
    fields, relations and which of them can be written.
 
+Connection: a client either speaks MCP over HTTP straight to this site (a static
+`X-MCP-Token` (or `Authorization: Bearer`) token header) or runs the Node bridge. Over HTTP the tool list is
+read when the client connects, so after a token's rights or a tool group change, reconnect
+the client; the bridge refreshes it at once. Over HTTP nothing remembers the revisions you
+have read between calls, so pass `expected_revision` on every write.
+
 ## Objects and kinds
 
 Everything is addressed as `kind` + `id` (or `name`). The element kinds are `chunk`,

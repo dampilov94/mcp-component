@@ -70,6 +70,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 31 | [Resource drafts](31-drafts.md) | `task/31-drafts` | merged |
 | 32 | [Fenom](32-fenom.md) | `task/32-fenom` | merged |
 | 33 | [Scenarios (prompts)](33-prompts.md) | `task/33-prompts` | merged |
+| 34 | [MCP over HTTP](34-mcp-http.md) | `task/34-mcp-http` | merged |
 
 ## Doing several briefs in a row
 
@@ -125,3 +126,9 @@ Lessons from briefs 27–29:
   "there before the call" from "left by the call".
 - A setting added in `_build/data/transport.settings.php` exists on a site only after a package
   install; on the stand (deployed file by file) it must be created by hand before checking.
+
+Lessons from briefs 33–34:
+
+- Shared hosting often runs PHP under FastCGI behind Apache, which drops the `Authorization`
+  header before PHP sees it; anything a client must authenticate with goes in a custom header too.
+- A long executor run is lost when the host machine sleeps; commit work in progress early.

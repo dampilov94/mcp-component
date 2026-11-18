@@ -18,6 +18,7 @@ const { randomUUID } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { ModxApiClient, ModxApiError, PROTOCOL } = require("./api.js");
+const { toMcpTool, toMcpPrompt } = require("./mapping.js");
 
 function loadLocalEnv() {
   const candidates = [path.resolve(process.cwd(), ".env"), path.resolve(__dirname, "..", ".env")];
@@ -56,11 +57,6 @@ try {
 }
 
 const HELP_URI = "modx-help://";
-const REQUEST_ID = {
-  type: "string",
-  pattern: "^[A-Za-z0-9_-]{16,128}$",
-  description: "Optional request ID for retrying exactly the same call. Omit for a new operation; reuse the ID reported after a timeout. A new ID may execute the action again.",
-};
 
 let server = null;
 /** Current manifest: { hash, instructions, tools: Map<name, tool> }, or null until loaded. */
@@ -108,26 +104,6 @@ function rememberRevisions(tool, result) {
   else if (result.dry_run !== true) seenRevisions.set(tracked, result.revision);
 }
 
-function toMcpTool(tool) {
-  const readOnly = tool.effect.read_only === true;
-  const inputSchema = readOnly
-    ? tool.inputSchema
-    : { ...tool.inputSchema, properties: { ...tool.inputSchema.properties, _request_id: REQUEST_ID } };
-  return {
-    name: tool.name,
-    description: tool.description,
-    inputSchema,
-    outputSchema: tool.outputSchema,
-    annotations: {
-      readOnlyHint: readOnly,
-      destructiveHint: tool.effect.destructive === true,
-      // A supplied _request_id protects one request; it does not make every call idempotent.
-      idempotentHint: readOnly,
-      openWorldHint: tool.effect.open_world === true,
-    },
-  };
-}
-
 function validManifestTool(tool) {
   return tool && typeof tool === "object"
     && typeof tool.name === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(tool.name)
@@ -145,19 +121,6 @@ function validManifestPrompt(prompt) {
     && (prompt.title === undefined || typeof prompt.title === "string")
     && Array.isArray(prompt.arguments ?? [])
     && (prompt.arguments ?? []).every((argument) => argument && typeof argument.name === "string");
-}
-
-function toMcpPrompt(prompt) {
-  return {
-    name: prompt.name,
-    ...(prompt.title ? { title: prompt.title } : {}),
-    description: prompt.description,
-    arguments: (prompt.arguments ?? []).map((argument) => ({
-      name: argument.name,
-      ...(typeof argument.description === "string" ? { description: argument.description } : {}),
-      required: argument.required === true,
-    })),
-  };
 }
 
 async function loadManifest(context = {}) {
