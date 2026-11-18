@@ -63,7 +63,24 @@ class FakeObject {
         $this->modx->unlockResource($this->fields['id']);
         return true;
     }
-    public function getBasePath() { return (string) $this->get('basePath'); }
+    /** modFileMediaSource::getBasePath(): the basePath property (relative to base_path when basePathRelative, the default), else the old test column. */
+    public function getBasePath() {
+        $stored = json_decode((string) (isset($this->fields['properties']) ? (is_array($this->fields['properties']) ? json_encode($this->fields['properties']) : $this->fields['properties']) : ''), true);
+        if (is_array($stored) && isset($stored['basePath'])) {
+            $relative = isset($stored['basePathRelative']) ? (bool) $stored['basePathRelative']['value'] : true;
+            return ($relative ? $this->modx->getOption('base_path') : '') . $stored['basePath']['value'];
+        }
+        if (is_array($stored) && (isset($stored['basePathRelative']) && $stored['basePathRelative']['value'] === true)) { return (string) $this->modx->getOption('base_path'); }
+        return (string) $this->get('basePath');
+    }
+    /** modFileMediaSource::getDefaultProperties(), the part the tests need. */
+    public function getDefaultProperties() {
+        if (strpos($this->class, 'sources.mod') !== 0) { return array(); }
+        $make = function ($name, $type, $value) { return array('name' => $name, 'desc' => 'prop_file.' . $name . '_desc', 'type' => $type, 'options' => '', 'value' => $value, 'lexicon' => 'core:source'); };
+        return array('basePath' => $make('basePath', 'textfield', ''), 'basePathRelative' => $make('basePathRelative', 'combo-boolean', true), 'baseUrl' => $make('baseUrl', 'textfield', ''),
+            'baseUrlRelative' => $make('baseUrlRelative', 'combo-boolean', true), 'allowedFileTypes' => $make('allowedFileTypes', 'textfield', ''), 'imageExtensions' => $make('imageExtensions', 'textfield', 'jpg,jpeg,png,gif,svg,webp'),
+            'skipFiles' => $make('skipFiles', 'textfield', '.svn,.git,_notes,nbproject,.idea,.DS_Store'));
+    }
     public function getSourceFile() {
         if (empty($this->fields['static'])) { return false; }
         // Setting tags [[++name]] are filled in, and a streaming media source puts its base path in front (the real
@@ -1549,6 +1566,39 @@ class modX extends xPDO {
         return new FakeResponse(null);
     }
 
+    /**
+     * source/{create,update,remove} (MODX 2.8.8): create requires a unique name and takes `properties` as it is; update goes through
+     * modMediaSource::setProperties(), which keeps only the properties whose value differs from the class default.
+     */
+    private function sourceProcessor($action, array $data) {
+        if ($action === 'remove') {
+            $object = $this->getObject('sources.modMediaSource', array('id' => isset($data['id']) ? $data['id'] : 0));
+            if (!$object) { return new FakeResponse('Media source not found.'); }
+            $object->remove();
+            return new FakeResponse(null, array('id' => $data['id']));
+        }
+        if (!isset($data['name']) || $data['name'] === '') { return new FakeResponse('Please specify a name.'); }
+        foreach ($this->match('sources.modMediaSource', array('name' => $data['name'])) as $row) {
+            if ($action === 'create' || (string) $row['id'] !== (string) $data['id']) { return new FakeResponse('A media source with that name already exists.'); }
+        }
+        if ($action === 'create') {
+            $object = $this->newObject('sources.modMediaSource');
+            $data += array('class_key' => 'sources.modFileMediaSource', 'description' => '', 'is_stream' => 1, 'properties' => null);
+        } else {
+            $object = $this->getObject('sources.modMediaSource', array('id' => $data['id']));
+            if (!$object) { return new FakeResponse('Media source not found.'); }
+            if (isset($data['properties']) && is_array($data['properties'])) {
+                $defaults = $object->getDefaultProperties();
+                foreach ($data['properties'] as $key => $entry) {
+                    if (is_array($entry) && isset($defaults[$entry['name']]) && $entry['value'] == $defaults[$entry['name']]['value']) { unset($data['properties'][$key]); }
+                }
+            }
+        }
+        $object->fromArray($data, '', true, true);
+        $object->save();
+        return new FakeResponse(null, array('id' => $object->get('id')));
+    }
+
     private function namespaceProcessor($action, array $data) {
         if (!isset($data['name']) || $data['name'] === '') { return new FakeResponse('Please specify a name.'); }
         $object = $this->getObject('modNamespace', array('name' => $data['name']));
@@ -1739,6 +1789,7 @@ class modX extends xPDO {
         if ($base === 'workspace/namespace/') { return $this->namespaceProcessor($action, $data); }
         if ($base === 'element/propertyset/') { return $this->propertySetProcessor($action, $data); }
         if ($base === 'workspace/lexicon/') { return $this->lexiconProcessor($action, $data); }
+        if ($base === 'source/') { return $this->sourceProcessor($action, $data); }
         if (in_array($base, array('security/group/', 'security/role/', 'security/resourcegroup/'), true)) { return $this->accessProcessor($base, $action, $data); }
         if ($base === 'resource/') { return $this->resourceProcessor($action, $data, $path); }
         if (!isset(self::$processors[$base])) { return null; }

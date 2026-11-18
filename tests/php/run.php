@@ -8075,5 +8075,89 @@ $lxSite->options['modxmcp.disabled_groups'] = '';
 $e = throws('lexicon: a token with the group denied', ApiException::class, function () use ($call, $lxCtx, $lxKey) { $call($lxCtx('develop', array('lexicon')), 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'fields' => array('value' => 'x'))); });
 check('lexicon: a denied group is unavailable and the kind leaves its list', $e && $e->errorCode === 'unavailable' && !in_array('lexicon_entry', array_column($call($lxCtx('admin', array('lexicon')), 'describe')['kinds'], 'kind'), true));
 
+// media source properties
+$msDir = $siteDir . '/media-props';
+foreach (array('assets/images', 'core/config', 'core/modxmcp-data') as $msSub) { mkdir($msDir . '/' . $msSub, 0755, true); }
+mkdir($siteDir . '/elsewhere', 0755, true);
+$msSite = fakeSite($msDir, array('modxmcp.auto_static' => false));
+$msCtx = function ($scope = 'admin') use ($msSite, $dev) {
+    $c = new Context($msSite, array('scope' => $scope) + $dev->token, $dev->corePath, function () {});
+    $c->sessionId = 'media-props-session';
+    return $c;
+};
+$msAdmin = $msCtx();
+$msMade = $call($msAdmin, 'create', array('kind' => 'media_source', 'fields' => array('name' => 'Картинки', 'description' => 'Каталог', 'properties' => array('basePath' => 'assets/images/', 'baseUrl' => 'assets/images/'))));
+$msGot = $call($msAdmin, 'get', array('kind' => 'media_source', 'id' => $msMade['id']));
+$msProps = function ($result) { return json_decode(json_encode($result['fields']['properties']), true); };
+check('media source: created with properties, read as the effective values (stored over the class defaults)', $msProps($msGot)['basePath'] === 'assets/images/' && $msProps($msGot)['baseUrl'] === 'assets/images/'
+    && $msProps($msGot)['basePathRelative'] === true && $msProps($msGot)['imageExtensions'] === 'jpg,jpeg,png,gif,svg,webp' && array_keys($msProps($msGot)) === array('allowedFileTypes', 'basePath', 'basePathRelative', 'baseUrl', 'baseUrlRelative', 'imageExtensions', 'skipFiles')
+    && $msGot['fields']['base_path'] === $msDir . '/assets/images/');
+$msStored = Properties::decode($msSite->row('sources.modMediaSource', $msMade['id'])['properties']);
+check('media source: stored with the type and description of each property', array_keys($msStored) === array('basePath', 'baseUrl') && $msStored['basePath']['type'] === 'textfield' && $msStored['basePath']['desc'] === 'prop_file.basePath_desc' && $msStored['basePath']['lexicon'] === 'core:source');
+$msBeforeRaw = $msSite->row('sources.modMediaSource', $msMade['id'])['properties'];
+$call($msAdmin, 'update', array('kind' => 'media_source', 'id' => $msMade['id'], 'fields' => array('description' => 'Другое')));
+check('media source: another field leaves the properties alone', $msSite->row('sources.modMediaSource', $msMade['id'])['properties'] === $msBeforeRaw);
+$msEdit = $call($msAdmin, 'update', array('kind' => 'media_source', 'id' => $msMade['id'], 'fields' => array('properties' => array('allowedFileTypes' => 'jpg,png', 'skipFiles' => '.git,пропуск', 'basePathRelative' => true))));
+$msStored = Properties::decode($msSite->row('sources.modMediaSource', $msMade['id'])['properties']);
+ksort($msStored);
+check('media source: writing merges into the stored definition and keeps type and description', array_keys($msStored) === array('allowedFileTypes', 'basePath', 'baseUrl', 'skipFiles') && $msStored['basePath']['value'] === 'assets/images/'
+    && $msStored['allowedFileTypes'] === array('name' => 'allowedFileTypes', 'desc' => 'prop_file.allowedFileTypes_desc', 'type' => 'textfield', 'options' => '', 'value' => 'jpg,png', 'lexicon' => 'core:source')
+    && $msStored['skipFiles']['value'] === '.git,пропуск' && $msEdit['changed'] === array('properties'));
+check('media source: a value equal to the class default is not stored (as MODX does) and still reads as that value', !isset($msStored['basePathRelative']) && $msProps($call($msAdmin, 'get', array('kind' => 'media_source', 'id' => $msMade['id'])))['basePathRelative'] === true);
+$call($msAdmin, 'update', array('kind' => 'media_source', 'id' => $msMade['id'], 'fields' => array('properties' => array('basePathRelative' => false, 'basePath' => $msDir . '/assets/images/'))));
+check('media source: a yes/no property takes a boolean, the absolute base path resolves', $msProps($call($msAdmin, 'get', array('kind' => 'media_source', 'id' => $msMade['id'])))['basePathRelative'] === false
+    && $call($msAdmin, 'get', array('kind' => 'media_source', 'id' => $msMade['id']))['fields']['base_path'] === $msDir . '/assets/images/');
+$call($msAdmin, 'update', array('kind' => 'media_source', 'id' => $msMade['id'], 'fields' => array('properties' => array('basePathRelative' => 'true', 'basePath' => 'assets/images/'))));
+check('media source: "true" is read as a boolean', $msProps($call($msAdmin, 'get', array('kind' => 'media_source', 'id' => $msMade['id'])))['basePathRelative'] === true);
+$call($msAdmin, 'undo', array('last' => 2, 'confirm' => true));
+check('media source: undo restores the stored definition byte for byte', $msSite->row('sources.modMediaSource', $msMade['id'])['properties'] !== $msBeforeRaw && Properties::decode($msSite->row('sources.modMediaSource', $msMade['id'])['properties'])['allowedFileTypes']['value'] === 'jpg,png');
+$call($msAdmin, 'undo', array('changeset_id' => $msEdit['changeset_id'], 'confirm' => true));
+check('media source: undo of the merge restores the earlier definition', $msSite->row('sources.modMediaSource', $msMade['id'])['properties'] === $msBeforeRaw);
+foreach (array('an unknown property' => array('nope' => 'x'), 'an array value' => array('baseUrl' => array('a')), 'a yes/no setting given text' => array('basePathRelative' => 'maybe')) as $msLabel => $msBad) {
+    $e = throws("media source: {$msLabel}", ApiException::class, function () use ($call, $msAdmin, $msMade, $msBad) { $call($msAdmin, 'update', array('kind' => 'media_source', 'id' => $msMade['id'], 'fields' => array('properties' => $msBad))); });
+    check("media source: {$msLabel} is validation_failed", $e && $e->errorCode === 'validation_failed');
+}
+check('media source: refused writes changed nothing', $msSite->row('sources.modMediaSource', $msMade['id'])['properties'] === $msBeforeRaw);
+// protected paths
+$msReset = function () use ($msSite, $msMade, $msBeforeRaw) { $r = $msSite->row('sources.modMediaSource', $msMade['id']); $r['properties'] = $msBeforeRaw; $msSite->store('sources.modMediaSource', $r); };
+$msTry = function ($label, array $properties, $allowed, $flag = false) use ($call, $msSite, $msCtx, $msMade, $msReset) {
+    $msSite->options['modxmcp.allow_root_filesystem_read'] = $flag;
+    $c = $msCtx();
+    try {
+        $call($c, 'update', array('kind' => 'media_source', 'id' => $msMade['id'], 'fields' => array('properties' => $properties)));
+        check("media source path: {$label}", $allowed);
+        return count($c->warnings) === 1 && strpos($c->warnings[0], 'protected') !== false;
+    } catch (ApiException $e) {
+        check("media source path: {$label}", !$allowed && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'modxmcp.allow_root_filesystem_read') !== false);
+        return false;
+    }
+};
+$msCases = array(
+    'core/config, relative' => array('basePath' => 'core/config/'),
+    'core/config, absolute' => array('basePath' => $msDir . '/core/config/', 'basePathRelative' => false),
+    'a file directly in core/config through a tag' => array('basePath' => '[[++core_path]]config/', 'basePathRelative' => false),
+    'modxmcp-data' => array('basePath' => 'core/modxmcp-data/'),
+    'a directory outside the site' => array('basePath' => $siteDir . '/elsewhere/', 'basePathRelative' => false),
+    'a relative path that climbs out' => array('basePath' => '../elsewhere/'),
+);
+foreach ($msCases as $msLabel => $msProps2) {
+    $msTry($msLabel . ' is refused', $msProps2, false);
+    $msReset();
+    check("media source path: {$msLabel} needs the setting, admin token", $msTry($msLabel . ' is allowed with modxmcp.allow_root_filesystem_read (and warns)', $msProps2, true, true) === true);
+    $msReset();
+}
+$msSite->options['modxmcp.allow_root_filesystem_read'] = false;
+foreach (array('inside the site' => array('basePath' => 'assets/other/'), 'inside core, by tag' => array('basePath' => '[[++core_path]]components/', 'basePathRelative' => false), 'the site root' => array('basePath' => ''), 'absolute inside the site' => array('basePath' => $msDir . '/assets/', 'basePathRelative' => false)) as $msLabel => $msProps2) {
+    $msTry($msLabel . ' needs nothing', $msProps2, true);
+    $msReset();
+}
+$e = throws('media source: create with a protected basePath', ApiException::class, function () use ($call, $msAdmin) { $call($msAdmin, 'create', array('kind' => 'media_source', 'fields' => array('name' => 'Конфиг', 'properties' => array('basePath' => 'core/config/')))); });
+check('media source: a create is judged like an update', $e && $e->errorCode === 'validation_failed' && $msSite->getCount('sources.modMediaSource', array('name' => 'Конфиг')) === 0);
+$e = throws('media source: a develop token cannot write a source', ApiException::class, function () use ($call, $msCtx, $msMade) { $call($msCtx('develop'), 'update', array('kind' => 'media_source', 'id' => $msMade['id'], 'fields' => array('properties' => array('baseUrl' => 'x')))); });
+check('media source: refused by scope before anything else, also with the setting on', $e && $e->errorCode === 'forbidden_scope');
+check('media source: a read token reads the properties', $msProps($call($msCtx('read'), 'get', array('kind' => 'media_source', 'id' => $msMade['id'])))['basePath'] === 'assets/images/');
+$msS3 = $call($msAdmin, 'create', array('kind' => 'media_source', 'fields' => array('name' => 'Облако', 'class_key' => 'sources.modS3MediaSource', 'properties' => array('baseUrl' => 'https://cdn.example/'))));
+check('media source: a source that is not a local directory is not judged by its basePath', $msProps($call($msAdmin, 'get', array('kind' => 'media_source', 'id' => $msS3['id'])))['baseUrl'] === 'https://cdn.example/');
+
 echo $failures ? "{$failures} of {$checks} PHP checks failed.\n" : "PHP: {$checks} checks passed.\n";
 exit($failures ? 1 : 0);

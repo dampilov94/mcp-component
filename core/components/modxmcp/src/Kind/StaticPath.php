@@ -76,7 +76,8 @@ final class StaticPath {
         return array($lexical, $real . ($rest ? '/' . implode('/', $rest) : ''));
     }
 
-    private static function inside($path, $dir) {
+    /** True when $path is $dir or lies below it (both normalised, no trailing slash needed). */
+    public static function inside($path, $dir) {
         return $path === $dir || strpos($path . '/', rtrim($dir, '/') . '/') === 0;
     }
 
@@ -111,7 +112,7 @@ final class StaticPath {
     }
 
     /** Replace the setting tags [[++name]] the way MODX does; null when another kind of tag is left in the text. */
-    private static function settingTags(\modX $modx, $text) {
+    public static function settingTags(\modX $modx, $text) {
         if (strpos($text, '[[') === false) { return $text; }
         $text = preg_replace_callback('/\[\[\+\+([A-Za-z0-9_.\-]+)\]\]/', function ($m) use ($modx) { return (string) $modx->getOption($m[1]); }, $text);
         return strpos($text, '[[') === false ? $text : null;
