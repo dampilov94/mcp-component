@@ -656,6 +656,30 @@ test("MCP over HTTP: older protocol versions, auth, methods and the bridge on th
   const del = await fetch(site.url, { method: "DELETE" });
   assert.equal(del.status, 405);
 
+  // Revision 2026-07-28: no handshake; version, method and name in headers that must agree with the body.
+  const meta = { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} };
+  const modern = (method, params, extra = {}) => rpc({ jsonrpc: "2.0", id: 7, method, params: { ...params, _meta: meta } },
+    { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": method, ...extra });
+  const discover = await modern("server/discover", {});
+  assert.equal(discover.status, 200, JSON.stringify(discover.body));
+  assert.ok(JSON.stringify(discover.body.result).includes("2026-07-28"));
+  const listed = await modern("tools/list", {});
+  assert.ok(listed.body.result.tools.some((tool) => tool.name === "modx_site_info"));
+  const called = await modern("tools/call", { name: "modx_site_info", arguments: {} }, { "Mcp-Name": "modx_site_info" });
+  assert.equal(called.body.result.isError, false);
+  assert.equal(called.body.result.structuredContent.site_name, "Test site");
+  const mismatch = await modern("tools/call", { name: "modx_site_info", arguments: {} }, { "Mcp-Name": "modx_help" });
+  assert.equal(mismatch.status, 400);
+  assert.equal(mismatch.body.error.code, -32020);
+  const noName = await modern("tools/call", { name: "modx_site_info", arguments: {} });
+  assert.equal(noName.status, 400);
+  const wrongMethod = await modern("tools/list", {}, { "Mcp-Method": "prompts/list" });
+  assert.equal(wrongMethod.body.error.code, -32020);
+  const unknown = await modern("nope/never", {});
+  assert.equal(unknown.status, 404);
+  assert.equal(unknown.body.error.code, -32601);
+  assert.equal(listed.headers.get("mcp-session-id"), null, "2026-07-28 has no sessions");
+
   // The protocol of the bridge keeps working on the same URL.
   const bridge = await site.post(site.info.tokens.read, { v: 2, action: "site_info", args: {} });
   assert.equal(bridge.status, 200);
