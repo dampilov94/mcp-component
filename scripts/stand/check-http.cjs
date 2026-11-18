@@ -23,7 +23,7 @@ const cfg = require(path.join(repo, ".mcp.json")).mcpServers.modx.env;
   const run = async (name, args = {}) => {
     const t = Date.now();
     const result = await client.callTool({ name, arguments: args });
-    assert.equal(result.isError, false, `${name}: ${result.content[0].text}`);
+    assert.ok(!result.isError, `${name}: ${result.content[0].text}`);
     return [result.structuredContent, Date.now() - t];
   };
   const [info, ms] = await run("modx_site_info");

@@ -33,7 +33,7 @@ const cfg = require(path.join(repo, ".mcp.json")).mcpServers.modx.env;
       const list = await run("modx_list", { kind, where: { static: true }, limit: 3 });
       for (const item of list.items) {
         const got = await raw("modx_get", { kind, id: item.id, fields: ["content"] });
-        assert.equal(got.isError, false);
+        assert.ok(!got.isError, `${kind} ${item.id} can be read`);
         assert.ok(!/outside modxmcp\.static_roots/.test(JSON.stringify(got)), `${kind} ${item.id} reads its file`);
       }
     }

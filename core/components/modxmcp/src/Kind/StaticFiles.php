@@ -20,14 +20,20 @@ final class StaticFiles {
         $root = rtrim($context->modx->getOption('core_path'), '/\\') . '/elements';
         $dir = $root . '/' . $folder;
         if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) { throw new \RuntimeException('Cannot create static element directory.'); }
-        if (strpos(realpath($dir) . '/', realpath($root) . '/') !== 0) { throw new ApiException('validation_failed', 'Static directory resolves outside core/elements.'); }
-        StaticPath::assertAllowed($context->modx, '[[++core_path]]elements/' . $folder . '/' . $slug . '.' . $ext, 0);
+        $realDir = realpath($dir);
+        $realRoot = realpath($root);
+        if ($realDir === false || $realRoot === false || strpos($realDir, $realRoot . DIRECTORY_SEPARATOR) !== 0) {
+            throw new ApiException('validation_failed', 'Static directory resolves outside core/elements.');
+        }
         $path = null;
         $handle = null;
         try {
             for ($i = 0; $i <= 20; $i++) {
                 $file = $slug . '-' . $id . ($i ? '-' . $i : '') . '.' . $ext;
                 $candidate = $dir . '/' . $file;
+                if (!StaticPath::writable($context->modx, $candidate)) {
+                    throw new ApiException('validation_failed', 'The static file must be writable under modxmcp.static_roots.');
+                }
                 $handle = @fopen($candidate, 'x+b');
                 if ($handle) { $path = $candidate; break; }
                 if (!file_exists($candidate) && !is_link($candidate)) { throw new \RuntimeException('Cannot reserve a static file.'); }
