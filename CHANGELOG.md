@@ -8,8 +8,7 @@ Work is staged; until a stage lands, the 1.x operations it covers are not availa
 Stage 1 — core:
 
 - New PHP core in `core/components/modxmcp/src/` (namespace `ModxMCP\`, autoloaded): one class per
-  action, each declaring its schema, effect, scope and group. The 1.x model and traits remain in
-  `model/` only as porting source and for the manager dependency graph.
+  action, each declaring its schema, effect, scope and group.
 - Protocol 2: `{"v":2,"action","args","request_id","session_id"}` in, `{"ok","result","meta"}` or
   `{"ok":false,"error":{"code","message"}}` out, with a fixed list of error codes. Server-side
   argument validation against the advertised schema. Legacy top-level fields are gone.
@@ -195,6 +194,19 @@ Stage 8 — drafts and Fenom:
   page gives ready settings for Claude Code, Codex CLI, Gemini CLI, opencode, Cursor, VS Code,
   Cline, Zed and the Node bridge. Setting `modxmcp.allowed_origins`. Over HTTP the tool list
   refreshes on reconnect. OAuth (claude.ai / ChatGPT web) is not supported.
+
+Changes in the `2.0.0-alpha2` transport:
+
+- Static files are limited by `modxmcp.static_roots` (the site and core paths by default).
+  Credential files and protected directories are excluded, and MODX core code cannot be written
+  through a static element. The site audit reports static files outside the allowed paths.
+- Removed the 1.x model and obsolete settings. The upgrade resolver cleans up the legacy files
+  while preserving the 2.0 journal and request state. API operations no longer get recorded as
+  manager edits through MODX save events.
+- Added the `property_set` and `lexicon_entry` kinds, writable element properties and property
+  set links, and editable media source properties with path checks.
+- Preserve TV ranks when editing template relations, ignore comment tags in the dependency
+  graph, and run both parser passes in `modx_run` text mode.
 
 Stage 7 — manager:
 

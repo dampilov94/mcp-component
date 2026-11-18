@@ -15,9 +15,8 @@ stages; `CHANGELOG.md` records which stages have landed. 2.0 is not compatible w
 - `client/index.js` is a thin MCP bridge that serves the site's tool manifest; `client/api.js`
   handles HTTP. Tools are never defined in the client.
 - `assets/components/modxmcp/api.php` bootstraps MODX and hands the request to the kernel.
-- `core/components/modxmcp/model/` is the 1.x model: porting source for later stages and the
-  backend of the manager dependency graph. The API no longer calls it; delete a part only
-  when its replacement in `src/` has landed.
+- The manager dependency graph uses `src/Graph/`. The retired 1.x model can be consulted
+  in Git history.
 - `core/components/modxmcp/docs/` is built-in help served by `modx_help` and shipped
   with the component. `_build/` creates the MODX transport package.
 - `README.md` is the user guide; `CHANGELOG.md` records releases. `DEVELOPMENT.md`
@@ -103,8 +102,9 @@ Source of add-ons installed on the stand is copied to `.local/reference/<addon>-
   implements. Preserve existing access controls unless explicitly changed.
 - `npm run check` checks JavaScript and PHP syntax and release metadata. `npm test` runs
   offline tests (pure PHP logic, the kernel with stubbed MODX, the bridge end to end);
-  neither exercises a real MODX site. It uses `PHP_BIN`, available `.local/tools/php-*` runtimes, or `php`
-  on PATH. Run checks appropriate to the change and report what was not verified.
+  neither exercises a real MODX site. Both use `PHP_BIN` or `php` on PATH; `npm run check` can
+  also find `.local/tools/php-*`. Run the full suite under Linux/WSL when Windows cannot
+  reproduce the MODX paths or create the symbolic link fixtures.
 - Preserve the existing file encoding and line endings, especially in PHP server files.
 - The dedicated development stand has previously been accessed through `.mcp.json` and
   `.env`. Confirm the target and current state before site operations; do not use unrelated

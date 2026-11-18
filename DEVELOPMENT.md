@@ -28,9 +28,7 @@ stages have landed. It is not compatible with 1.x clients or tool names.
 - `client/index.js`: thin MCP bridge. It fetches the manifest from the site and exposes it as
   MCP tools; it contains no tool definitions. `client/api.js`: HTTP transport and envelope.
 - `assets/components/modxmcp/api.php`: bootstraps MODX and calls the kernel.
-- `core/components/modxmcp/model/`: the 1.x facade and traits. The API no longer calls them.
-  They stay as porting source and because the manager dependency graph still uses the facade;
-  remove a part only when its replacement in `src/` has landed.
+- `src/Graph/`: the shared dependency graph builder for the API and manager.
 - `tests/`: offline tests. `tests/php/run.php` covers pure logic; `tests/php/endpoint.php` runs
   the real kernel with stubbed MODX classes and a SQLite token table; the `*.test.js` files
   drive the bridge and that kernel.
@@ -69,8 +67,8 @@ client. Successful calls return compact JSON text and the same object as `struct
 Install dependencies with `npm ci --ignore-scripts` when necessary. Run `npm run check` for
 JavaScript and PHP syntax and release-version consistency. The checker uses `PHP_BIN` if
 set, otherwise portable PHP runtimes in `.local/tools/php-*/`, then `php` on PATH. Run
-`npm test` for the offline tests; the kernel tests need PHP with `pdo_sqlite` and are skipped
-without it. Neither command exercises MODX, proves PHP runtime compatibility or tests site
+`npm test` for the offline tests with `PHP_BIN` or `php` on PATH. Use PHP with `pdo_sqlite`
+and `mbstring`. On Windows, the full suite can run from a Linux filesystem under WSL. Neither command exercises MODX, proves PHP runtime compatibility or tests site
 behavior: MODX classes are stubbed and the token table is SQLite, while a site uses MySQL. Choose
 additional verification appropriate to the change and report its limits. The owner prefers
 functional checks personally and does not want unnecessary tests or test accounts.

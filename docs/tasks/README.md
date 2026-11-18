@@ -71,8 +71,8 @@ below) or append a `## Review` section to the brief with numbered change request
 | 32 | [Fenom](32-fenom.md) | `task/32-fenom` | merged |
 | 33 | [Scenarios (prompts)](33-prompts.md) | `task/33-prompts` | merged |
 | 34 | [MCP over HTTP](34-mcp-http.md) | `task/34-mcp-http` | merged |
-| 35 | [Static paths, cleanup, fixes](35-security-cleanup.md) | `task/35-security-cleanup` | in review: reviewed, tests pass; stand deploy interrupted, stand checks pending |
-| 36 | [property_set, lexicon_entry, source properties](36-missing-kinds.md) | `task/36-missing-kinds` | in review: reviewed, tests pass; stand deploy interrupted, stand checks pending |
+| 35 | [Static paths, cleanup, fixes](35-security-cleanup.md) | `task/35-security-cleanup` | merged |
+| 36 | [property_set, lexicon_entry, source properties](36-missing-kinds.md) | `task/36-missing-kinds` | merged |
 
 ## Doing several briefs in a row
 
@@ -135,17 +135,13 @@ Lessons from briefs 33–34:
   header before PHP sees it; anything a client must authenticate with goes in a custom header too.
 - A long executor run is lost when the host machine sleeps; commit work in progress early.
 
-## Handoff (2026-11-18)
+## Handoff (2026-11-19)
 
-- Branch `task/36-missing-kinds` contains 35 and 36 plus the architect's review change (default
-  `modxmcp.static_roots` = the whole site and core). Not merged yet.
-- The stand deploy of it was stopped half-way (about 32 files left to upload, 18 to delete); the
-  stand API still answers. Next: `python3 scripts/stand/deploy.py` until `done`, then
-  `node scripts/stand/check-kinds2.cjs`, `check-elements`, `check-resources`, `check-code-tools`,
-  `check-duplicate`, `check-http`; then merge 35 and 36 into `main`, set `PKG_RELEASE` to `alpha2`,
-  build the package and give it to the owner for devshop.
-- `scripts/stand/deploy.py` needs the ignored files `.env`, `.mcp.json` and
-  `.local/deploy-fordev.json` (the record of what is on the stand); copy them from the old machine.
-- The stand's FTP often stalls; for a package build, upload one archive of the sources plus a
-  temporary build script that unpacks it after the token check (see the 2.0.0-alpha1 build), and
-  restore the original build script afterwards.
+- Tasks 35?36 are deployed to fordev and merged into `main`. The partial deployment was
+  resumed from `.local/deploy-fordev.json`; original site files are backed up in
+  `.local/resume-fordev-before/`. The Windows checkout uses CRLF, so compare text line endings
+  before deciding that the deployment journal is out of date.
+- `npm run check` and `npm test` passed in WSL on PHP 7.4 (5420 PHP checks, 37 Node tests).
+  Stand checks covered the new kinds, element/resource writes, code tools, duplicate, HTTP
+  connection and undo. Protected-path rejection cases were exercised in the offline suite.
+- The next transport is `modxmcp-2.0.0-alpha2.transport.zip`. The owner installs it on devshop.

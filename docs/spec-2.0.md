@@ -535,16 +535,16 @@ MODX ставит блокировку. Конвейер записи прове
 ## 14. Настройки 2.0
 
 Сохраняются: `enabled`, `service_user_id`, `require_https`, `trusted_proxies`,
-`allowed_ips`, `audit_log`, `auto_static`, `component_code_roots`,
+`allowed_ips`, `auto_static`,
 `allow_root_filesystem_read`, `allow_run_processor`, `max_payload_bytes`,
 `max_response_bytes`, `max_read_bytes`, `request_retention_seconds`, `debug`, `core_path`,
 `disabled_groups`.
 
 Новые: `allow_run`, `allow_query_db`, `history_enabled`,
 `history_track_manager`, `history_retention_days`, `history_max_bytes`,
-`history_max_blob_bytes`, `lint_php`.
+`history_max_blob_bytes`, `lint_php`, `static_roots`.
 
-Удаляется: `api_token`.
+Удаляются: `api_token`, `audit_log`, `component_code_roots`.
 
 ## 15. Этапы
 
@@ -558,7 +558,7 @@ MODX ставит блокировку. Конвейер записи прове
    запись правок из админки плагином, `duplicate`, `invoke`, `make_static` и авто-статика,
    очистка журнала по сроку и объёму. Виды `chunk`, `snippet`, `template`, `plugin`, `tv`, `category`.
    Инструменты объектов и кода, `history`, `history_diff`, `undo`, `checkpoint`.
-3. **Контент и файлы** (сделано; свойства источников файлов пока не редактируются). Вид `resource` с TV, `resource_tree`, `bulk_resources`, файловые
+3. **Контент и файлы** (сделано, включая редактирование свойств источников файлов). Вид `resource` с TV, `resource_tree`, `bulk_resources`, файловые
    инструменты, `media_source`.
 4. **Проверка** (сделано). `run`, `check_page`, `read_log`, `audit_site`, `search`, `replace`,
    `find_usages`, `dependency_graph`.
@@ -570,7 +570,7 @@ MODX ставит блокировку. Конвейер записи прове
 8. **Второй этап** (сделано). Черновики ресурсов, разбор и проверка Fenom, сценарии, прямое
    подключение по HTTP без Node (токен в заголовке; OAuth для claude.ai и ChatGPT — позже).
 
-Работа ведётся в отдельной ветке; 1.10 остаётся в `main` до готовности 2.0.
+Задачи 35–36 довели перенос до `property_set` и `lexicon_entry` и убрали старый модуль 1.x.
 
 ## 16. Открытые вопросы
 
