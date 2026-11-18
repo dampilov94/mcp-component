@@ -531,3 +531,133 @@ test("VirtualPage: the three kinds, the route tester and the help appear when it
   assert.match(help.content, /modx_create \{kind: "vp_route"/);
   assert.ok(!/modx_virtualpage_/.test(help.content));
 });
+
+// ---- MCP over HTTP: real MCP clients talk to the PHP kernel directly, without the bridge ----
+
+const { StreamableHTTPClientTransport } = require("@modelcontextprotocol/sdk/client/streamableHttp.js");
+const { toMcpTool, toMcpPrompt } = require(path.join(root, "client", "mapping.js"));
+
+async function httpClient(site, token, protocolVersion) {
+  const transport = new StreamableHTTPClientTransport(new URL(site.url), { requestInit: { headers: { Authorization: `Bearer ${token}` } } });
+  const client = new Client({ name: "http-test", version: "0" }, { capabilities: {} });
+  if (protocolVersion) {
+    // Pretend to be an older client: ask for this version in initialize.
+    const original = transport.send.bind(transport);
+    transport.send = (message, options) => original(message.method === "initialize" ? { ...message, params: { ...message.params, protocolVersion } } : message, options);
+  }
+  await client.connect(transport);
+  return { client, transport };
+}
+
+test("MCP over HTTP: the official SDK client talks to the kernel directly", { skip: available ? false : "PHP with pdo_sqlite is not available" }, async (t) => {
+  const site = await startSite();
+  const { client, transport } = await httpClient(site, site.info.tokens.admin);
+  t.after(async () => { await client.close(); site.stop(); });
+
+  assert.equal(client.getServerVersion().name, "modxMCP");
+  assert.match(client.getInstructions(), /modx_site_info/);
+  assert.match(transport.sessionId, /^[0-9a-f]{32}$/, "a session label is issued on initialize");
+
+  // The same tools, prompts and help as through the bridge.
+  const { tools } = await client.listTools();
+  const manifest = (await site.post(site.info.tokens.admin, { v: 2, action: "manifest", args: {} })).body.result;
+  assert.deepEqual(tools, manifest.tools.map(toMcpTool), "PHP Catalog and the bridge map the manifest the same way");
+  const { prompts } = await client.listPrompts();
+  assert.deepEqual(prompts, (manifest.prompts || []).map(toMcpPrompt));
+  const { resources } = await client.listResources();
+  assert.ok(resources.some((r) => r.uri === "modx-help://index"));
+  const index = await client.readResource({ uri: "modx-help://index" });
+  assert.match(index.contents[0].text, /modx_/);
+  if (prompts.length) {
+    const p = prompts[0];
+    const args = Object.fromEntries((p.arguments || []).filter((a) => a.required).map((a) => [a.name, "тест"]));
+    assert.ok((await client.getPrompt({ name: p.name, arguments: args })).messages.length >= 1);
+  }
+
+  // A read, a write, the journal under the session label, and an undo.
+  const run = async (name, args = {}) => {
+    const result = await client.callTool({ name, arguments: args });
+    assert.equal(result.isError, false, `${name}: ${result.content[0].text}`);
+    assert.deepEqual(JSON.parse(result.content[0].text), result.structuredContent);
+    return result.structuredContent;
+  };
+  assert.equal((await run("modx_site_info")).site_name, "Test site");
+  const created = await run("modx_create", { kind: "chunk", fields: { name: "через_http", content: "<b>привет</b>" } });
+  assert.ok(created.changeset_id > 0);
+  const history = await run("modx_history", { this_session: true });
+  assert.deepEqual(history.changesets.map((c) => c.changeset_id), [created.changeset_id], "the write is journaled under the session label");
+  await run("modx_undo", { changeset_id: created.changeset_id, confirm: true });
+  assert.equal((await run("modx_list", { kind: "chunk", query: "через_http" })).total, 0);
+
+  // A refusal of the site is a tool result with isError, not a protocol error; the token never shows.
+  const refused = await client.callTool({ name: "modx_create", arguments: { kind: "snippet", fields: { name: "bad", content: "return (;" } } });
+  assert.equal(refused.isError, true);
+  assert.match(refused.content[0].text, /^MODX lint_failed: /);
+  assert.ok(!refused.content[0].text.includes(site.info.tokens.admin));
+  await assert.rejects(client.callTool({ name: "modx_nope", arguments: {} }), /Unknown tool/);
+});
+
+test("MCP over HTTP: older protocol versions, auth, methods and the bridge on the same URL", { skip: available ? false : "PHP with pdo_sqlite is not available" }, async (t) => {
+  const site = await startSite();
+  t.after(() => site.stop());
+  const rpc = async (body, headers = {}, token = site.info.tokens.admin) => {
+    const response = await fetch(site.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+    const text = await response.text();
+    return { status: response.status, headers: response.headers, body: text ? JSON.parse(text) : null };
+  };
+
+  for (const version of ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]) {
+    const init = await rpc({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: version, capabilities: {}, clientInfo: { name: "x", version: "0" } } });
+    assert.equal(init.status, 200);
+    assert.equal(init.body.result.protocolVersion, version);
+    assert.equal(init.headers.get("content-type").split(";")[0], "application/json");
+  }
+  const future = await rpc({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2099-01-01", capabilities: {}, clientInfo: { name: "x", version: "0" } } });
+  assert.equal(future.body.result.protocolVersion, "2025-11-25", "an unknown version gets the newest handshake version");
+
+  // An older client (2025-03-26) gets no outputSchema and no structuredContent.
+  const old = await httpClient(site, site.info.tokens.read, "2025-03-26");
+  const oldTools = (await old.client.listTools()).tools;
+  assert.ok(oldTools.every((tool) => tool.outputSchema === undefined));
+  const info = await old.client.callTool({ name: "modx_site_info", arguments: {} });
+  assert.equal(info.structuredContent, undefined);
+  assert.equal(JSON.parse(info.content[0].text).site_name, "Test site");
+  assert.ok(!oldTools.some((tool) => tool.name === "modx_create"), "a read token sees no write tools over HTTP either");
+  await old.client.close();
+
+  // Notifications, batches, unknown methods, versions.
+  const note = await rpc({ jsonrpc: "2.0", method: "notifications/initialized" });
+  assert.equal(note.status, 202);
+  assert.equal(note.body, null);
+  const batch = await rpc([{ jsonrpc: "2.0", id: 1, method: "ping" }, { jsonrpc: "2.0", method: "notifications/initialized" }, { jsonrpc: "2.0", id: 2, method: "nope" }]);
+  assert.equal(batch.body.length, 2);
+  assert.deepEqual(batch.body[0], { jsonrpc: "2.0", id: 1, result: {} });
+  assert.equal(batch.body[1].error.code, -32601);
+  const badVersion = await rpc({ jsonrpc: "2.0", id: 1, method: "ping" }, { "MCP-Protocol-Version": "1999-01-01" });
+  assert.equal(badVersion.status, 400);
+
+  // Auth and transport rules.
+  const anon = await rpc({ jsonrpc: "2.0", id: 1, method: "tools/list" }, {}, null);
+  assert.equal(anon.status, 401);
+  assert.match(anon.headers.get("www-authenticate"), /^Bearer/);
+  assert.equal(anon.body.error.data.code, "unauthorized");
+  const wrong = await rpc({ jsonrpc: "2.0", id: 1, method: "tools/list" }, {}, "mcp_" + "0".repeat(64));
+  assert.equal(wrong.status, 401);
+  const foreign = await rpc({ jsonrpc: "2.0", id: 1, method: "ping" }, { Origin: "https://evil.example" });
+  assert.equal(foreign.status, 403);
+  const stream = await fetch(site.url, { headers: { Accept: "text/event-stream" } });
+  assert.equal(stream.status, 405);
+  const probe = await fetch(site.url);
+  assert.equal((await probe.json()).component, "modxMCP", "a plain GET is still the health probe");
+  const del = await fetch(site.url, { method: "DELETE" });
+  assert.equal(del.status, 405);
+
+  // The protocol of the bridge keeps working on the same URL.
+  const bridge = await site.post(site.info.tokens.read, { v: 2, action: "site_info", args: {} });
+  assert.equal(bridge.status, 200);
+  assert.equal(bridge.body.ok, true);
+});
