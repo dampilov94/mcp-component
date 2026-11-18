@@ -34,6 +34,7 @@ final class TvKind extends Kind {
             'display'      => array('type' => 'string', 'description' => 'Output type.'),
             'rank'         => array('type' => 'integer', 'description' => 'Sort order.'),
             'locked'       => array('type' => 'boolean', 'description' => 'Locked for editing in the manager.'),
+            'properties'   => self::propertiesField('Default properties of the TV.'),
             'input_properties' => array('type' => 'object', 'json' => true,
                 'description' => 'Options of the input type as {name: value}, e.g. {"configs": "gallery"} binds a MIGX TV to its configuration. Writing replaces the map.'),
         );
@@ -41,6 +42,7 @@ final class TvKind extends Kind {
 
     /** The TV processors read input options only from properties named inopt_<name>. */
     public function processorData($op, array $data) {
+        $data = $this->propertiesData($data);
         if (!array_key_exists('input_properties', $data)) { return $data; }
         $options = $data['input_properties'];
         unset($data['input_properties']);

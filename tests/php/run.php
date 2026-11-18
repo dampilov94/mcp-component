@@ -18,6 +18,7 @@ use ModxMCP\Manifest;
 use ModxMCP\Request\RequestStore;
 use ModxMCP\Request\RequestStoreException;
 use ModxMCP\Schema;
+use ModxMCP\Kind\Properties;
 
 $failures = 0;
 $checks = 0;
@@ -134,7 +135,7 @@ check('manifest: encodes', is_string(json_encode($tools, JSON_THROW_ON_ERROR)));
 
 $describe = $read->actions->get('describe');
 $list = $describe->run(array(), $read);
-check('describe: lists element kinds', array_column($list['kinds'], 'kind') === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source', 'user_group', 'role', 'resource_group', 'system_setting', 'context', 'context_setting', 'namespace', 'package', 'provider'));
+check('describe: lists element kinds', array_column($list['kinds'], 'kind') === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source', 'user_group', 'role', 'resource_group', 'system_setting', 'context', 'context_setting', 'namespace', 'package', 'provider', 'property_set'));
 $chunk = $describe->run(array('kind' => 'chunk'), $read);
 $fields = array_column($chunk['fields'], null, 'name');
 check('describe: chunk exposes content as code', !empty($fields['content']['code']) && $fields['name']['required'] === true && $fields['id']['read_only'] === true);
@@ -808,13 +809,14 @@ check('duplicate: static copy uses effective content without sharing the file', 
     && $staticGot['fields']['static_file'] === '' && $staticGot['fields']['content'] === $fileBefore
     && file_get_contents($file) === $fileBefore && $call($dev, 'get', array('kind' => 'chunk', 'id' => 10))['revision'] === $staticBefore['revision']);
 
+$site->store('modPropertySet', array('id' => 7, 'name' => 'plugin set', 'category' => 0, 'description' => '', 'properties' => null));
 $site->store('modElementPropertySet', array('element' => $plugin['id'], 'element_class' => 'modPlugin', 'property_set' => 7));
 $duplicateActor = $actor('develop');
 $pluginCopy = $call($duplicateActor, 'duplicate', array('kind' => 'plugin', 'id' => $plugin['id']));
 $pluginCopyGot = $call($dev, 'get', array('kind' => 'plugin', 'id' => $pluginCopy['id']));
 check('duplicate: plugin events are copied', $pluginCopyGot['relations']['events'] === $call($dev, 'get', array('kind' => 'plugin', 'id' => $plugin['id']))['relations']['events']);
-check('duplicate: non-writable relations are omitted with one warning', $pluginCopyGot['relations']['property_sets'] === array()
-    && $duplicateActor->warnings === array('Not copied: property_sets'));
+check('duplicate: property sets are now a writable relation and are copied without a warning', $pluginCopyGot['relations']['property_sets'] === array(7)
+    && $duplicateActor->warnings === array());
 $site->store('modSnippet', array('id' => $site->nextId('modSnippet'), 'name' => 'Broken duplicate source', 'snippet' => 'return (;'));
 $snippetCount = $site->getCount('modSnippet');
 $e = throws('duplicate: broken PHP fails lint', ApiException::class, function () use ($call, $dev) {
@@ -4105,7 +4107,7 @@ $sRelNames = function ($id, $ctx = null) use ($call, $sAdmin) { return array_key
 // ---- availability ----
 $sKinds = array_column($call($sAdmin, 'describe')['kinds'], 'kind');
 check('ms2: kind list with miniShop2 installed', $sKinds === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source', 'user_group', 'role', 'resource_group', 'system_setting', 'context', 'context_setting', 'namespace', 'user',
-    'access_policy', 'policy_template', 'context_access', 'resourcegroup_access', 'package', 'provider', 'ms2_option', 'ms2_link', 'ms2_product_link', 'ms2_order', 'ms2_order_status'));
+    'access_policy', 'policy_template', 'context_access', 'resourcegroup_access', 'package', 'provider', 'property_set', 'ms2_option', 'ms2_link', 'ms2_product_link', 'ms2_order', 'ms2_order_status'));
 check('ms2: kind list without miniShop2 is unchanged', !in_array('ms2_option', array_column($call($sPlain, 'describe')['kinds'], 'kind'), true));
 $e = throws('ms2: ms2_option is unavailable where miniShop2 is not installed', ApiException::class, function () use ($call, $sPlain) { $call($sPlain, 'describe', array('kind' => 'ms2_option')); });
 check('ms2: not installed is reported as unavailable', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'not_installed');
@@ -7800,6 +7802,148 @@ check('graph: comment tags are skipped by the audit link scan too', (function ()
     $gcSite->store('modResource', array('id' => 12, 'pagetitle' => 'Ссылки', 'template' => 1, 'deleted' => 0, 'published' => 1, 'content' => '[[- [[~999]] ]] [[~10]]'));
     return (new \ModxMCP\Graph\GraphBuilder($gcSite))->linkTargets('[[- [[~999]] ]] [[~10]] [[-- [[~998]] ]]') === array(10);
 })());
+
+// --- Property sets, lexicon, media source properties (task 36) ---
+$qDir = $siteDir . '/property-sets';
+mkdir($qDir . '/core', 0700, true);
+$qSite = fakeSite($qDir, array('modxmcp.auto_static' => false));
+$qCtx = function ($scope = 'develop', array $denied = array()) use ($qSite, $dev) {
+    $c = new Context($qSite, array('scope' => $scope, 'denied_groups' => $denied) + $dev->token, $dev->corePath, function () {});
+    $c->sessionId = 'property-sets-session';
+    return $c;
+};
+$qDev = $qCtx();
+$qA = function ($value) { return json_decode(json_encode($value), true); };
+$qRaw = function ($class, $id) use ($qSite) { $row = $qSite->row($class, $id); return $row === null ? null : $row; };
+$qSets = function ($class, $id) use ($qSite) {
+    $out = array();
+    foreach ($qSite->getCollection('modElementPropertySet', array('element' => $id, 'element_class' => $class)) as $r) { $out[] = (int) $r->get('property_set'); }
+    sort($out);
+    return $out;
+};
+$qLinks = function ($setId) use ($qSite) {
+    $out = array();
+    foreach ($qSite->getCollection('modElementPropertySet', array('property_set' => $setId)) as $r) { $out[] = $r->get('element_class') . ':' . $r->get('element'); }
+    sort($out);
+    return $out;
+};
+// create, read back, the stored form
+$qProps = array('tpl' => array('type' => 'textfield', 'value' => 'строкаTpl', 'desc' => 'Чанк строки'), 'limit' => array('type' => 'numberfield', 'value' => 10),
+    'показать' => array('type' => 'combo-boolean', 'value' => 1), 'вид' => array('type' => 'list', 'value' => 'a', 'options' => array(array('text' => 'Альфа', 'value' => 'a'), array('text' => 'Бета', 'value' => 'b')), 'area' => 'Вид'));
+$qSet = $call($qDev, 'create', array('kind' => 'property_set', 'fields' => array('name' => 'Мои параметры', 'description' => 'Для списка', 'properties' => $qProps)));
+$qGot = $call($qDev, 'get', array('kind' => 'property_set', 'id' => $qSet['id']));
+check('property_set: create and get, Cyrillic names and values', $qGot['fields']['name'] === 'Мои параметры' && $qGot['fields']['description'] === 'Для списка' && $qGot['fields']['category'] === 0
+    && $qA($qGot['fields']['properties'])['tpl'] === array('type' => 'textfield', 'value' => 'строкаTpl', 'desc' => 'Чанк строки') && $qA($qGot['fields']['properties'])['limit'] === array('type' => 'numberfield', 'value' => 10)
+    && $qA($qGot['fields']['properties'])['показать'] === array('type' => 'combo-boolean', 'value' => true)
+    && $qA($qGot['fields']['properties'])['вид']['options'] === array(array('text' => 'Альфа', 'value' => 'a'), array('text' => 'Бета', 'value' => 'b')) && $qA($qGot['fields']['properties'])['вид']['area'] === 'Вид'
+    && $qGot['relations']['elements'] === array());
+$qStored = Properties::decode($qSite->row('modPropertySet', $qSet['id'])['properties']);
+check('property_set: stored the way MODX stores it, a map name => {name, desc, type, options, value, lexicon, area}', array_keys($qStored) === array('limit', 'tpl', 'вид', 'показать')
+    && $qStored['tpl'] === array('name' => 'tpl', 'desc' => 'Чанк строки', 'type' => 'textfield', 'options' => array(), 'value' => 'строкаTpl', 'lexicon' => null, 'area' => '') && $qStored['показать']['value'] === true);
+check('property_set: list and describe', $call($qCtx('read'), 'list', array('kind' => 'property_set', 'query' => 'параметры'))['total'] === 1
+    && array_column($call($qCtx('read'), 'describe', array('kind' => 'property_set'))['relations'], 'name') === array('elements')
+    && $call($qCtx('read'), 'describe', array('kind' => 'property_set'))['group'] === 'property_sets');
+// writing the properties replaces the map; other fields leave it alone
+$qBefore = $qSite->row('modPropertySet', $qSet['id'])['properties'];
+$call($qDev, 'update', array('kind' => 'property_set', 'id' => $qSet['id'], 'fields' => array('description' => 'Другое')));
+check('property_set: an update of another field does not touch the properties', $qSite->row('modPropertySet', $qSet['id'])['properties'] === $qBefore);
+$qUpdated = $call($qDev, 'update', array('kind' => 'property_set', 'id' => $qSet['id'], 'fields' => array('properties' => array('only' => array('value' => 'один')))));
+$qGot = $call($qDev, 'get', array('kind' => 'property_set', 'id' => $qSet['id']));
+check('property_set: writing properties replaces the whole map, a type defaults to textfield', array_keys($qA($qGot['fields']['properties'])) === array('only') && $qA($qGot['fields']['properties'])['only'] === array('type' => 'textfield', 'value' => 'один')
+    && $qUpdated['changed'] === array('properties'));
+$call($qDev, 'undo', array('changeset_id' => $qUpdated['changeset_id'], 'confirm' => true));
+check('property_set: undo restores the map as it was', $qSite->row('modPropertySet', $qSet['id'])['properties'] === $qBefore);
+foreach (array('a list' => array(array('value' => 1)), 'no value' => array('a' => array('type' => 'textfield')), 'an array value' => array('a' => array('value' => array(1))), 'an unknown key' => array('a' => array('value' => 1, 'x' => 1)),
+    'a bad option' => array('a' => array('value' => 1, 'options' => array('x'))), 'an empty name' => array('' => array('value' => 1))) as $qLabel => $qBad) {
+    $e = throws("property_set: {$qLabel} is refused", ApiException::class, function () use ($call, $qDev, $qSet, $qBad) { $call($qDev, 'update', array('kind' => 'property_set', 'id' => $qSet['id'], 'fields' => array('properties' => $qBad))); });
+    check("property_set: {$qLabel} is validation_failed", $e && $e->errorCode === 'validation_failed');
+}
+$e = throws('property_set: a duplicate name', ApiException::class, function () use ($call, $qDev) { $call($qDev, 'create', array('kind' => 'property_set', 'fields' => array('name' => 'Мои параметры'))); });
+check('property_set: a duplicate name is validation_failed', $e && $e->errorCode === 'validation_failed');
+// elements: both directions
+$qChunk = $call($qDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'строка', 'content' => 'x')));
+$qSnippet = $call($qDev, 'create', array('kind' => 'snippet', 'fields' => array('name' => 'Список', 'content' => 'return 1;')));
+$qSet2 = $call($qDev, 'create', array('kind' => 'property_set', 'fields' => array('name' => 'Второй набор'), 'relations' => array('elements' => array(array('kind' => 'chunk', 'id' => $qChunk['id'])))));
+check('property_set: a set created with elements links them', $qLinks($qSet2['id']) === array('modChunk:' . $qChunk['id']) && $qSets('modChunk', $qChunk['id']) === array($qSet2['id'])
+    && $call($qDev, 'get', array('kind' => 'chunk', 'id' => $qChunk['id']))['relations']['property_sets'] === array($qSet2['id'])
+    && $call($qDev, 'get', array('kind' => 'property_set', 'id' => $qSet2['id']))['relations']['elements'] === array(array('kind' => 'chunk', 'id' => $qChunk['id'])));
+$qLinked = $call($qDev, 'update', array('kind' => 'property_set', 'id' => $qSet['id'], 'relations' => array('elements' => array(array('kind' => 'chunk', 'id' => $qChunk['id']), array('kind' => 'snippet', 'id' => $qSnippet['id'])))));
+check('property_set: writing elements adds links and the chunk shows the set too', $qLinks($qSet['id']) === array('modChunk:' . $qChunk['id'], 'modSnippet:' . $qSnippet['id'])
+    && $qSets('modChunk', $qChunk['id']) === array($qSet['id'], $qSet2['id']) && $qLinked['changed'] === array('elements'));
+$qLog = $call($qDev, 'history', array('limit' => 1))['changesets'][0];
+check('property_set: the same changeset journals the elements whose links changed', count($qLog['objects']) === 3 && array_column($qLog['objects'], 'kind') === array('property_set', 'chunk', 'snippet'));
+$call($qDev, 'update', array('kind' => 'chunk', 'id' => $qChunk['id'], 'relations' => array('property_sets' => array($qSet2['id']))));
+check('property_set: writing property_sets of an element removes the other link, in both views', $qLinks($qSet['id']) === array('modSnippet:' . $qSnippet['id']) && $qSets('modChunk', $qChunk['id']) === array($qSet2['id'])
+    && $call($qDev, 'get', array('kind' => 'property_set', 'id' => $qSet['id']))['relations']['elements'] === array(array('kind' => 'snippet', 'id' => $qSnippet['id'])));
+$qHistory = $call($qDev, 'history', array('limit' => 1))['changesets'][0];
+$call($qDev, 'undo', array('changeset_id' => $qHistory['changeset_id'], 'confirm' => true));
+check('property_set: undo of the element-side write puts both views back', $qLinks($qSet['id']) === array('modChunk:' . $qChunk['id'], 'modSnippet:' . $qSnippet['id']) && $qSets('modChunk', $qChunk['id']) === array($qSet['id'], $qSet2['id']));
+$call($qDev, 'update', array('kind' => 'property_set', 'id' => $qSet['id'], 'relations' => array('elements' => array())));
+check('property_set: an empty list detaches everything', $qLinks($qSet['id']) === array());
+foreach (array('an unknown kind' => array(array('kind' => 'resource', 'id' => 1)), 'a missing element' => array(array('kind' => 'chunk', 'id' => 9999)), 'a bare id' => array(5), 'an extra key' => array(array('kind' => 'chunk', 'id' => $qChunk['id'], 'x' => 1))) as $qLabel => $qBad) {
+    $e = throws("property_set: elements with {$qLabel}", ApiException::class, function () use ($call, $qDev, $qSet, $qBad) { $call($qDev, 'update', array('kind' => 'property_set', 'id' => $qSet['id'], 'relations' => array('elements' => $qBad))); });
+    check("property_set: elements with {$qLabel} are validation_failed", $e && $e->errorCode === 'validation_failed');
+}
+$e = throws('property_set: a missing set in property_sets of an element', ApiException::class, function () use ($call, $qDev, $qChunk) { $call($qDev, 'update', array('kind' => 'chunk', 'id' => $qChunk['id'], 'relations' => array('property_sets' => array(9999)))); });
+check('property_set: a missing set is validation_failed', $e && $e->errorCode === 'validation_failed' && $qSets('modChunk', $qChunk['id']) === array($qSet2['id']));
+// assign / unassign
+$qAssign = $call($qDev, 'invoke', array('kind' => 'property_set', 'id' => $qSet['id'], 'op' => 'assign', 'args' => array('kind' => 'chunk', 'id' => $qChunk['id'])));
+check('property_set: assign links the element and journals it', $qAssign['status'] === 'assigned' && $qLinks($qSet['id']) === array('modChunk:' . $qChunk['id']) && $qAssign['changeset_id'] !== null
+    && count($call($qDev, 'history', array('limit' => 1))['changesets'][0]['objects']) === 2);
+$qAgain = $call($qDev, 'invoke', array('kind' => 'property_set', 'id' => $qSet['id'], 'op' => 'assign', 'args' => array('kind' => 'chunk', 'id' => $qChunk['id'])));
+check('property_set: assigning again changes nothing', $qAgain['status'] === 'already_assigned' && $qAgain['changeset_id'] === null);
+$call($qDev, 'undo', array('changeset_id' => $qAssign['changeset_id'], 'confirm' => true));
+check('property_set: undo of assign removes the link', $qLinks($qSet['id']) === array());
+$call($qDev, 'invoke', array('kind' => 'property_set', 'id' => $qSet['id'], 'op' => 'assign', 'args' => array('kind' => 'snippet', 'id' => $qSnippet['id'])));
+$qOff = $call($qDev, 'invoke', array('kind' => 'property_set', 'id' => $qSet['id'], 'op' => 'unassign', 'args' => array('kind' => 'snippet', 'id' => $qSnippet['id'])));
+check('property_set: unassign removes it, and a second one is a no-op', $qOff['status'] === 'unassigned' && $qLinks($qSet['id']) === array()
+    && $call($qDev, 'invoke', array('kind' => 'property_set', 'id' => $qSet['id'], 'op' => 'unassign', 'args' => array('kind' => 'snippet', 'id' => $qSnippet['id'])))['status'] === 'not_assigned');
+$e = throws('property_set: assign needs a known element kind', ApiException::class, function () use ($call, $qDev, $qSet) { $call($qDev, 'invoke', array('kind' => 'property_set', 'id' => $qSet['id'], 'op' => 'assign', 'args' => array('kind' => 'resource', 'id' => 1))); });
+$e = throws('property_set: assign needs an existing element', ApiException::class, function () use ($call, $qDev, $qSet) { $call($qDev, 'invoke', array('kind' => 'property_set', 'id' => $qSet['id'], 'op' => 'assign', 'args' => array('kind' => 'chunk', 'id' => 9999))); });
+check('property_set: assign of a missing element is validation_failed', $e && $e->errorCode === 'validation_failed');
+// delete takes the links and undo brings them back
+$call($qDev, 'update', array('kind' => 'property_set', 'id' => $qSet['id'], 'relations' => array('elements' => array(array('kind' => 'chunk', 'id' => $qChunk['id'])))));
+$qRev = $call($qDev, 'get', array('kind' => 'property_set', 'id' => $qSet['id']))['revision'];
+$qDeleted = $call($qDev, 'delete', array('kind' => 'property_set', 'id' => $qSet['id']));
+check('property_set: delete removes the set and its links', $qSite->row('modPropertySet', $qSet['id']) === null && $qLinks($qSet['id']) === array() && $qSets('modChunk', $qChunk['id']) === array($qSet2['id']));
+$call($qDev, 'undo', array('changeset_id' => $qDeleted['changeset_id'], 'confirm' => true));
+check('property_set: undo of delete brings back the set, its map and its links with the same revision', $call($qDev, 'get', array('kind' => 'property_set', 'id' => $qSet['id']))['revision'] === $qRev
+    && $qLinks($qSet['id']) === array('modChunk:' . $qChunk['id']) && $qSite->row('modPropertySet', $qSet['id'])['properties'] === $qBefore);
+$qCreatedUndo = $call($qDev, 'create', array('kind' => 'property_set', 'fields' => array('name' => 'Временный', 'properties' => array('a' => array('value' => 'я')))));
+$call($qDev, 'undo', array('changeset_id' => $qCreatedUndo['changeset_id'], 'confirm' => true));
+check('property_set: undo of create removes it', $qSite->row('modPropertySet', $qCreatedUndo['id']) === null);
+$qDup = $call($qDev, 'duplicate', array('kind' => 'property_set', 'id' => $qSet['id']));
+check('property_set: duplicate copies the map and the elements', $qA($call($qDev, 'get', array('kind' => 'property_set', 'id' => $qDup['id']))['fields']['properties']) === $qA($call($qDev, 'get', array('kind' => 'property_set', 'id' => $qSet['id']))['fields']['properties'])
+    && $qLinks($qDup['id']) === array('modChunk:' . $qChunk['id']));
+// the default properties of the elements
+foreach (array('chunk', 'snippet', 'template', 'plugin', 'tv') as $qKind) {
+    $qFields = array('name' => 'свойства ' . $qKind) + ($qKind === 'tv' ? array('type' => 'text') : array());
+    $qEl = $call($qDev, 'create', array('kind' => $qKind, 'fields' => $qFields + array('properties' => array('tpl' => array('type' => 'textfield', 'value' => 'один', 'desc' => 'Описание'), 'n' => array('type' => 'numberfield', 'value' => 3)))));
+    $qElGot = $call($qDev, 'get', array('kind' => $qKind, 'id' => $qEl['id']));
+    check("element properties: {$qKind} created with default properties and read back", $qA($qElGot['fields']['properties']) === array('n' => array('type' => 'numberfield', 'value' => 3), 'tpl' => array('type' => 'textfield', 'value' => 'один', 'desc' => 'Описание')));
+    $qBeforeRaw = $qSite->row($qKind === 'tv' ? 'modTemplateVar' : 'mod' . ucfirst($qKind), $qEl['id'])['properties'];
+    $call($qDev, 'update', array('kind' => $qKind, 'id' => $qEl['id'], 'fields' => array('description' => 'Описание')));
+    check("element properties: {$qKind}: another field leaves them as they are", $qSite->row($qKind === 'tv' ? 'modTemplateVar' : 'mod' . ucfirst($qKind), $qEl['id'])['properties'] === $qBeforeRaw);
+    $qEdit = $call($qDev, 'update', array('kind' => $qKind, 'id' => $qEl['id'], 'fields' => array('properties' => array('новое' => array('value' => 'значение')))));
+    check("element properties: {$qKind}: writing replaces the map", $qA($call($qDev, 'get', array('kind' => $qKind, 'id' => $qEl['id']))['fields']['properties']) === array('новое' => array('type' => 'textfield', 'value' => 'значение')) && $qEdit['changed'] === array('properties'));
+    $call($qDev, 'undo', array('changeset_id' => $qEdit['changeset_id'], 'confirm' => true));
+    check("element properties: {$qKind}: undo restores them", $qSite->row($qKind === 'tv' ? 'modTemplateVar' : 'mod' . ucfirst($qKind), $qEl['id'])['properties'] === $qBeforeRaw);
+}
+$e = throws('element properties: cannot be a filter', ApiException::class, function () use ($call, $qDev) { $call($qDev, 'list', array('kind' => 'chunk', 'where' => array('properties' => 'x'))); });
+// groups
+$qAll = array_column($call($qCtx('admin'), 'describe')['kinds'], 'kind');
+$qSite->options['modxmcp.disabled_groups'] = 'property_sets';
+$qWithout = array_column($call($qCtx('admin'), 'describe')['kinds'], 'kind');
+check('property_set: a disabled property_sets group hides exactly this kind', in_array('property_set', $qAll, true) && $qWithout === array_values(array_diff($qAll, array('property_set'))));
+$e = throws('property_set: unavailable when the group is disabled', ApiException::class, function () use ($call, $qCtx) { $call($qCtx('admin'), 'list', array('kind' => 'property_set')); });
+check('property_set: unavailable with the reason', $e && $e->errorCode === 'unavailable');
+check('property_set: the property_sets relation of an element is hidden too', !isset($qA($call($qCtx('admin'), 'get', array('kind' => 'chunk', 'id' => $qChunk['id']))['relations'])['property_sets']));
+$qSite->options['modxmcp.disabled_groups'] = '';
+$e = throws('property_set: a token with the group denied cannot use it', ApiException::class, function () use ($call, $qCtx) { $call($qCtx('develop', array('property_sets')), 'create', array('kind' => 'property_set', 'fields' => array('name' => 'Нельзя'))); });
+check('property_set: a denied group is unavailable and the kind leaves its list', $e && $e->errorCode === 'unavailable'
+    && !in_array('property_set', array_column($call($qCtx('admin', array('property_sets')), 'describe')['kinds'], 'kind'), true));
+$e = throws('property_set: a read token cannot write', ApiException::class, function () use ($call, $qCtx) { $call($qCtx('read'), 'create', array('kind' => 'property_set', 'fields' => array('name' => 'Нельзя'))); });
+check('property_set: a read token is refused by scope', $e && $e->errorCode === 'forbidden_scope');
 
 echo $failures ? "{$failures} of {$checks} PHP checks failed.\n" : "PHP: {$checks} checks passed.\n";
 exit($failures ? 1 : 0);

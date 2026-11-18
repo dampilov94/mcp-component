@@ -347,6 +347,13 @@ final class Objects {
         }
         if ($relations) {
             $object = $kind->findByKey($modx, $id);
+            foreach ($relations as $name => $value) {
+                // Other objects whose state changes with this relation are journaled with the call.
+                foreach ($kind->relationAffects($modx, $object, $name, $value) as $other) {
+                    $otherKind = $context->kinds->get($other[0]);
+                    if ($otherKind) { $tx->touch($otherKind, $other[1]); }
+                }
+            }
             foreach ($relations as $name => $value) { $kind->writeRelation($modx, $object, $name, $value); }
             $cache = $modx->getCacheManager();
             if ($cache) { $cache->refresh(); }

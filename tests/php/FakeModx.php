@@ -874,6 +874,8 @@ class modX extends xPDO {
         array('modAccessPolicy', 'modAccessPolicy', 'parent', array()),
         array('modAccessPolicyTemplate', 'modAccessPermission', 'template', array()),
         array('modAccessPolicyTemplate', 'modAccessPolicy', 'template', array()),
+        // A property set takes its links to elements with it (xPDO composite 'Elements').
+        array('modPropertySet', 'modElementPropertySet', 'property_set', array()),
     );
     private static $processors = array(
         'element/chunk/' => array('modChunk', 'name'), 'element/snippet/' => array('modSnippet', 'name'),
@@ -897,7 +899,7 @@ class modX extends xPDO {
     }
     private function persist() { if ($this->file) { file_put_contents($this->file, json_encode($this->tables)); } }
     /** Primary key column(s) per class; rows of other classes are matched by id (or by their whole content without one). */
-    public static $primaryKeys = array('modSystemSetting' => 'key', 'modContext' => 'key', 'modNamespace' => 'name', 'modContextSetting' => array('context_key', 'key'), 'modUserSetting' => array('user', 'key'), 'transport.modTransportPackage' => 'signature',
+    public static $primaryKeys = array('modElementPropertySet' => array('element', 'element_class', 'property_set'), 'modSystemSetting' => 'key', 'modContext' => 'key', 'modNamespace' => 'name', 'modContextSetting' => array('context_key', 'key'), 'modUserSetting' => array('user', 'key'), 'transport.modTransportPackage' => 'signature',
         'msCategoryMember' => array('product_id', 'category_id'), 'msCategoryOption' => array('option_id', 'category_id'), 'msProductLink' => array('link', 'master', 'slave'),
         // xPDO class without a primary key: rows are told apart by their whole content.
         'msProductOption' => null);
@@ -1417,6 +1419,55 @@ class modX extends xPDO {
     }
 
     /** workspace/namespace/*: the core namespace cannot be removed; removing one removes its settings and lexicon entries. */
+    /**
+     * element/propertyset/{create,update,remove,addelement,removeelement} (MODX 2.8.8). create and update strip the characters MODX
+     * strips from a name; addelement and removeelement take the set as `propertyset` and the element as `element` + `element_class`.
+     * `properties` arrives as the stored map (an array) and is kept as it is.
+     */
+    private function propertySetProcessor($action, array $data) {
+        if ($action === 'addelement' || $action === 'removeelement') {
+            $set = $this->getObject('modPropertySet', array('id' => isset($data['propertyset']) ? $data['propertyset'] : 0));
+            if (!$set) { return new FakeResponse('Property set not found.'); }
+            if (empty($data['element_class']) || empty($data['element']) || !$this->getObject($data['element_class'], array('id' => $data['element']))) { return new FakeResponse('Element not found.'); }
+            $where = array('element' => $data['element'], 'element_class' => $data['element_class'], 'property_set' => $set->get('id'));
+            $row = $this->getObject('modElementPropertySet', $where);
+            if ($action === 'addelement') {
+                if ($row) { return new FakeResponse('The element could not be added to the property set.'); }
+                $row = $this->newObject('modElementPropertySet');
+                $row->fromArray($where, '', true, true);
+                $row->save();
+            } else {
+                if (!$row) { return new FakeResponse('The element is not in the property set.'); }
+                $row->remove();
+            }
+            return new FakeResponse(null, $where);
+        }
+        if ($action === 'remove') {
+            $object = $this->getObject('modPropertySet', array('id' => isset($data['id']) ? $data['id'] : 0));
+            if (!$object) { return new FakeResponse('Property set not found.'); }
+            $object->remove();
+            return new FakeResponse(null, array('id' => $data['id']));
+        }
+        $name = isset($data['name']) ? str_replace(array('!', '@', '?', '`', '&amp;', '&'), '', $data['name']) : '';
+        if ($name === '') { return new FakeResponse('Please specify a name.'); }
+        $data['name'] = $name;
+        foreach ($this->match('modPropertySet', array('name' => $name)) as $row) {
+            if ($action === 'create' || (string) $row['id'] !== (string) $data['id']) { return new FakeResponse('A property set with that name already exists.'); }
+        }
+        if (!empty($data['category']) && !$this->getObject('modCategory', array('id' => $data['category']))) { return new FakeResponse('Category not found.'); }
+        if ($action === 'create') {
+            $object = $this->newObject('modPropertySet');
+            $data += array('description' => '', 'category' => 0, 'properties' => null);
+        } else {
+            $object = $this->getObject('modPropertySet', array('id' => $data['id']));
+            if (!$object) { return new FakeResponse('Property set not found.'); }
+            if (empty($data['category'])) { $data['category'] = 0; }
+        }
+        $object->fromArray($data, '', false, true);
+        $object->save();
+        return new FakeResponse(null, array('id' => $object->get('id')));
+    }
+
     private function namespaceProcessor($action, array $data) {
         if (!isset($data['name']) || $data['name'] === '') { return new FakeResponse('Please specify a name.'); }
         $object = $this->getObject('modNamespace', array('name' => $data['name']));
@@ -1605,6 +1656,7 @@ class modX extends xPDO {
         if ($base === 'context/setting/') { return $this->settingProcessor($action, $data, $path, 'modContextSetting'); }
         if ($base === 'context/') { return $this->contextProcessor($action, $data); }
         if ($base === 'workspace/namespace/') { return $this->namespaceProcessor($action, $data); }
+        if ($base === 'element/propertyset/') { return $this->propertySetProcessor($action, $data); }
         if (in_array($base, array('security/group/', 'security/role/', 'security/resourcegroup/'), true)) { return $this->accessProcessor($base, $action, $data); }
         if ($base === 'resource/') { return $this->resourceProcessor($action, $data, $path); }
         if (!isset(self::$processors[$base])) { return null; }

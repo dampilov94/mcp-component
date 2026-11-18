@@ -75,16 +75,22 @@ final class ListAction extends Action {
         $criteria = $kind->listCriteria($criteria);
         $limit = isset($args['limit']) ? $args['limit'] : 50;
         $start = isset($args['start']) ? $args['start'] : 0;
-        $query = $modx->newQuery($kind->modelClass());
-        if ($criteria) { $query->where($criteria); }
-        if ($search) { $query->where(array($search)); }
-        $total = (int) $modx->getCount($kind->modelClass(), $query);
-        // xPDO does not quote sort columns, and some are reserved words in MySQL (`key`).
-        foreach ($kind->defaultSort() as $sort) { $query->sortby($modx->escape($sort[0]), $sort[1]); }
-        $query->limit($limit, $start);
+        $custom = $kind->customList($context, $criteria, isset($args['query']) ? (string) $args['query'] : '', $start, $limit);
+        if ($custom !== null) {
+            list($total, $objects) = $custom;
+        } else {
+            $query = $modx->newQuery($kind->modelClass());
+            if ($criteria) { $query->where($criteria); }
+            if ($search) { $query->where(array($search)); }
+            $total = (int) $modx->getCount($kind->modelClass(), $query);
+            // xPDO does not quote sort columns, and some are reserved words in MySQL (`key`).
+            foreach ($kind->defaultSort() as $sort) { $query->sortby($modx->escape($sort[0]), $sort[1]); }
+            $query->limit($limit, $start);
+            $objects = $modx->getCollection($kind->modelClass(), $query);
+        }
 
         $items = array();
-        foreach ($modx->getCollection($kind->modelClass(), $query) as $object) {
+        foreach ($objects as $object) {
             $item = array();
             foreach ($names as $name) { $item[$name] = $kind->value($object, $name); }
             // Every item can be addressed: string-key kinds always carry their key.
