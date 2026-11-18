@@ -91,7 +91,10 @@ for path in git('ls-files', '--cached', '--others', '--exclude-standard', '--', 
 
 upload = sorted(p for p in local if deployed.get(p) != local[p])
 delete = sorted(p for p in deployed if p not in local)
-order = lambda p: (2 if p.endswith('assets/components/modxmcp/api.php') else 0 if '/src/' in p else 1, p)
+# New files first (nothing uses them yet, so uploading them changes nothing), then changed files of src/,
+# then the rest, api.php last. A changed file that needs a new one must never go live before it: an
+# interrupted run would leave the site with "class not found".
+order = lambda p: (2 if p.endswith('assets/components/modxmcp/api.php') else 0 if p not in deployed else 1 if '/src/' in p else 1.5, p)
 ftp, host, mode = connect()
 print('host:', host, '| mode:', mode, '| upload:', len(upload), '| delete:', len(delete))
 ftp.close()
