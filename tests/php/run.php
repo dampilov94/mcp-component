@@ -6175,6 +6175,27 @@ check('recorder: emptying the trash journals every removed resource as deleted',
 $rBackTrash = $call($rAdmin, 'undo', array('changeset_id' => $rEmpty['changeset_id'], 'confirm' => true));
 check('recorder: and the removed resource can be brought back', $rBackTrash['performed'] === true && $rSite->getCount('modResource', array('id' => $rA['id'])) === 1);
 
+// the API's own maintenance call is not a manager change, with the flag set by the kernel for the request
+$rTrashed = $call($rDev, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'в корзину', 'template' => 0)));
+$call($rDev, 'delete', array('kind' => 'resource', 'id' => $rTrashed['id']));
+$rBase = $rCount();
+Kernel::servingApi(true);
+$call($rAdmin, 'maintenance', array('operation' => 'empty_trash', 'confirm' => true));
+Kernel::servingApi(false);
+check('recorder: an API empty_trash is not journaled as a manager change', $rSite->getCount('modResource', array('id' => $rTrashed['id'])) === 0 && $rCount() === $rBase
+    && !Kernel::servingApi());
+$rTrashed = $call($rDev, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'в корзину 2', 'template' => 0)));
+$call($rDev, 'delete', array('kind' => 'resource', 'id' => $rTrashed['id']));
+$rBase = $rCount();
+$rSite->runProcessor('resource/emptyrecyclebin', array());
+check('recorder: without the flag the same processor is still recorded as a manager change', $rCount() === $rBase + 1 && $rLog()[0]['source'] === 'manager');
+Kernel::servingApi(true);
+$rToken2 = $rSite->getObject('modChunk', array('id' => $rHead['id']));
+Recorder::handle($rSite, 'OnBeforeChunkFormSave', array('mode' => 'upd', 'id' => $rHead['id'], 'chunk' => &$rToken2));
+check('recorder: while the API serves, handle() returns at once and opens nothing', Transaction::depth() === 0);
+Kernel::servingApi(false);
+check('recorder: the kernel sets the flag for the whole request', strpos(file_get_contents(dirname(__DIR__, 2) . '/core/components/modxmcp/src/Kernel.php'), 'self::servingApi(true);') !== false);
+
 // more than 500 objects: skipped, one log line
 $rMany = array();
 for ($i = 1; $i <= 501; $i++) { $rMany[] = $i; }
@@ -7717,13 +7738,14 @@ file_put_contents($lcDir . '/sym/target/precious.txt', 'keep');
 if (function_exists('symlink')) { symlink($lcDir . '/sym/target', $lcSymlink . '/model/link'); }
 ModxMCP\Setup\LegacyCleanup::run(fakeSite($lcDir . '/sym'), $lcSymlink . '/');
 check('cleanup: a symbolic link inside the removed directory is not followed', is_file($lcDir . '/sym/target/precious.txt') && !file_exists($lcSymlink . '/model'));
-$lcShipped = array_map('basename', glob($component . 'docs/*.md'));
+$lcShipped = array_map('basename', glob(dirname(__DIR__, 2) . '/core/components/modxmcp/docs/*.md'));
+check('cleanup: the shipped help topics were found', in_array('getting_started.md', $lcShipped, true));
 check('cleanup: no help topic of the package is on the removal list', array_intersect(array_map('basename', ModxMCP\Setup\LegacyCleanup::HELP), $lcShipped) === array());
 check('cleanup: the resolver runs it on upgrades only', (function () {
     $source = file_get_contents(dirname(__DIR__, 2) . '/_build/resolvers/resolve.token.php');
     return preg_match('/if \(\$action === xPDOTransport::ACTION_UPGRADE\) \{[^}]*LegacyCleanup::run/s', $source) === 1;
 })());
-check('cleanup: the 1.x model directory is gone from the package', !is_dir($component . 'model'));
+check('cleanup: the 1.x model directory is gone from the package', !is_dir(dirname(__DIR__, 2) . '/core/components/modxmcp/model'));
 
 echo $failures ? "{$failures} of {$checks} PHP checks failed.\n" : "PHP: {$checks} checks passed.\n";
 exit($failures ? 1 : 0);
