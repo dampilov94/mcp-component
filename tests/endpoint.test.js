@@ -538,7 +538,9 @@ const { StreamableHTTPClientTransport } = require("@modelcontextprotocol/sdk/cli
 const { toMcpTool, toMcpPrompt } = require(path.join(root, "client", "mapping.js"));
 
 async function httpClient(site, token, protocolVersion) {
-  const transport = new StreamableHTTPClientTransport(new URL(site.url), { requestInit: { headers: { Authorization: `Bearer ${token}` } } });
+  // The ready snippets send X-MCP-Token (hosts with PHP under FastCGI drop Authorization); the older client below uses it.
+  const headers = protocolVersion ? { "X-MCP-Token": token } : { Authorization: `Bearer ${token}` };
+  const transport = new StreamableHTTPClientTransport(new URL(site.url), { requestInit: { headers } });
   const client = new Client({ name: "http-test", version: "0" }, { capabilities: {} });
   if (protocolVersion) {
     // Pretend to be an older client: ask for this version in initialize.

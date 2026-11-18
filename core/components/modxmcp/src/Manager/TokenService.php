@@ -148,13 +148,15 @@ final class TokenService {
     public function configs($token) {
         $token = (string) $token;
         $url = $this->endpoint();
-        $bearer = array('Authorization' => 'Bearer ' . $token);
+        // X-MCP-Token rather than "Authorization: Bearer": Apache with PHP under FastCGI (common on shared hosting)
+        // does not pass the Authorization header to PHP, while a custom header always arrives. The site accepts both.
+        $bearer = array('X-MCP-Token' => $token);
         $out = array();
         $out[] = array('id' => 'claude_code', 'title' => 'Claude Code', 'file' => '.mcp.json',
             'text' => self::json(array('mcpServers' => array('modx' => array('type' => 'http', 'url' => $url, 'headers' => $bearer)))));
         $out[] = array('id' => 'codex', 'title' => 'Codex CLI', 'file' => '~/.codex/config.toml',
             'text' => "[mcp_servers.modx]\nurl = " . json_encode($url, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
-                . "\nbearer_token_env_var = \"MODX_MCP_TOKEN\"\n# export MODX_MCP_TOKEN=" . $token);
+                . "\nenv_http_headers = { \"X-MCP-Token\" = \"MODX_MCP_TOKEN\" }\n# export MODX_MCP_TOKEN=" . $token);
         $out[] = array('id' => 'gemini', 'title' => 'Gemini CLI', 'file' => 'settings.json',
             'text' => self::json(array('mcpServers' => array('modx' => array('httpUrl' => $url, 'headers' => $bearer)))));
         $out[] = array('id' => 'opencode', 'title' => 'opencode', 'file' => 'opencode.json',

@@ -17,7 +17,9 @@
 ### По HTTP, без Node (основной способ)
 
 Сайт сам отвечает по MCP (Streamable HTTP) на том же адресе `api.php`, с теми же токенами.
-Клиенту нужны адрес и заголовок `Authorization: Bearer <токен>`. Готовый текст для каждого
+Клиенту нужны адрес и заголовок `X-MCP-Token: <токен>` (`Authorization: Bearer <токен>` тоже
+принимается, но Apache с PHP через FastCGI — частая настройка хостингов — не передаёт его в PHP,
+и подключение получает 401). Готовый текст для каждого
 клиента показывается на странице «Токены» при создании токена. Пример, Claude Code
 (`.mcp.json` в папке проекта; затем `/mcp`):
 
@@ -27,7 +29,7 @@
     "modx": {
       "type": "http",
       "url": "http://САЙТ/assets/components/modxmcp/api.php",
-      "headers": { "Authorization": "Bearer ваш-токен" }
+      "headers": { "X-MCP-Token": "ваш-токен" }
     }
   }
 }
@@ -36,7 +38,7 @@
 | Клиент | Файл | Ключи |
 |---|---|---|
 | Claude Code | `.mcp.json` | `mcpServers.modx`: `type: "http"`, `url`, `headers` |
-| Codex CLI | `~/.codex/config.toml` | `[mcp_servers.modx]`: `url`, `bearer_token_env_var` (токен в переменной `MODX_MCP_TOKEN`) |
+| Codex CLI | `~/.codex/config.toml` | `[mcp_servers.modx]`: `url`, `env_http_headers = { "X-MCP-Token" = "MODX_MCP_TOKEN" }` (токен в переменной `MODX_MCP_TOKEN`) |
 | Gemini CLI | `settings.json` | `mcpServers.modx`: `httpUrl`, `headers` |
 | opencode | `opencode.json` | `mcp.servers.modx`: `type: "remote"`, `url`, `oauth: false`, `headers` |
 | Cursor | `.cursor/mcp.json` | `mcpServers.modx`: `url`, `headers` |
@@ -54,10 +56,10 @@ Node узнаёт об изменениях сразу); моста нет, по
 Клиенты без поддержки HTTP (в том числе Claude Desktop) подключаются через `mcp-remote`:
 
 ```
-npx mcp-remote http://САЙТ/assets/components/modxmcp/api.php --transport http-only --header "Authorization:${AUTH_HEADER}"
+npx mcp-remote http://САЙТ/assets/components/modxmcp/api.php --transport http-only --header "X-MCP-Token:${MODX_MCP_TOKEN}"
 ```
 
-с `AUTH_HEADER="Bearer ваш-токен"` в `env` сервера (для сайта на простом HTTP добавьте
+с `MODX_MCP_TOKEN="ваш-токен"` в `env` сервера (для сайта на простом HTTP добавьте
 `--allow-http`).
 
 ### Через Node (мост `modx-mcp`)

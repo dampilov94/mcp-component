@@ -6817,11 +6817,11 @@ check('tokens page: the endpoint is the one of a standard site', $tkService->end
 // Ready snippets per client for MCP over HTTP (formats from each client's documentation)
 $tkConfigs = array_column($tkNew['configs'], null, 'id');
 $tkUrl = $tkService->endpoint();
-$tkBearer = array('Authorization' => 'Bearer ' . $tkNew['token']);
+$tkBearer = array('X-MCP-Token' => $tkNew['token']);
 check('mcp http: one snippet per client, the bridge last', array_keys($tkConfigs) === array('claude_code', 'codex', 'gemini', 'opencode', 'cursor', 'vscode', 'cline', 'zed', 'node')
     && $tkNew['config'] === $tkConfigs['node']['text']);
 $tkJson = function ($id) use ($tkConfigs) { return json_decode($tkConfigs[$id]['text'], true); };
-check('mcp http: Claude Code uses type http with the bearer header', $tkJson('claude_code') === array('mcpServers' => array('modx' => array('type' => 'http', 'url' => $tkUrl, 'headers' => $tkBearer))));
+check('mcp http: Claude Code uses type http with the token header', $tkJson('claude_code') === array('mcpServers' => array('modx' => array('type' => 'http', 'url' => $tkUrl, 'headers' => $tkBearer))));
 check('mcp http: Gemini CLI uses httpUrl (url would mean SSE)', $tkJson('gemini') === array('mcpServers' => array('modx' => array('httpUrl' => $tkUrl, 'headers' => $tkBearer))));
 check('mcp http: opencode is remote, under mcp.servers, with OAuth off', $tkJson('opencode')['mcp']['servers']['modx'] === array('type' => 'remote', 'url' => $tkUrl, 'oauth' => false, 'headers' => $tkBearer));
 check('mcp http: Cursor, VS Code, Cline and Zed', $tkJson('cursor') === array('mcpServers' => array('modx' => array('url' => $tkUrl, 'headers' => $tkBearer)))
@@ -6830,7 +6830,7 @@ check('mcp http: Cursor, VS Code, Cline and Zed', $tkJson('cursor') === array('m
     && $tkJson('zed') === array('context_servers' => array('modx' => array('url' => $tkUrl, 'headers' => $tkBearer))));
 $tkToml = explode("\n", $tkConfigs['codex']['text']);
 check('mcp http: Codex CLI reads the token from an environment variable', $tkToml === array('[mcp_servers.modx]', 'url = "' . $tkUrl . '"',
-    'bearer_token_env_var = "MODX_MCP_TOKEN"', '# export MODX_MCP_TOKEN=' . $tkNew['token']));
+    'env_http_headers = { "X-MCP-Token" = "MODX_MCP_TOKEN" }', '# export MODX_MCP_TOKEN=' . $tkNew['token']));
 check('mcp http: every JSON snippet is indented with two spaces', count(array_filter($tkConfigs, function ($c) { return $c['id'] !== 'codex' && strpos($c['text'], "\n  \"") === false; })) === 0);
 
 // TokenService::update
