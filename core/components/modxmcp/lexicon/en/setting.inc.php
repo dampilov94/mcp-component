@@ -16,7 +16,7 @@ $_lang['setting_modxmcp.allow_root_filesystem_read'] = 'Allow root Filesystem re
 $_lang['setting_modxmcp.allow_root_filesystem_read_desc'] = 'When enabled, MCP may browse and read files through the root Filesystem media source. Keep disabled if you only want safe component-code inspection.';
 
 $_lang['setting_modxmcp.static_roots'] = 'Static element folders';
-$_lang['setting_modxmcp.static_roots_desc'] = 'Comma-separated folders where the files of static elements (chunks, snippets, templates, plugins) may live, relative to the site root or with placeholders such as {core_path}. The API refuses to point an element at a file elsewhere and never reads one. Files in config, cache, packages and modxmcp-data are never allowed.';
+$_lang['setting_modxmcp.static_roots_desc'] = 'Comma-separated folders where the files of static elements may live ({base_path}, {core_path}, {assets_path} or paths relative to the site root; default: the whole site and core). Always closed, whatever this says: core/config, core/cache, core/packages, core/modxmcp-data, credentials files and symbolic links; MODX\'s own code (core/model, manager, connectors…) can be read but not written.';
 
 $_lang['setting_modxmcp.core_path'] = 'Core path';
 $_lang['setting_modxmcp.core_path_desc'] = 'Filesystem path to the modxMCP core component directory. Defaults to {core_path}components/modxmcp/.';

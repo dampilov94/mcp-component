@@ -218,10 +218,10 @@ final class Snapshot {
         // and would otherwise pull stale file content back into the database.
         if ($kind->codeField() !== null && isset($fields['static']) && $fields['static'] === '1' && empty($state['static_file_missing'])) {
             $path = $object->getSourceFile();
-            if ($path && strpos($path, '://') === false && !StaticPath::allowed($modx, $path)) {
+            if ($path && strpos($path, '://') === false && !StaticPath::writable($modx, $path)) {
                 // modElement::save() would read this file into the row or write the content to it; setup mode switches both off.
                 $object->setOption(\xPDO::OPT_SETUP, true);
-                self::$notes[] = "{$kind->name()} {$key}: the static file is outside modxmcp.static_roots; the database row was restored but the file was not written.";
+                self::$notes[] = "{$kind->name()} {$key}: the static file is outside modxmcp.static_roots or in MODX\'s own code; the database row was restored but the file was not written.";
             } elseif ($path && strpos($path, '://') === false) {
                 self::writeFile($path, $kind->fileContent((string) $fields[$kind->column($kind->codeField())]));
             }

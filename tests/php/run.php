@@ -7542,8 +7542,11 @@ file_put_contents($spDir . '/extra/widened.tpl', 'WIDENED-FILE');
 file_put_contents($spDir . '/outside/other.tpl', 'OTHER-FILE');
 file_put_contents($spDir . '/core/cache/exists.tpl', 'CACHE-FILE');
 file_put_contents($spDir . '/assets/inc/exists.tpl', 'ASSETS-FILE');
-$spRoots = ModxMCP\Kind\StaticPath::DEFAULT_ROOTS;
-$spSite = fakeSite($spDir, array('modxmcp.static_roots' => ''));
+// The refusals below are tested against a narrow list of roots (the default was this list in alpha1; it is the whole
+// site now, see the block "Static paths: the default" further down).
+$spNarrow = '{core_path}elements/,{core_path}components/,{assets_path}';
+$spRoots = $spNarrow;
+$spSite = fakeSite($spDir, array('modxmcp.static_roots' => $spNarrow));
 $spSite->store('sources.modMediaSource', array('id' => 5, 'name' => 'Config', 'class_key' => 'sources.modFileMediaSource', 'is_stream' => 1, 'basePath' => $spDir . '/core/config/'));
 $spSite->store('sources.modMediaSource', array('id' => 6, 'name' => 'Whole site', 'class_key' => 'sources.modFileMediaSource', 'is_stream' => 1, 'basePath' => $spDir . '/'));
 $spSite->store('sources.modMediaSource', array('id' => 7, 'name' => 'Assets', 'class_key' => 'sources.modFileMediaSource', 'is_stream' => 1, 'basePath' => $spDir . '/assets/'));
@@ -7661,7 +7664,7 @@ check('static outside: the audit lists both elements', $spAudit['summary']['stat
 // the setting widens the roots
 $spTry('before widening: the extra folder is refused', array('static_file' => $spDir . '/extra/widened.tpl'), false);
 $spTry('before widening: the outside folder is refused', array('static_file' => $spDir . '/outside/other.tpl'), false);
-$spSite->options['modxmcp.static_roots'] = ModxMCP\Kind\StaticPath::DEFAULT_ROOTS . ',extra/, {base_path}outside/';
+$spSite->options['modxmcp.static_roots'] = $spNarrow . ',extra/, {base_path}outside/';
 $spWide = $spTry('a widened root (relative entry) works', array('static_file' => $spDir . '/extra/widened.tpl'), true);
 $spTry('a widened root (placeholder entry) works', array('static_file' => $spDir . '/outside/other.tpl'), true);
 $spTry('a widened root also works with a source on the whole site', array('static_file' => 'extra/widened.tpl', 'source' => 6), true);
@@ -7670,8 +7673,11 @@ $spTry('.env stays refused inside a widened root', array('static_file' => $spDir
 file_put_contents($spDir . '/extra/widened.tpl', 'WIDENED-FILE');
 $spSite->store('modChunk', array('id' => 901, 'name' => 'Расширено', 'snippet' => 'stale', 'static' => 1, 'static_file' => $spDir . '/extra/widened.tpl', 'source' => 0, 'category' => 0, 'description' => '', 'locked' => 0, 'properties' => null));
 check('static paths: a widened root makes the file readable', $call($spCtx(), 'get', array('kind' => 'chunk', 'id' => 901))['fields']['content'] === 'WIDENED-FILE');
+$spSite->options['modxmcp.static_roots'] = $spNarrow;
+check('static paths: narrowing again hides the file', $call($spCtx(), 'get', array('kind' => 'chunk', 'id' => 901))['fields']['content'] === 'stale');
 $spSite->options['modxmcp.static_roots'] = '';
-check('static paths: an empty setting means the defaults', $call($spCtx(), 'get', array('kind' => 'chunk', 'id' => 901))['fields']['content'] === 'stale');
+check('static paths: an empty setting means the default, the whole site', $call($spCtx(), 'get', array('kind' => 'chunk', 'id' => 901))['fields']['content'] === 'WIDENED-FILE');
+$spSite->options['modxmcp.static_roots'] = $spNarrow;
 // make_static follows the roots
 $spSite->options['modxmcp.static_roots'] = '{assets_path}';
 $spMk = $call($spDev, 'create', array('kind' => 'chunk', 'fields' => array('name' => 'mk', 'content' => 'mk', 'static' => false)));
@@ -7679,7 +7685,28 @@ throws('static paths: make_static is refused when core/elements is not a root', 
     $call($spDev, 'invoke', array('kind' => 'chunk', 'id' => $spMk['id'], 'op' => 'make_static'));
 });
 check('static paths: refused make_static left no file', !file_exists($spDir . '/core/elements/chunks/mk-' . $spMk['id'] . '.tpl'));
+
+// Static paths: the default (the whole site and core). Custom folders such as core/api work, secrets stay closed,
+// MODX's own code can be read but never written through a static element.
 $spSite->options['modxmcp.static_roots'] = '';
+foreach (array('core/api', 'core/model/modx', 'manager/controllers') as $spSub) { if (!is_dir($spDir . '/' . $spSub)) { mkdir($spDir . '/' . $spSub, 0755, true); } }
+file_put_contents($spDir . '/core/api/router.php', "<?php\nreturn 'роутер';");
+file_put_contents($spDir . '/core/model/modx/modx.class.php', '<?php // MODX CORE');
+file_put_contents($spDir . '/manager/controllers/x.php', '<?php // MANAGER');
+$spApi = $call($spDev, 'create', array('kind' => 'plugin', 'fields' => array('name' => 'router', 'content' => "return 'роутер';", 'static' => true, 'static_file' => 'core/api/router.php', 'source' => 6)));
+check('static default: a plugin in a custom folder (core/api) reads its file', $call($spDev, 'get', array('kind' => 'plugin', 'id' => $spApi['id']))['fields']['content'] === "return 'роутер';");
+$call($spDev, 'update', array('kind' => 'plugin', 'id' => $spApi['id'], 'fields' => array('content' => "return 'роутер 2';")));
+check('static default: and writes it', strpos(file_get_contents($spDir . '/core/api/router.php'), "роутер 2") !== false);
+$spTry('default: config stays refused', array('static_file' => '[[++core_path]]config/config.inc.php'), false);
+$spTry('default: cache stays refused', array('static_file' => $spDir . '/core/cache/exists.tpl'), false);
+$spTry('default: .env stays refused', array('static_file' => $spDir . '/outside/.env'), false);
+$spTry('default: MODX code cannot be written through a static element', array('static_file' => $spDir . '/core/model/modx/modx.class.php'), false);
+$spTry('default: the manager cannot be written through a static element', array('static_file' => 'manager/controllers/x.php', 'source' => 6), false);
+check('static default: refused writes left MODX code untouched', file_get_contents($spDir . '/core/model/modx/modx.class.php') === '<?php // MODX CORE'
+    && file_get_contents($spDir . '/manager/controllers/x.php') === '<?php // MANAGER');
+$spSite->store('modSnippet', array('id' => 905, 'name' => 'Код MODX', 'snippet' => 'stale', 'static' => 1, 'static_file' => $spDir . '/core/model/modx/modx.class.php', 'source' => 0, 'category' => 0, 'description' => '', 'locked' => 0, 'properties' => null));
+check('static default: MODX code can still be read', strpos($call($spDev, 'get', array('kind' => 'snippet', 'id' => 905))['fields']['content'], 'MODX CORE') !== false);
+$spSite->options['modxmcp.static_roots'] = $spNarrow;
 
 // 1.x leftovers removed on an upgrade
 $lcDir = $siteDir . '/legacy-cleanup';

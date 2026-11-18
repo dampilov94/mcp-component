@@ -11,9 +11,15 @@ use ModxMCP\Files\FileRoot;
  * modxmcp.static_roots, reached without a symbolic link, and not in the protected directories.
  */
 final class StaticPath {
-    const DEFAULT_ROOTS = '{core_path}elements/,{core_path}components/,{assets_path}';
+    // The whole site and core by default: a develop token can run any PHP through a snippet anyway, so what this rule
+    // protects is what code cannot be trusted to keep private (DENIED, credentials files), plus MODX's own code against
+    // being overwritten by mistake (WRITE_DENIED). Narrow it with modxmcp.static_roots if a site wants more.
+    const DEFAULT_ROOTS = '{base_path},{core_path}';
     /** Directories that never hold a static element, even inside a root. */
     const DENIED = array('{core_path}config/', '{core_path}modxmcp-data/', '{core_path}cache/', '{core_path}packages/');
+    /** MODX's own code: may be read as a static file, never written through one. */
+    const WRITE_DENIED = array('{core_path}model/', '{core_path}xpdo/', '{core_path}lexicon/', '{core_path}docs/',
+        '{manager_path}', '{connectors_path}', '{base_path}manager/', '{base_path}connectors/', '{base_path}setup/', '{base_path}index.php');
 
     /** The setting as written (or the default), for messages. */
     public static function rootsSetting(\modX $modx) {
@@ -150,12 +156,23 @@ final class StaticPath {
         return is_string($path) && $path !== '' ? $path : null;
     }
 
-    /** Refuse a static file that would resolve outside the roots (validation_failed). */
+    /** allowed(), and not inside MODX's own code: where a static file may be written. */
+    public static function writable(\modX $modx, $absolute) {
+        if (!self::allowed($modx, $absolute)) { return false; }
+        $n = self::normalize($absolute);
+        foreach (self::WRITE_DENIED as $entry) {
+            $denied = self::normalize(self::expand($modx, $entry));
+            if ($denied !== null && (self::inside($n[1], $denied[1]) || self::inside($n[0], $denied[0]))) { return false; }
+        }
+        return true;
+    }
+
+    /** Refuse a static file that would resolve outside the roots or into MODX's own code (validation_failed). */
     public static function assertAllowed(\modX $modx, $staticFile, $source) {
         $path = self::resolveFor($modx, $staticFile, $source);
-        if ($path === null || !self::allowed($modx, $path)) {
+        if ($path === null || !self::writable($modx, $path)) {
             throw new ApiException('validation_failed', 'The static file must be inside one of modxmcp.static_roots: ' . self::rootsSetting($modx)
-                . ' (not through a symbolic link, not in config, cache, packages or modxmcp-data, and not a credentials file).');
+                . ' (not through a symbolic link, not in config, cache, packages or modxmcp-data, not a credentials file, and not MODX\'s own code).');
         }
     }
 }

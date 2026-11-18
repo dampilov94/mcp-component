@@ -16,7 +16,7 @@ $_lang['setting_modxmcp.allow_root_filesystem_read'] = 'Разрешить чт�
 $_lang['setting_modxmcp.allow_root_filesystem_read_desc'] = 'Если включено, MCP сможет просматривать и читать файлы через корневой media source Filesystem. Лучше держать выключенной, если нужно только безопасное изучение кода компонентов.';
 
 $_lang['setting_modxmcp.static_roots'] = 'Каталоги статических элементов';
-$_lang['setting_modxmcp.static_roots_desc'] = 'Каталоги через запятую, где могут лежать файлы статических элементов (чанков, сниппетов, шаблонов, плагинов): относительно корня сайта или с плейсхолдерами вроде {core_path}. API не даёт направить элемент на файл вне этих каталогов и никогда не читает такой файл. Файлы в config, cache, packages и modxmcp-data запрещены всегда.';
+$_lang['setting_modxmcp.static_roots_desc'] = 'Каталоги через запятую, где могут лежать файлы статических элементов ({base_path}, {core_path}, {assets_path} или пути от корня сайта; по умолчанию — весь сайт и core). Закрыты всегда, что бы здесь ни было: core/config, core/cache, core/packages, core/modxmcp-data, файлы с паролями и символические ссылки; собственный код MODX (core/model, manager, connectors…) можно читать, но не записывать.';
 
 $_lang['setting_modxmcp.core_path'] = 'Путь к ядру';
 $_lang['setting_modxmcp.core_path_desc'] = 'Путь в файловой системе к директории ядра компонента modxMCP. По умолчанию {core_path}components/modxmcp/.';

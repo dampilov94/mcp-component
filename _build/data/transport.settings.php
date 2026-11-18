@@ -36,7 +36,7 @@ $defs = array(
     array('modxmcp.trusted_proxies', '', 'textfield', 'modxmcp:security'),
     array('modxmcp.allowed_ips', '', 'textfield', 'modxmcp:security'),
     array('modxmcp.allowed_origins', '', 'textfield', 'modxmcp:security'),
-    array('modxmcp.static_roots', '{core_path}elements/,{core_path}components/,{assets_path}', 'textfield', 'modxmcp:security'),
+    array('modxmcp.static_roots', '{base_path},{core_path}', 'textfield', 'modxmcp:security'),
     array('modxmcp.core_path', '{core_path}components/modxmcp/', 'textfield', 'modxmcp:paths'),
 );
 
