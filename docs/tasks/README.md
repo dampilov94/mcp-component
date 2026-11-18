@@ -71,6 +71,8 @@ below) or append a `## Review` section to the brief with numbered change request
 | 32 | [Fenom](32-fenom.md) | `task/32-fenom` | merged |
 | 33 | [Scenarios (prompts)](33-prompts.md) | `task/33-prompts` | merged |
 | 34 | [MCP over HTTP](34-mcp-http.md) | `task/34-mcp-http` | merged |
+| 35 | [Static paths, cleanup, fixes](35-security-cleanup.md) | `task/35-security-cleanup` | ready for the executor |
+| 36 | [property_set, lexicon_entry, source properties](36-missing-kinds.md) | `task/36-missing-kinds` | ready for the executor |
 
 ## Doing several briefs in a row
 
