@@ -30,6 +30,7 @@ final class KindRegistry {
         PackageKind::class,
         ProviderKind::class,
         PropertySetKind::class,
+        LexiconEntryKind::class,
         Ms2OptionKind::class,
         Ms2LinkKind::class,
         Ms2ProductLinkKind::class,

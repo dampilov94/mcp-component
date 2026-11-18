@@ -19,6 +19,7 @@ use ModxMCP\Request\RequestStore;
 use ModxMCP\Request\RequestStoreException;
 use ModxMCP\Schema;
 use ModxMCP\Kind\Properties;
+use ModxMCP\Journal\Snapshot;
 
 $failures = 0;
 $checks = 0;
@@ -135,7 +136,7 @@ check('manifest: encodes', is_string(json_encode($tools, JSON_THROW_ON_ERROR)));
 
 $describe = $read->actions->get('describe');
 $list = $describe->run(array(), $read);
-check('describe: lists element kinds', array_column($list['kinds'], 'kind') === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source', 'user_group', 'role', 'resource_group', 'system_setting', 'context', 'context_setting', 'namespace', 'package', 'provider', 'property_set'));
+check('describe: lists element kinds', array_column($list['kinds'], 'kind') === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source', 'user_group', 'role', 'resource_group', 'system_setting', 'context', 'context_setting', 'namespace', 'package', 'provider', 'property_set', 'lexicon_entry'));
 $chunk = $describe->run(array('kind' => 'chunk'), $read);
 $fields = array_column($chunk['fields'], null, 'name');
 check('describe: chunk exposes content as code', !empty($fields['content']['code']) && $fields['name']['required'] === true && $fields['id']['read_only'] === true);
@@ -4107,7 +4108,7 @@ $sRelNames = function ($id, $ctx = null) use ($call, $sAdmin) { return array_key
 // ---- availability ----
 $sKinds = array_column($call($sAdmin, 'describe')['kinds'], 'kind');
 check('ms2: kind list with miniShop2 installed', $sKinds === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source', 'user_group', 'role', 'resource_group', 'system_setting', 'context', 'context_setting', 'namespace', 'user',
-    'access_policy', 'policy_template', 'context_access', 'resourcegroup_access', 'package', 'provider', 'property_set', 'ms2_option', 'ms2_link', 'ms2_product_link', 'ms2_order', 'ms2_order_status'));
+    'access_policy', 'policy_template', 'context_access', 'resourcegroup_access', 'package', 'provider', 'property_set', 'lexicon_entry', 'ms2_option', 'ms2_link', 'ms2_product_link', 'ms2_order', 'ms2_order_status'));
 check('ms2: kind list without miniShop2 is unchanged', !in_array('ms2_option', array_column($call($sPlain, 'describe')['kinds'], 'kind'), true));
 $e = throws('ms2: ms2_option is unavailable where miniShop2 is not installed', ApiException::class, function () use ($call, $sPlain) { $call($sPlain, 'describe', array('kind' => 'ms2_option')); });
 check('ms2: not installed is reported as unavailable', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'not_installed');
@@ -7944,6 +7945,135 @@ check('property_set: a denied group is unavailable and the kind leaves its list'
     && !in_array('property_set', array_column($call($qCtx('admin', array('property_sets')), 'describe')['kinds'], 'kind'), true));
 $e = throws('property_set: a read token cannot write', ApiException::class, function () use ($call, $qCtx) { $call($qCtx('read'), 'create', array('kind' => 'property_set', 'fields' => array('name' => 'Нельзя'))); });
 check('property_set: a read token is refused by scope', $e && $e->errorCode === 'forbidden_scope');
+
+// lexicon entries
+$lxDir = $siteDir . '/lexicon';
+foreach (array('core/lexicon/ru', 'core/lexicon/en', 'core/components/demo/lexicon/ru') as $lxSub) { mkdir($lxDir . '/' . $lxSub, 0755, true); }
+file_put_contents($lxDir . '/core/lexicon/ru/default.inc.php', "<?php\n\$_lang['error'] = 'Ошибка';\n\$_lang['save'] = 'Сохранить';\n\$_lang['percent_name'] = '100% готово';\n\$_lang['under_score'] = 'один_два';\n");
+file_put_contents($lxDir . '/core/lexicon/ru/resource.inc.php', "<?php\n\$_lang['resource'] = 'Ресурс';\n");
+file_put_contents($lxDir . '/core/lexicon/en/default.inc.php', "<?php\n\$_lang['error'] = 'Error';\n\$_lang['save'] = 'Save';\n");
+file_put_contents($lxDir . '/core/components/demo/lexicon/ru/blog.inc.php', "<?php\n\$_lang['post'] = 'Запись блога';\n");
+$lxSite = fakeSite($lxDir, array('modxmcp.auto_static' => false));
+$lxSite->store('modNamespace', array('name' => 'demo', 'path' => '{core_path}components/demo/', 'assets_path' => ''));
+$lxCtx = function ($scope = 'develop', array $denied = array()) use ($lxSite, $dev) {
+    $c = new Context($lxSite, array('scope' => $scope, 'denied_groups' => $denied) + $dev->token, $dev->corePath, function () {});
+    $c->sessionId = 'lexicon-session';
+    return $c;
+};
+$lxDev = $lxCtx();
+$lxRows = function () use ($lxSite) {
+    $out = array();
+    foreach ($lxSite->getCollection('modLexiconEntry') as $r) { $out[] = $r->get('namespace') . ':' . $r->get('topic') . ':' . $r->get('language') . ':' . $r->get('name') . '=' . $r->get('value'); }
+    sort($out);
+    return $out;
+};
+$lxKey = 'core:default:ru:error';
+$lxGot = $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => $lxKey));
+check('lexicon: a file entry is read with its source', $lxGot['key'] === $lxKey && $lxGot['fields']['value'] === 'Ошибка' && $lxGot['fields']['source'] === 'file' && $lxGot['fields']['overridden'] === false
+    && $lxGot['fields']['file_value'] === 'Ошибка' && $lxGot['fields']['namespace'] === 'core' && $lxGot['fields']['topic'] === 'default' && $lxGot['fields']['language'] === 'ru' && $lxGot['fields']['name'] === 'error'
+    && $lxGot['fields']['id'] === 0 && preg_match('/^[a-f0-9]{64}$/', $lxGot['revision']) === 1);
+check('lexicon: another namespace and the name as an alias of the key', $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'name' => 'demo:blog:ru:post'))['fields']['value'] === 'Запись блога');
+// list
+$lxList = $call($lxDev, 'list', array('kind' => 'lexicon_entry', 'where' => array('namespace' => 'core', 'language' => 'ru', 'topic' => 'default')));
+check('lexicon: list reads the file entries, ordered by name, with overridden', $lxList['total'] === 4 && array_column($lxList['items'], 'name') === array('error', 'percent_name', 'save', 'under_score')
+    && array_column($lxList['items'], 'overridden') === array(false, false, false, false) && $lxList['items'][0]['key'] === $lxKey && $lxList['items'][0]['value'] === 'Ошибка');
+check('lexicon: list of a language lists every topic of it', array_column($call($lxDev, 'list', array('kind' => 'lexicon_entry', 'where' => array('namespace' => 'core', 'language' => 'ru')))['items'], 'topic') === array('default', 'default', 'default', 'default', 'resource'));
+check('lexicon: list by topic over the languages', array_column($call($lxDev, 'list', array('kind' => 'lexicon_entry', 'where' => array('namespace' => 'core', 'topic' => 'default'), 'fields' => array('language', 'name')))['items'], 'language') === array('en', 'en', 'ru', 'ru', 'ru', 'ru'));
+check('lexicon: the query looks in names and values, also in Cyrillic and without regard to case', array_column($call($lxDev, 'list', array('kind' => 'lexicon_entry', 'query' => 'ОШИБ', 'where' => array('namespace' => 'core', 'language' => 'ru')))['items'], 'name') === array('error')
+    && array_column($call($lxDev, 'list', array('kind' => 'lexicon_entry', 'query' => 'save', 'where' => array('namespace' => 'core', 'language' => 'ru')))['items'], 'name') === array('save')
+    && array_column($call($lxDev, 'list', array('kind' => 'lexicon_entry', 'query' => 'блога'))['items'], 'key') === array('demo:blog:ru:post'));
+check('lexicon: % and _ in a query are text', array_column($call($lxDev, 'list', array('kind' => 'lexicon_entry', 'query' => '100%', 'where' => array('namespace' => 'core')))['items'], 'name') === array('percent_name')
+    && $call($lxDev, 'list', array('kind' => 'lexicon_entry', 'query' => 'один_два', 'where' => array('namespace' => 'core')))['total'] === 1 && $call($lxDev, 'list', array('kind' => 'lexicon_entry', 'query' => 'один-два', 'where' => array('namespace' => 'core')))['total'] === 0);
+$lxPage = $call($lxDev, 'list', array('kind' => 'lexicon_entry', 'where' => array('namespace' => 'core', 'language' => 'ru'), 'limit' => 2, 'start' => 1));
+check('lexicon: paging', $lxPage['total'] === 5 && count($lxPage['items']) === 2 && $lxPage['next_start'] === 3 && $lxPage['items'][0]['name'] === 'percent_name');
+$e = throws('lexicon: an unbounded list is refused', ApiException::class, function () use ($call, $lxDev) { $call($lxDev, 'list', array('kind' => 'lexicon_entry')); });
+check('lexicon: an unbounded list is validation_failed', $e && $e->errorCode === 'validation_failed');
+$e = throws('lexicon: a filter that is not a field', ApiException::class, function () use ($call, $lxDev) { $call($lxDev, 'list', array('kind' => 'lexicon_entry', 'where' => array('overridden' => true))); });
+// the override
+$lxBefore = Snapshot::revision(Snapshot::capture($lxSite, $lxCtx()->kinds->get('lexicon_entry'), $lxKey));
+$lxSite->lexicon->cleared = array();
+$lxEdit = $call($lxDev, 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'expected_revision' => $lxGot['revision'], 'fields' => array('value' => 'Сбой «системы»')));
+$lxNow = $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => $lxKey));
+check('lexicon: update stores a database override and says where the value comes from now', $lxNow['fields']['value'] === 'Сбой «системы»' && $lxNow['fields']['source'] === 'database' && $lxNow['fields']['overridden'] === true
+    && $lxNow['fields']['file_value'] === 'Ошибка' && $lxNow['fields']['id'] > 0 && $lxRows() === array('core:default:ru:error=Сбой «системы»') && $lxEdit['changed'] === array('value', 'id')
+    && $lxNow['revision'] === $lxEdit['revision'] && $lxNow['revision'] !== $lxGot['revision']);
+check('lexicon: the lexicon cache of the topic is cleared', in_array('ru/core/default.cache.php', $lxSite->lexicon->cleared, true));
+check('lexicon: the list shows the override', array_column(array_filter($call($lxDev, 'list', array('kind' => 'lexicon_entry', 'where' => array('namespace' => 'core', 'language' => 'ru', 'topic' => 'default')))['items'], function ($i) { return $i['overridden']; }), 'value') === array('Сбой «системы»'));
+$e = throws('lexicon: a stale revision is a conflict', ApiException::class, function () use ($call, $lxDev, $lxKey, $lxGot) { $call($lxDev, 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'expected_revision' => $lxGot['revision'], 'fields' => array('value' => 'x'))); });
+check('lexicon: revision_conflict', $e && $e->errorCode === 'revision_conflict');
+$lxEdit2 = $call($lxDev, 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'fields' => array('value' => 'Второе значение')));
+check('lexicon: changing an override changes only the value', $lxEdit2['changed'] === array('value') && $lxRows() === array('core:default:ru:error=Второе значение'));
+$call($lxDev, 'undo', array('changeset_id' => $lxEdit2['changeset_id'], 'confirm' => true));
+check('lexicon: undo of that change restores the earlier override', $lxRows() === array('core:default:ru:error=Сбой «системы»'));
+$call($lxDev, 'undo', array('changeset_id' => $lxEdit['changeset_id'], 'confirm' => true));
+$lxAfterUndo = $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => $lxKey));
+check('lexicon: undo of the first write removes the override, the file value applies again, the revision is the first', $lxRows() === array() && $lxAfterUndo['fields']['value'] === 'Ошибка' && $lxAfterUndo['fields']['source'] === 'file'
+    && $lxAfterUndo['revision'] === $lxGot['revision'] && $lxBefore === $lxGot['revision']);
+$lxNone = $call($lxDev, 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'fields' => array('value' => 'Ошибка')));
+check('lexicon: writing the file value to an entry without override does nothing', $lxNone['changeset_id'] === null && $lxRows() === array());
+$call($lxDev, 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'fields' => array('value' => 'Другое')));
+$lxSame = $call($lxDev, 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'fields' => array('value' => 'Ошибка')));
+check('lexicon: writing the file value over an override removes it, as the manager does', $lxRows() === array() && $lxSame['changeset_id'] !== null && $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => $lxKey))['fields']['source'] === 'file');
+$e = throws('lexicon: an immutable part of the key', ApiException::class, function () use ($call, $lxDev, $lxKey) { $call($lxDev, 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'fields' => array('name' => 'other'))); });
+check('lexicon: the key cannot be changed', $e && $e->errorCode === 'validation_failed');
+// delete the override
+$call($lxDev, 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'fields' => array('value' => 'Временно')));
+$lxPlan = $call($lxDev, 'delete', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'dry_run' => true));
+check('lexicon: a dry-run delete changes nothing', $lxPlan['dry_run'] === true && $lxRows() === array('core:default:ru:error=Временно'));
+$lxDel = $call($lxDev, 'delete', array('kind' => 'lexicon_entry', 'key' => $lxKey));
+check('lexicon: delete removes the override and the file value applies', $lxRows() === array() && $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => $lxKey))['fields']['value'] === 'Ошибка' && $lxDel['deleted'] === true);
+$call($lxDev, 'undo', array('changeset_id' => $lxDel['changeset_id'], 'confirm' => true));
+check('lexicon: undo of delete brings the override back', $lxRows() === array('core:default:ru:error=Временно'));
+$call($lxDev, 'delete', array('kind' => 'lexicon_entry', 'key' => $lxKey));
+$e = throws('lexicon: deleting an entry that has no override', ApiException::class, function () use ($call, $lxDev, $lxKey) { $call($lxDev, 'delete', array('kind' => 'lexicon_entry', 'key' => $lxKey)); });
+check('lexicon: nothing to delete is validation_failed with the reason', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'lexicon file') !== false);
+// create
+$lxMade = $call($lxDev, 'create', array('kind' => 'lexicon_entry', 'fields' => array('namespace' => 'demo', 'topic' => 'blog', 'language' => 'ru', 'name' => 'новая_запись', 'value' => 'Новая запись')));
+$lxMadeGot = $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => 'demo:blog:ru:новая_запись'));
+check('lexicon: create makes an override of a name the file does not have', $lxMade['key'] === 'demo:blog:ru:новая_запись' && $lxMadeGot['fields']['source'] === 'database' && $lxMadeGot['fields']['overridden'] === false
+    && $lxMadeGot['fields']['file_value'] === '' && $lxMadeGot['fields']['value'] === 'Новая запись');
+check('lexicon: list shows entries that only the database has', in_array('новая_запись', array_column($call($lxDev, 'list', array('kind' => 'lexicon_entry', 'where' => array('namespace' => 'demo')))['items'], 'name'), true));
+$e = throws('lexicon: create over an existing override', ApiException::class, function () use ($call, $lxDev) { $call($lxDev, 'create', array('kind' => 'lexicon_entry', 'fields' => array('namespace' => 'demo', 'topic' => 'blog', 'language' => 'ru', 'name' => 'новая_запись', 'value' => 'x'))); });
+check('lexicon: refused with a pointer to update', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'modx_update') !== false);
+$lxOver = $call($lxDev, 'create', array('kind' => 'lexicon_entry', 'fields' => array('namespace' => 'demo', 'topic' => 'blog', 'language' => 'ru', 'name' => 'post', 'value' => 'Пост')));
+check('lexicon: create over a file entry is an override', $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => 'demo:blog:ru:post'))['fields']['overridden'] === true);
+$call($lxDev, 'undo', array('changeset_id' => $lxOver['changeset_id'], 'confirm' => true));
+check('lexicon: undo of create leaves the file entry', $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => 'demo:blog:ru:post'))['fields']['value'] === 'Запись блога');
+$lxDelOnly = $call($lxDev, 'delete', array('kind' => 'lexicon_entry', 'key' => 'demo:blog:ru:новая_запись'));
+check('lexicon: deleting an entry the file does not have removes it altogether', $call($lxDev, 'history', array('limit' => 1))['changesets'][0]['objects'][0]['op'] === 'delete');
+$e = throws('lexicon: and it is gone', ApiException::class, function () use ($call, $lxDev) { $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => 'demo:blog:ru:новая_запись')); });
+check('lexicon: not_found', $e && $e->errorCode === 'not_found');
+$call($lxDev, 'undo', array('changeset_id' => $lxDelOnly['changeset_id'], 'confirm' => true));
+check('lexicon: undo brings it back with its value', $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => 'demo:blog:ru:новая_запись'))['fields']['value'] === 'Новая запись');
+foreach (array('a namespace that does not exist' => array('namespace' => 'нет', 'topic' => 'a', 'language' => 'ru', 'name' => 'x'), 'a traversing topic' => array('namespace' => 'core', 'topic' => '../x', 'language' => 'ru', 'name' => 'x'),
+    'a traversing language' => array('namespace' => 'core', 'topic' => 'a', 'language' => '../ru', 'name' => 'x'), 'an unknown namespace' => array('namespace' => 'nothing', 'topic' => 'a', 'language' => 'ru', 'name' => 'x'),
+    'an empty name' => array('namespace' => 'core', 'topic' => 'a', 'language' => 'ru', 'name' => '')) as $lxLabel => $lxBad) {
+    $e = throws("lexicon: create with {$lxLabel}", ApiException::class, function () use ($call, $lxDev, $lxBad) { $call($lxDev, 'create', array('kind' => 'lexicon_entry', 'fields' => $lxBad + array('value' => 'v'))); });
+    check("lexicon: {$lxLabel} is validation_failed", $e && $e->errorCode === 'validation_failed');
+}
+$e = throws('lexicon: create without a value', ApiException::class, function () use ($call, $lxDev) { $call($lxDev, 'create', array('kind' => 'lexicon_entry', 'fields' => array('namespace' => 'core', 'topic' => 'default', 'language' => 'ru', 'name' => 'zzz'))); });
+check('lexicon: value is required on create', $e && $e->errorCode === 'validation_failed');
+foreach (array('core:default:ru', 'core:../x:ru:a', 'core:default:ru/..:a') as $lxBadKey) {
+    $e = throws("lexicon: key {$lxBadKey}", ApiException::class, function () use ($call, $lxDev, $lxBadKey) { $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => $lxBadKey)); });
+    check("lexicon: key {$lxBadKey} is validation_failed", $e && $e->errorCode === 'validation_failed');
+}
+$e = throws('lexicon: an unknown entry', ApiException::class, function () use ($call, $lxDev) { $call($lxDev, 'get', array('kind' => 'lexicon_entry', 'key' => 'core:default:ru:нет_такого')); });
+check('lexicon: an unknown entry is not_found', $e && $e->errorCode === 'not_found');
+$e = throws('lexicon: duplicate is refused', ApiException::class, function () use ($call, $lxDev, $lxKey) { $call($lxDev, 'duplicate', array('kind' => 'lexicon_entry', 'key' => $lxKey)); });
+check('lexicon: an entry cannot be duplicated', $e && $e->errorCode === 'validation_failed');
+check('lexicon: history lists the writes with the key as the object', array_unique(array_column(array_column(array_column($call($lxDev, 'history', array('kind' => 'lexicon_entry', 'limit' => 50))['changesets'], 'objects'), 0), 'key')) !== array());
+// scopes and groups
+check('lexicon: a read token reads and lists', $call($lxCtx('read'), 'get', array('kind' => 'lexicon_entry', 'key' => $lxKey))['fields']['value'] === 'Ошибка' && $call($lxCtx('read'), 'list', array('kind' => 'lexicon_entry', 'where' => array('namespace' => 'demo')))['total'] === 2);
+$e = throws('lexicon: a read token cannot write', ApiException::class, function () use ($call, $lxCtx, $lxKey) { $call($lxCtx('read'), 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'fields' => array('value' => 'x'))); });
+check('lexicon: refused by scope', $e && $e->errorCode === 'forbidden_scope');
+$lxAll = array_column($call($lxCtx('admin'), 'describe')['kinds'], 'kind');
+$lxSite->options['modxmcp.disabled_groups'] = 'lexicon';
+check('lexicon: a disabled lexicon group hides exactly this kind', in_array('lexicon_entry', $lxAll, true) && array_column($call($lxCtx('admin'), 'describe')['kinds'], 'kind') === array_values(array_diff($lxAll, array('lexicon_entry'))));
+$e = throws('lexicon: unavailable when the group is disabled', ApiException::class, function () use ($call, $lxCtx, $lxKey) { $call($lxCtx('admin'), 'get', array('kind' => 'lexicon_entry', 'key' => $lxKey)); });
+check('lexicon: unavailable with the reason', $e && $e->errorCode === 'unavailable');
+$lxSite->options['modxmcp.disabled_groups'] = '';
+$e = throws('lexicon: a token with the group denied', ApiException::class, function () use ($call, $lxCtx, $lxKey) { $call($lxCtx('develop', array('lexicon')), 'update', array('kind' => 'lexicon_entry', 'key' => $lxKey, 'fields' => array('value' => 'x'))); });
+check('lexicon: a denied group is unavailable and the kind leaves its list', $e && $e->errorCode === 'unavailable' && !in_array('lexicon_entry', array_column($call($lxCtx('admin', array('lexicon')), 'describe')['kinds'], 'kind'), true));
 
 echo $failures ? "{$failures} of {$checks} PHP checks failed.\n" : "PHP: {$checks} checks passed.\n";
 exit($failures ? 1 : 0);

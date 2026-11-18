@@ -228,6 +228,50 @@ class FakeVirtualPageService {
     public function clearAllCache() { $this->clears++; }
 }
 
+/**
+ * Stand-in for modLexicon: lexicon files are read from <namespace path>/lexicon/<language>/<topic>.inc.php like getFileTopic() does,
+ * the language and topic lists are the directories plus what the database holds, and the cache clearing is recorded.
+ */
+class FakeLexicon {
+    private $modx;
+    public $cleared = array();
+    public function __construct(modX $modx) { $this->modx = $modx; }
+    public function getNamespacePath($namespace = 'core') {
+        $path = $this->modx->getOption('core_path');
+        if ($namespace !== 'core') {
+            $row = $this->modx->getObject('modNamespace', array('name' => $namespace));
+            if ($row) { $path = str_replace(array('{core_path}', '{base_path}', '{assets_path}'), array($this->modx->getOption('core_path'), $this->modx->getOption('base_path'), $this->modx->getOption('assets_path')), (string) $row->get('path')); }
+        }
+        return $path;
+    }
+    public function getFileTopic($language = 'en', $namespace = 'core', $topic = 'default') {
+        $path = str_replace('//', '/', $this->getNamespacePath($namespace) . '/lexicon/' . $language . '/' . $topic . '.inc.php');
+        if (!file_exists($path)) { return false; }
+        $_lang = array();
+        include $path;
+        return $_lang;
+    }
+    public function getLanguageList($namespace = 'core') {
+        $out = array();
+        $dir = str_replace('//', '/', $this->getNamespacePath($namespace) . '/lexicon/');
+        if (is_dir($dir)) { foreach (scandir($dir) as $entry) { if ($entry[0] !== '.' && is_dir($dir . $entry)) { $out[] = $entry; } } }
+        foreach ($this->modx->getCollection('modLexiconEntry', array('namespace' => $namespace)) as $row) { $out[] = $row->get('language'); }
+        $out = array_values(array_unique($out));
+        sort($out);
+        return $out;
+    }
+    public function getTopicList($language = 'en', $namespace = 'core') {
+        $out = array();
+        $dir = str_replace('//', '/', $this->getNamespacePath($namespace) . '/lexicon/' . $language . '/');
+        if (is_dir($dir)) { foreach (scandir($dir) as $entry) { if (substr($entry, -8) === '.inc.php') { $out[] = substr($entry, 0, -8); } } }
+        foreach ($this->modx->getCollection('modLexiconEntry', array('namespace' => $namespace)) as $row) { $out[] = $row->get('topic'); }
+        $out = array_values(array_unique($out));
+        sort($out);
+        return $out;
+    }
+    public function clearCache($path = '') { $this->cleared[] = $path; return true; }
+}
+
 class xPDO {
     const OPT_SETUP = 'setup';
     public $pdo;
@@ -837,6 +881,7 @@ class modX extends xPDO {
     public $snippetRunners = array();
     public $runCalls = array();
     public $parser;
+    public $lexicon;
     const LOG_LEVEL_ERROR = 1;
     public $user;
     public $events = array();
@@ -891,6 +936,7 @@ class modX extends xPDO {
         $this->cache = new FakeCache();
         $this->context = new FakeContext('mgr');
         $this->parser = new FakeParser($this);
+        $this->lexicon = new FakeLexicon($this);
         if ($file && is_file($file)) { $this->tables = json_decode(file_get_contents($file), true); }
     }
     public static function codeColumn($class) {
@@ -1468,6 +1514,41 @@ class modX extends xPDO {
         return new FakeResponse(null, array('id' => $object->get('id')));
     }
 
+    /**
+     * workspace/lexicon/{create,updatefromgrid,revert} (MODX 2.8.8): create refuses an existing override; updatefromgrid stores an override
+     * or removes it when the value is the file's (and dies on a missing entry in that case, as the real one does); revert removes it.
+     * Every write clears the cache of the topic.
+     */
+    private function lexiconProcessor($action, array $data) {
+        if ($action === 'updatefromgrid') { $data = json_decode($data['data'], true); }
+        $where = array('name' => $data['name'], 'namespace' => $data['namespace'], 'language' => $data['language'], 'topic' => $data['topic']);
+        $entry = $this->getObject('modLexiconEntry', $where);
+        $cache = $data['language'] . '/' . $data['namespace'] . '/' . $data['topic'] . '.cache.php';
+        if ($action === 'create') {
+            if ($entry) { return new FakeResponse('This entry already exists.'); }
+            $entry = $this->newObject('modLexiconEntry');
+            $entry->fromArray($where + array('value' => (string) $data['value'], 'editedon' => date('Y-m-d h:i:s'), 'createdon' => date('Y-m-d H:i:s')));
+            $entry->save();
+            $this->lexicon->clearCache($cache);
+            return new FakeResponse(null);
+        }
+        if ($action === 'revert') {
+            if ($entry) { $entry->remove(); $this->lexicon->clearCache($cache); }
+            return new FakeResponse(null);
+        }
+        $file = $this->lexicon->getFileTopic($data['language'], $data['namespace'], $data['topic']);
+        if (!empty($file[$data['name']]) && $file[$data['name']] == $data['value']) {
+            if ($entry) { $entry->remove(); $this->lexicon->clearCache($cache); }
+            else { throw new Error('Call to a member function get() on null'); }
+        } else {
+            if (!$entry) { $entry = $this->newObject('modLexiconEntry'); $entry->fromArray($where); }
+            $entry->fromArray(array('value' => (string) $data['value'], 'editedon' => date('Y-m-d H:i:s')));
+            $entry->save();
+            $this->lexicon->clearCache($cache);
+        }
+        return new FakeResponse(null);
+    }
+
     private function namespaceProcessor($action, array $data) {
         if (!isset($data['name']) || $data['name'] === '') { return new FakeResponse('Please specify a name.'); }
         $object = $this->getObject('modNamespace', array('name' => $data['name']));
@@ -1657,6 +1738,7 @@ class modX extends xPDO {
         if ($base === 'context/') { return $this->contextProcessor($action, $data); }
         if ($base === 'workspace/namespace/') { return $this->namespaceProcessor($action, $data); }
         if ($base === 'element/propertyset/') { return $this->propertySetProcessor($action, $data); }
+        if ($base === 'workspace/lexicon/') { return $this->lexiconProcessor($action, $data); }
         if (in_array($base, array('security/group/', 'security/role/', 'security/resourcegroup/'), true)) { return $this->accessProcessor($base, $action, $data); }
         if ($base === 'resource/') { return $this->resourceProcessor($action, $data, $path); }
         if (!isset(self::$processors[$base])) { return null; }
