@@ -24,6 +24,7 @@ final class HttpServer {
     const LEGACY_VERSIONS = array('2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05');
     /** What a request without MCP-Protocol-Version is taken for (2025-06-18 transports). */
     const DEFAULT_VERSION = '2025-03-26';
+    private const REQUEST_ID_BYTES = 16;
 
     private static $legacyMethods = array('ping', 'tools/list', 'tools/call', 'prompts/list', 'prompts/get', 'resources/list', 'resources/read', 'resources/templates/list');
 
@@ -101,12 +102,12 @@ final class HttpServer {
     }
 
     /** @param array $error the "error" member of a protocol-2 envelope (code, message, error_id, details) */
-    public static function internalFrame(array $error) {
+    public static function internalFrame(array $error, $limit) {
         $data = array('code' => isset($error['code']) ? $error['code'] : 'internal_error');
         if (isset($error['error_id'])) { $data['error_id'] = $error['error_id']; }
         if (isset($error['details'])) { $data['details'] = $error['details']; }
         $rpc = new RpcError(RpcError::INTERNAL_ERROR, isset($error['message']) ? $error['message'] : 'Internal Server Error', 500, $data);
-        return self::frame(500, self::errorDocument(null, $rpc));
+        return self::frame(500, self::errorDocument(null, $rpc), array(), $limit);
     }
 
     // ---- the request -------------------------------------------------------------------------------------------
@@ -123,7 +124,7 @@ final class HttpServer {
         try {
             return $this->process($server, $raw, $oversize, $token);
         } catch (RpcError $e) {
-            return self::frame($e->httpStatus, self::errorDocument(null, $e));
+            return self::frame($e->httpStatus, self::errorDocument(null, $e), array(), $this->kernel->responseLimit());
         }
     }
 
@@ -161,19 +162,53 @@ final class HttpServer {
             $given = self::header($server, 'Mcp-Session-Id');
             if ($given !== null && RequestStore::validId($given)) { $sessionId = $given; }
         }
-        $context = $this->kernel->newContext($token, $sessionId, null);
-
+        $available = $this->kernel->responseLimit() - ($batch ? 2 : 0); // enclosing brackets
+        $reserved = array();
+        // Before running any action, make sure each message that can answer has room for a compact error.
+        foreach ($messages as $index => $rawMessage) {
+            $message = is_array($rawMessage) ? $rawMessage : array();
+            if (($message['jsonrpc'] ?? null) === '2.0' && is_string($message['method'] ?? null) && !array_key_exists('id', $message)) {
+                continue;
+            }
+            $possibleWrite = ($message['method'] ?? null) === 'tools/call';
+            $supplied = $message['params']['arguments']['_request_id'] ?? null;
+            $reservedId = null;
+            if ($possibleWrite) {
+                $reservedId = RequestStore::validId($supplied) ? $supplied : 'mcp_' . str_repeat('0', self::REQUEST_ID_BYTES * 2);
+            }
+            $reserved[$index] = strlen(self::encode(self::sizeError(self::responseId($message), $reservedId))) + ($batch ? 1 : 0);
+            $available -= $reserved[$index];
+            if ($available < 0) {
+                throw new RpcError(RpcError::INVALID_REQUEST, 'The request needs too much space for a bounded response. Use smaller batches or shorter IDs.', 413,
+                    array('code' => $batch ? 'batch_too_large' : 'request_id_too_large'));
+            }
+        }
         $responses = array();
         $status = 200;
-        foreach ($messages as $index => $message) {
-            $outcome = $this->message($server, $header, is_array($message) ? $message : array(), $shapes[$index], $context, !$batch);
+        foreach ($reserved as $index => $reservation) {
+            $message = is_array($messages[$index]) ? $messages[$index] : array();
+            $context = $this->kernel->newContext($token, $sessionId, null);
+            $outcome = $this->message($server, $header, $message, $shapes[$index], $context, !$batch);
+            $available += $reservation;
             if ($outcome === null) { continue; }
-            $responses[] = $outcome[0];
             if (!$batch) { $status = $outcome[1]; }
+            $json = self::encode($outcome[0]);
+            $separator = $batch ? 1 : 0;
+            if ($json === false || strlen($json) + $separator > $available) {
+                $json = self::encode(self::sizeError(self::responseId($message), $context->requestId, $json === false));
+                if (!$batch) { $status = 500; }
+            }
+            $responses[] = $json;
+            $available -= strlen($json) + $separator;
         }
         $headers = $this->sessionHeader !== null ? array('Mcp-Session-Id: ' . $this->sessionHeader) : array();
         if (!$responses) { return array('status' => 202, 'body' => '', 'headers' => $headers); }
-        return self::frame($status, $batch ? $responses : $responses[0], $headers);
+        return array('status' => $status, 'body' => $batch ? '[' . implode(',', $responses) . ']' : $responses[0], 'headers' => $headers);
+    }
+
+    private static function responseId(array $message) {
+        $id = $message['id'] ?? null;
+        return is_string($id) || is_int($id) ? $id : null;
     }
 
     /** @return array|null [response document, HTTP status], or null when the message needs no answer */
@@ -309,10 +344,13 @@ final class HttpServer {
                 if (!RequestStore::validId($requestId)) {
                     return $this->toolFailure('validation_failed', '_request_id must contain 16-128 letters, digits, underscores or hyphens.', null);
                 }
+                if ($this->scrub($requestId) !== $requestId) {
+                    return $this->toolFailure('validation_failed', '_request_id cannot contain the API token.', null);
+                }
                 unset($args['_request_id'], $shape->_request_id);
             } else {
                 // Every write is protected against a retry, as the bridge does.
-                $requestId = 'mcp_' . bin2hex(random_bytes(16));
+                $requestId = 'mcp_' . bin2hex(random_bytes(self::REQUEST_ID_BYTES));
             }
         }
         $context->requestId = $requestId;
@@ -329,18 +367,28 @@ final class HttpServer {
         }
         if ($envelope->ok !== true) {
             $error = (array) $envelope->error;
-            return $this->toolFailure(
+            $failure = $this->toolFailure(
                 isset($error['code']) ? $error['code'] : 'internal_error',
                 isset($error['message']) ? $error['message'] : 'Tool request failed.',
                 $requestId,
                 isset($error['details']) ? $error['details'] : null,
                 isset($error['error_id']) ? $error['error_id'] : null
             );
+            return $this->withWarnings($failure, $envelope->meta->warnings ?? null);
         }
         $result = array('content' => array(array('type' => 'text', 'text' => json_encode($envelope->result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES))));
         if (Catalog::structured($version)) { $result['structuredContent'] = $envelope->result; }
         $result['isError'] = false;
         if ($requestId !== null) { $result['_meta'] = array('request_id' => $requestId); }
+        return $this->withWarnings($result, $envelope->meta->warnings ?? null);
+    }
+
+    private function withWarnings(array $result, $warnings) {
+        if (!is_array($warnings)) { return $result; }
+        $warnings = array_filter($warnings, 'is_string');
+        if ($warnings) {
+            $result['content'][] = array('type' => 'text', 'text' => $this->scrub("Warnings:\n- " . implode("\n- ", $warnings)));
+        }
         return $result;
     }
 
@@ -440,11 +488,22 @@ final class HttpServer {
         return array('jsonrpc' => '2.0', 'id' => $id, 'error' => $e->toError());
     }
 
+    private static function encode(array $document) {
+        return json_encode($document, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    private static function sizeError($id, $requestId, $encodingFailed = false) {
+        $message = $encodingFailed ? 'Response could not be encoded.' : 'Response exceeds modxmcp.max_response_bytes.';
+        $data = array('code' => $encodingFailed ? 'response_encoding_failed' : 'response_too_large');
+        if ($requestId !== null) { $data['request_id'] = $requestId; }
+        return self::errorDocument($id, new RpcError(RpcError::INTERNAL_ERROR, $message . self::outcomeHint($requestId), 500, $data));
+    }
+
     /** @param array $headers header lines ("Name: value") */
-    private static function frame($status, array $document, array $headers = array()) {
-        $json = json_encode($document, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        if ($json === false) {
-            $json = '{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Response could not be encoded."}}';
+    private static function frame($status, array $document, array $headers = array(), $limit = 4194304) {
+        $json = self::encode($document);
+        if ($json === false || strlen($json) > $limit) {
+            $json = self::encode(self::sizeError(null, null, $json === false));
             $status = 500;
         }
         return array('status' => $status, 'body' => $json, 'headers' => $headers);

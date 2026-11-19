@@ -56,6 +56,7 @@ function testSiteOptions($dir) {
         'modxmcp.disabled_groups' => getenv('MODXMCP_TEST_DISABLED_GROUPS') ?: '',
         'modxmcp.allowed_ips' => getenv('MODXMCP_TEST_ALLOWED_IPS') ?: '',
         'modxmcp.max_payload_bytes' => 4096,
+        'modxmcp.max_response_bytes' => (int) (getenv('MODXMCP_TEST_MAX_RESPONSE_BYTES') ?: 4194304),
         'modxmcp.allow_run_processor' => (bool) getenv('MODXMCP_TEST_ALLOW_ESCAPE'),
         'modxmcp.allow_query_db' => (bool) getenv('MODXMCP_TEST_ALLOW_ESCAPE'),
         'modxmcp.allow_run' => (bool) getenv('MODXMCP_TEST_ALLOW_RUN'),

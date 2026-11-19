@@ -30,13 +30,11 @@ final class DeletePathAction extends FileWriteAction {
     public function run(array $args, Context $context) {
         $root = FileRoot::fromArgs($context, array('source' => $args['source']));
         $relative = FileRoot::normalize($args['path']);
-        $root->assertWritable($context, $relative);
-        $path = $root->resolve($relative);
+        $path = $root->assertWritable($context, $relative);
         if (is_link($root->path . '/' . $relative)) { throw new ApiException('validation_failed', "'{$relative}' is a symbolic link and cannot be deleted through the API."); }
         if (!file_exists($path)) { throw new ApiException('not_found', "No '{$relative}' in {$root->label}."); }
         $isDir = is_dir($path);
-        $files = $isDir ? $root->filesBelow($relative) : array($relative);
-        foreach ($files as $file) { $root->assertWritable($context, $file); }
+        $files = $isDir ? $root->filesBelow($context, $relative) : array($relative);
         $dry = $this->isDryRun($args, $context);
 
         list($result, $info) = Writer::run($context, $this->name(), function ($tx) use ($root, $files, $path, $relative, $isDir, $dry) {
@@ -52,7 +50,7 @@ final class DeletePathAction extends FileWriteAction {
                 ));
             }
             foreach ($files as $file) {
-                $full = $root->resolve($file);
+                $full = $root->resolveForWrite($file);
                 if (!@unlink($full)) { throw new \RuntimeException("Cannot delete '{$file}'."); }
             }
             if ($isDir) { self::removeEmptyTree($path); }

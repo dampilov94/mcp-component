@@ -10,6 +10,7 @@ namespace ModxMCP\Auth;
  */
 final class TokenStore {
     const TOKEN_PREFIX = 'mcp_';
+    private const MAX_LABEL_LENGTH = 190;
 
     private $modx;
 
@@ -34,7 +35,7 @@ final class TokenStore {
     public function install() {
         $sql = 'CREATE TABLE IF NOT EXISTS ' . $this->table() . ' ('
             . '`id` INT UNSIGNED NOT NULL AUTO_INCREMENT,'
-            . '`label` VARCHAR(190) NOT NULL DEFAULT \'\','
+            . '`label` VARCHAR(' . self::MAX_LABEL_LENGTH . ') NOT NULL DEFAULT \'\','
             . '`prefix` VARCHAR(16) NOT NULL DEFAULT \'\','
             . '`hash` CHAR(64) NOT NULL,'
             . '`scope` VARCHAR(16) NOT NULL,'
@@ -104,7 +105,7 @@ final class TokenStore {
             'INSERT INTO ' . $this->table() . ' (`label`,`prefix`,`hash`,`scope`,`plan_only`,`denied_groups`,`expires_at`,`created_by`,`created_at`)'
             . ' VALUES (?,?,?,?,?,?,?,?,?)',
             array(
-                substr((string) $label, 0, 190), substr($token, 0, 8), self::hashToken($token), $scope,
+                $label, substr($token, 0, 8), self::hashToken($token), $scope,
                 $planOnly ? 1 : 0, implode(',', $deniedGroups), $expiresAt, (int) $createdBy, time(),
             )
         );
@@ -115,6 +116,7 @@ final class TokenStore {
      * Create a token. Returns its public record plus `token`, the plain value shown once.
      */
     public function create($label, $scope, $planOnly = false, array $deniedGroups = array(), $expiresAt = null, $createdBy = 0) {
+        self::checkLabel($label);
         if (!Scope::valid($scope)) { throw new \InvalidArgumentException('Unknown token scope.'); }
         self::checkGroups($deniedGroups);
         if ($expiresAt !== null && (int) $expiresAt <= time()) { throw new \InvalidArgumentException('Expiry must be in the future.'); }
@@ -180,9 +182,7 @@ final class TokenStore {
         $params = array();
         foreach ($changes as $key => $value) {
             if ($key === 'label') {
-                if (!is_string($value) || (function_exists('mb_strlen') ? mb_strlen($value, 'UTF-8') : strlen($value)) > 190) {
-                    throw new \InvalidArgumentException('The label must be a string of up to 190 characters.');
-                }
+                self::checkLabel($value);
                 $params[] = $value;
             } elseif ($key === 'plan_only') {
                 if (!is_bool($value)) { throw new \InvalidArgumentException('plan_only must be true or false.'); }
@@ -214,6 +214,12 @@ final class TokenStore {
             if (!is_string($group) || !in_array($group, \ModxMCP\Capabilities::TOGGLEABLE, true)) {
                 throw new \InvalidArgumentException('Unknown group: ' . (is_scalar($group) ? $group : gettype($group)));
             }
+        }
+    }
+
+    private static function checkLabel($label) {
+        if (!is_string($label) || !mb_check_encoding($label, 'UTF-8') || mb_strlen($label, 'UTF-8') > self::MAX_LABEL_LENGTH) {
+            throw new \InvalidArgumentException('The label must be a UTF-8 string of up to ' . self::MAX_LABEL_LENGTH . ' characters.');
         }
     }
 

@@ -26,7 +26,7 @@ final class Kernel {
 
     private $modx;
     private $bufferLevel;
-    private $maxResponse = 4194304;
+    private $maxResponse;
 
     /**
      * @param int $bufferLevel Output-buffer level before the endpoint started buffering;
@@ -35,7 +35,10 @@ final class Kernel {
     public function __construct(\modX $modx, $bufferLevel) {
         $this->modx = $modx;
         $this->bufferLevel = (int) $bufferLevel;
+        $this->maxResponse = max(1024, (int) $modx->getOption('modxmcp.max_response_bytes', null, 4194304));
     }
+
+    public function responseLimit() { return $this->maxResponse; }
 
     /**
      * Whether the request being served comes through the API. The manager recorder stays silent then: whatever
@@ -111,7 +114,7 @@ final class Kernel {
             return HttpServer::refusal($e);
         } catch (\Throwable $e) {
             list($status, $body) = $this->errorBody($e, 'mcp');
-            return HttpServer::internalFrame($body['error']);
+            return HttpServer::internalFrame($body['error'], $this->maxResponse);
         }
     }
 
@@ -200,10 +203,9 @@ final class Kernel {
         return $this->dispatch($context, $actionName, $args, $shapeArgs, $requestId);
     }
 
-    /** The context of one request. Also fixes the response size limit this kernel enforces. */
+    /** The context of one action or MCP message. */
     public function newContext(array $token, $sessionId, $requestId) {
         $modx = $this->modx;
-        $this->maxResponse = max(1024, (int) $modx->getOption('modxmcp.max_response_bytes', null, 4194304));
         $maxResponse = $this->maxResponse;
         $storeFactory = function () use ($modx, $maxResponse) {
             return new RequestStore(

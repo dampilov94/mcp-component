@@ -1499,6 +1499,38 @@ check('files: spanning source works when allowed', count($call($dev, 'list_files
 throws('files: configuration stays closed', ApiException::class, function () use ($call, $dev) { $call($dev, 'read_file', array('source' => 2, 'path' => 'core/config/config.inc.php')); });
 throws('files: modxMCP data stays closed', ApiException::class, function () use ($call, $dev) { $call($dev, 'list_files', array('source' => 2, 'path' => 'core/modxmcp-data')); });
 throws('files: configuration cannot be written', ApiException::class, function () use ($call, $dev) { $call($dev, 'write_file', array('source' => 2, 'path' => 'core/config/x.txt', 'content' => 'x')); });
+// Both direct file mutations and directory operations must respect the same boundaries.
+$protectedAssets = $siteDir . '/assets/components/modxmcp';
+mkdir($protectedAssets, 0755, true);
+file_put_contents($protectedAssets . '/fixture.js', 'original');
+file_put_contents($siteDir . '/assets/components/demo.js', 'add-on');
+file_put_contents($siteDir . '/assets/editor.css', 'normal');
+$e = throws('files: content cannot edit installed component assets', ApiException::class, function () use ($call, $editor) {
+    $call($editor, 'write_file', array('source' => 2, 'path' => 'assets/components/demo.js', 'content' => 'changed'));
+});
+check('files: component scope error', $e && $e->errorCode === 'forbidden_scope');
+throws('files: develop cannot edit modxMCP assets', ApiException::class, function () use ($call, $dev) {
+    $call($dev, 'write_file', array('source' => 2, 'path' => 'assets/components/modxmcp/fixture.js', 'content' => 'changed'));
+});
+throws('files: moving a directory cannot move protected descendants', ApiException::class, function () use ($call, $dev) {
+    $call($dev, 'move_path', array('source' => 2, 'path' => 'assets/components', 'to' => 'moved-assets'));
+});
+throws('files: moving into a protected directory is refused', ApiException::class, function () use ($call, $dev) {
+    $call($dev, 'move_path', array('source' => 2, 'path' => 'assets/editor.css', 'to' => 'assets/components/modxmcp/editor.css'));
+});
+unlink($protectedAssets . '/fixture.js');
+throws('files: deleting a parent cannot remove an empty protected directory', ApiException::class, function () use ($call, $dev) {
+    $call($dev, 'delete_path', array('source' => 2, 'path' => 'assets/components'));
+});
+check('files: protected subtree and ordinary assets are intact', is_dir($protectedAssets) && file_get_contents($siteDir . '/assets/editor.css') === 'normal');
+$legacyWrite = $call($dev, 'write_file', array('source' => 2, 'path' => 'assets/editor.css', 'content' => 'journaled'));
+rename($siteDir . '/assets/editor.css', $protectedAssets . '/fixture.css');
+symlink($protectedAssets . '/fixture.css', $siteDir . '/assets/editor.css');
+throws('files: undo refuses a journal path now pointing at a protected file', ApiException::class, function () use ($call, $dev, $legacyWrite) {
+    $call($dev, 'undo', array('changeset_id' => $legacyWrite['changeset_id'], 'confirm' => true));
+});
+check('files: undo left the protected file intact', file_get_contents($protectedAssets . '/fixture.css') === 'journaled');
+unlink($siteDir . '/assets/editor.css');
 $site->options['modxmcp.allow_root_filesystem_read'] = false;
 $component = $call($actor('read'), 'read_file', array('component' => 'demo', 'path' => 'model/demo.class.php'));
 check('files: component code is readable', $component['content'] === '<?php class Demo {}' && $call($actor('read'), 'list_files', array('component' => 'demo'))['writable'] === false);
@@ -1519,7 +1551,7 @@ $bin = $call($editor, 'write_file', array('source' => 1, 'path' => 'img/dot.gif'
 check('write_file: binary through base64', file_get_contents($media . '/img/dot.gif') === "GIF\x00\xff" && $bin['size'] === 5);
 $e = throws('write_file: php needs the develop scope', ApiException::class, function () use ($call, $editor) { $call($editor, 'write_file', array('source' => 1, 'path' => 'x.php', 'content' => '<?php echo 1;')); });
 check('write_file: php refusal is forbidden_scope', $e && $e->errorCode === 'forbidden_scope' && !file_exists($media . '/x.php'));
-throws('write_file: .htaccess needs the develop scope', ApiException::class, function () use ($call, $editor) { $call($editor, 'write_file', array('source' => 1, 'path' => 'img/.htaccess', 'content' => 'x')); });
+throws('write_file: server configuration is protected', ApiException::class, function () use ($call, $editor) { $call($editor, 'write_file', array('source' => 1, 'path' => 'img/.htaccess', 'content' => 'x')); });
 $e = throws('write_file: broken php is refused', ApiException::class, function () use ($call, $dev) { $call($dev, 'write_file', array('source' => 1, 'path' => 'x.php', 'content' => "<p>ok</p>\n<?php echo (;")); });
 check('write_file: lint error with the file line', $e && $e->errorCode === 'lint_failed' && $e->details['line'] === 2 && !file_exists($media . '/x.php'));
 check('write_file: valid php with html around it', $call($dev, 'write_file', array('source' => 1, 'path' => 'x.php', 'content' => "<p>ok</p>\n<?php echo 1;"))['changeset_id'] !== null);
@@ -1854,6 +1886,14 @@ check('keys: delete', $deleted['key'] === 'alpha_copy' && $deleted['deleted'] ==
 $history = $call($keyDev, 'history', array('kind' => 'system_setting'));
 $entry = $history['changesets'][0]['objects'][0];
 check('keys: history entry shows key', $entry === array('kind' => 'system_setting', 'key' => 'alpha_copy', 'name' => 'alpha_copy', 'op' => 'delete'));
+$matching = $call($keyDev, 'history', array('kind' => 'system_setting', 'key' => 'site_tagline'))['changesets'];
+check('keys: history filters by kind and exact string key', array_column($matching, 'changeset_id') === array($updated['changeset_id'], $setCreated['changeset_id']));
+throws('keys: history requires a kind for key', ApiException::class, function () use ($call, $keyDev) {
+    $call($keyDev, 'history', array('key' => 'site_tagline'));
+});
+throws('keys: history rejects key combined with id', ApiException::class, function () use ($call, $keyDev) {
+    $call($keyDev, 'history', array('kind' => 'system_setting', 'key' => 'site_tagline', 'id' => 1));
+});
 $chunkEntry = $call($keyDev, 'history', array('kind' => 'chunk'))['changesets'][0]['objects'][0];
 check('keys: an integer kind still shows id in history', $chunkEntry['id'] === 1 && !array_key_exists('key', $chunkEntry));
 $updateDiff = $call($keyDev, 'history_diff', array('changeset_id' => $updated['changeset_id']));
@@ -3993,6 +4033,11 @@ foreach (array('modx_modxmcp_tokens', 'modxmcp_tokens', '`MODX_MODXMCP_TOKENS`',
 }
 // Architect's review: password hashes and sessions are refused for every token, like token hashes.
 foreach (array('SELECT username, password FROM {prefix}users', 'SELECT id FROM modx_users', 'SELECT * FROM `MODX_SESSION`') as $xText) { $xQuery("admin, {$xText}", $xText, 'forbidden_scope', $xAdmin); }
+$xQuery('admin cannot query stored user session identifiers', 'SELECT sessionid FROM {prefix}user_attributes', 'forbidden_scope', $xAdmin);
+$e = throws('query_db: a custom prefix protects user attributes', ApiException::class, function () {
+    QueryDbAction::guard('SELECT id FROM `site_user_attributes`', 'site_', true);
+});
+check('query_db: custom-prefix user attributes are refused even for a non-secret column', $e && $e->errorCode === 'forbidden_scope');
 check('query_db: an admin may read the other credential tables', $xSql($xAdmin, 'SELECT COUNT(*) AS n FROM modx_system_settings')['rows'] == array(array(0)));
 $xTokens = $xSite->pdo->query('SELECT COUNT(*) FROM modx_modxmcp_tokens')->fetchColumn();
 check('query_db: nothing in this section touched the token table', (int) $xTokens === 1);
@@ -6895,6 +6940,17 @@ check('tokens page: manager actions name the token id', $tkSite->managerActions[
     && count(array_filter($tkSite->managerActions, function ($a) { return $a['action'] === 'modxmcp_create_token'; })) === 2
     && count(array_filter($tkSite->managerActions, function ($a) { return $a['action'] === 'modxmcp_update_token'; })) === 4);
 
+$tkLong = str_repeat('я', 190);
+$tkLongRecord = $tkService->create(array('label' => $tkLong, 'scope' => 'read'));
+check('tokens page: a 190-character Cyrillic label survives creation and authentication', $tkLongRecord['label'] === $tkLong
+    && $tkStore->authenticate($tkLongRecord['token'])['label'] === $tkLong);
+$tkBoundary = str_repeat('a', 189) . 'я';
+$tkBoundaryRecord = $tkStore->create($tkBoundary, 'read');
+check('tokens page: creation does not split the last multibyte character', $tkStore->get($tkBoundaryRecord['id'])['label'] === $tkBoundary);
+$tkThrows('tokens page: store refuses a long create label just like update', function () use ($tkStore) {
+    $tkStore->create(str_repeat('я', 191), 'read');
+});
+
 // the overview of the main page
 $ovDir = sys_get_temp_dir() . '/modxmcp-overview-' . bin2hex(random_bytes(6));
 mkdir($ovDir . '/core', 0700, true);
@@ -7466,12 +7522,13 @@ check('errors: every code has an HTTP status', min(ApiException::CODES) >= 400 &
 $pNames = function ($ctx) { return array_column(Manifest::prompts($ctx), 'name'); };
 $pRegistry = $context('admin')->prompts;
 check('prompts: registry lists the five scenarios', array_keys($pRegistry->all()) === array('study_site', 'audit', 'change_page', 'new_page_type', 'fix_errors'));
-check('prompts: read token sees the read-only scenarios', $pNames($context('read')) === array('study_site', 'audit', 'fix_errors'));
-check('prompts: content token also sees change_page', $pNames($context('content')) === array('study_site', 'audit', 'change_page', 'fix_errors'));
+check('prompts: read token sees the read-only scenarios', $pNames($context('read')) === array('study_site', 'audit'));
+check('prompts: content token also sees change_page', $pNames($context('content')) === array('study_site', 'audit', 'change_page'));
 check('prompts: develop and admin tokens see all', $pNames($context('develop')) === array('study_site', 'audit', 'change_page', 'new_page_type', 'fix_errors') && $pNames($context('admin')) === $pNames($context('develop')));
-check('prompts: change_page is hidden when modx_invoke is unavailable', $pNames($context('content', array('objects'))) === array('study_site', 'audit', 'fix_errors'));
+check('prompts: change_page is hidden when modx_invoke is unavailable', $pNames($context('content', array('objects'))) === array('study_site', 'audit'));
+check('prompts: fix_errors is hidden when the token denies the log tool group', !in_array('fix_errors', $pNames($context('develop', array('verify'))), true));
 $pManifest = (new \ModxMCP\Action\ManifestAction())->run(array(), $context('content'));
-check('prompts: manifest carries them with arguments, and the hash covers them', array_column($pManifest['prompts'], 'name') === array('study_site', 'audit', 'change_page', 'fix_errors')
+check('prompts: manifest carries them with arguments, and the hash covers them', array_column($pManifest['prompts'], 'name') === array('study_site', 'audit', 'change_page')
     && $pManifest['prompts'][2]['arguments'] === array(array('name' => 'page', 'description' => 'Страница: id или заголовок', 'required' => true), array('name' => 'change', 'description' => 'Что изменить', 'required' => true))
     && $pManifest['hash'] === Manifest::currentHash($context('content')) && $pManifest['hash'] !== Manifest::hash(Manifest::tools($context('content'))));
 check('prompts: the hash changes when a prompt becomes unavailable', Manifest::currentHash($context('content')) !== Manifest::currentHash($context('content', array('objects')))
@@ -7489,6 +7546,13 @@ $pRun = function ($ctx, $name, array $arguments = array()) {
     return $result;
 };
 $pText = function ($result) { return $result['messages'][0]['content']['text']; };
+$pPreview = $pText($pRun($context('develop'), 'new_page_type', array('description' => 'Тестовый шаблон')));
+check('prompts: an unpublished page is previewed from the manager', strpos($pPreview, '`published: false`') !== false
+    && strpos($pPreview, 'предпросмотр из менеджера MODX') !== false && strpos($pPreview, '`modx_check_page`') === false);
+$e = throws('prompts: fix_errors cannot be fetched without the log tool', ApiException::class, function () use ($pRun, $context) {
+    $pRun($context('content'), 'fix_errors');
+});
+check('prompts: fix_errors names the missing log tool', $e && $e->details === array('reason' => 'tool_unavailable', 'tool' => 'modx_read_log'));
 $pArgs = array('study_site' => array(), 'audit' => array('focus' => 'только битые ссылки'), 'change_page' => array('page' => 'О компании', 'change' => 'заменить телефон'),
     'new_page_type' => array('description' => 'страница услуги'), 'fix_errors' => array('since' => 'сегодня'));
 foreach ($pArgs as $pName => $pGiven) {
@@ -7706,7 +7770,27 @@ check('static default: refused writes left MODX code untouched', file_get_conten
     && file_get_contents($spDir . '/manager/controllers/x.php') === '<?php // MANAGER');
 $spSite->store('modSnippet', array('id' => 905, 'name' => 'Код MODX', 'snippet' => 'stale', 'static' => 1, 'static_file' => $spDir . '/core/model/modx/modx.class.php', 'source' => 0, 'category' => 0, 'description' => '', 'locked' => 0, 'properties' => null));
 check('static default: MODX code can still be read', strpos($call($spDev, 'get', array('kind' => 'snippet', 'id' => 905))['fields']['content'], 'MODX CORE') !== false);
+mkdir($spDir . '/assets/components/modxmcp', 0755, true);
+file_put_contents($spDir . '/assets/components/modxmcp/fixture.js', 'COMPONENT');
+file_put_contents($spDir . '/.htaccess', 'SERVER');
+$spTry('default: modxMCP assets are protected', array('static_file' => $spDir . '/assets/components/modxmcp/fixture.js'), false);
+$spTry('default: server configuration is protected', array('static_file' => $spDir . '/.htaccess'), false);
 $spSite->options['modxmcp.static_roots'] = $spNarrow;
+
+$spSite->options['static_elements_automate_chunks'] = true;
+$autoOld = $spDir . '/outside/retained.tpl';
+$autoNew = $spDir . '/core/elements/chunks/retained.tpl';
+file_put_contents($autoOld, 'external content');
+file_put_contents($autoNew, 'managed content');
+$spSite->store('modChunk', array('id' => 906, 'name' => 'Prior static file', 'snippet' => 'external content', 'static' => 1,
+    'static_file' => $autoOld, 'source' => 0, 'category' => 0, 'description' => '', 'locked' => 0, 'properties' => null));
+$switched = $call($spDev, 'update', array('kind' => 'chunk', 'id' => 906, 'fields' => array('static_file' => $autoNew, 'content' => 'new content')));
+check('static cleanup: update keeps the former file and restores the MODX setting', file_get_contents($autoOld) === 'external content'
+    && file_get_contents($autoNew) === 'new content' && $spSite->getOption('static_elements_automate_chunks') === true);
+$restored = $call($spDev, 'undo', array('changeset_id' => $switched['changeset_id'], 'confirm' => true));
+check('static cleanup: undo restores the row and leaves both files untouched', $restored['performed'] && $spSite->row('modChunk', 906)['static_file'] === $autoOld
+    && file_get_contents($autoOld) === 'external content' && file_get_contents($autoNew) === 'new content' && $spSite->getOption('static_elements_automate_chunks') === true);
+$spSite->options['static_elements_automate_chunks'] = false;
 
 // 1.x leftovers removed on an upgrade
 $lcDir = $siteDir . '/legacy-cleanup';
@@ -8185,6 +8269,66 @@ check('media source: refused by scope before anything else, also with the settin
 check('media source: a read token reads the properties', $msProps($call($msCtx('read'), 'get', array('kind' => 'media_source', 'id' => $msMade['id'])))['basePath'] === 'assets/images/');
 $msS3 = $call($msAdmin, 'create', array('kind' => 'media_source', 'fields' => array('name' => 'Облако', 'class_key' => 'sources.modS3MediaSource', 'properties' => array('baseUrl' => 'https://cdn.example/'))));
 check('media source: a source that is not a local directory is not judged by its basePath', $msProps($call($msAdmin, 'get', array('kind' => 'media_source', 'id' => $msS3['id'])))['baseUrl'] === 'https://cdn.example/');
+
+// The fake has no S3 class definitions. Use stored properties, as on an existing add-on source.
+$existingSource = $msSite->row('sources.modMediaSource', $msS3['id']);
+$sourceDefinitions = Properties::decode($existingSource['properties']);
+$sourceDefinitions['accessKeyId'] = array('name' => 'accessKeyId', 'type' => 'textfield', 'value' => 'previous-fixture-access');
+$sourceDefinitions['secretAccessKey'] = array('name' => 'secretAccessKey', 'type' => 'text-password', 'value' => 'previous-fixture-secret');
+$existingSource['properties'] = serialize($sourceDefinitions);
+$msSite->store('sources.modMediaSource', $existingSource);
+$secretSourceFields = array('baseUrl' => 'https://cdn.example/', 'accessKeyId' => 'fixture-access', 'secretAccessKey' => 'fixture-secret');
+$secretSource = $call($msAdmin, 'update', array('kind' => 'media_source', 'id' => $msS3['id'], 'fields' => array('properties' => $secretSourceFields)));
+$expectedMask = array_replace($secretSourceFields, array('accessKeyId' => '[hidden]', 'secretAccessKey' => '[hidden]'));
+ksort($expectedMask, SORT_STRING);
+foreach (array('read', 'content', 'develop') as $scope) {
+    $scopeCtx = $msCtx($scope);
+    $fetched = $call($scopeCtx, 'get', array('kind' => 'media_source', 'id' => $msS3['id']));
+    $listed = $call($scopeCtx, 'list', array('kind' => 'media_source', 'where' => array('id' => $msS3['id']), 'fields' => array('properties')));
+    $public = $msProps($fetched);
+    check("media source: {$scope} cannot read credentials in get or list", array_intersect_key($public, $expectedMask) === $expectedMask
+        && (array) $listed['items'][0]['properties'] === $public);
+}
+$adminView = $msProps($call($msAdmin, 'get', array('kind' => 'media_source', 'id' => $msS3['id'])));
+check('media source: admin retains access and masking did not change stored data', $adminView['accessKeyId'] === 'fixture-access' && $adminView['secretAccessKey'] === 'fixture-secret');
+$secretSourceDiff = $call($msAdmin, 'history_diff', array('changeset_id' => $secretSource['changeset_id']));
+check('media source: credential diff remains masked even for admin', (array) $secretSourceDiff['objects'][0]['changed']['properties']['new'] === $expectedMask);
+
+// Use actual PHP-serialized storage rather than the fake's JSON for the before snapshots.
+$define = array('caption' => array('value' => 'До'), 'apiKey' => array('value' => 'fixture-only'));
+$setId = $call($qDev, 'create', array('kind' => 'property_set', 'fields' => array('name' => 'Serialized fixture', 'properties' => $define)))['id'];
+$row = $qSite->row('modPropertySet', $setId);
+$row['properties'] = serialize(Properties::fromApi($define));
+$qSite->store('modPropertySet', $row);
+$setUpdate = array('kind' => 'property_set', 'id' => $setId);
+$same = $call($qDev, 'update', $setUpdate + array('dry_run' => true, 'fields' => array('properties' => array_reverse($define, true))));
+check('properties: identical serialized definitions do not appear in the dry run', $same['would_change'] === array());
+$new = $define;
+$new['caption']['value'] = 'После';
+$edit = $call($qDev, 'update', $setUpdate + array('fields' => array('properties' => $new)));
+$diff = $call($qDev, 'history_diff', array('changeset_id' => $edit['changeset_id']))['objects'][0]['changed']['properties'];
+check('properties: a serialized diff shows both definitions and hides credentials', $diff['old']->caption['value'] === 'До'
+    && $diff['new']->caption['value'] === 'После' && $diff['old']->apiKey['value'] === '[hidden]' && $diff['new']->apiKey['value'] === '[hidden]');
+$call($qDev, 'undo', array('changeset_id' => $edit['changeset_id'], 'confirm' => true));
+check('properties: undo keeps the exact serialized form', $qSite->row('modPropertySet', $setId)['properties'] === $row['properties']);
+
+$sourceRow = $msSite->row('sources.modMediaSource', $msMade['id']);
+$sourceRow['properties'] = serialize(Properties::decode($sourceRow['properties']));
+$msSite->store('sources.modMediaSource', $sourceRow);
+$sourceUpdate = array('kind' => 'media_source', 'id' => $msMade['id']);
+$same = $call($msAdmin, 'update', $sourceUpdate + array('dry_run' => true, 'fields' => array('properties' => array('basePathRelative' => 'true', 'baseUrl' => 'assets/images/'))));
+check('media source: partial dry run compares effective values including defaults', $same['would_change'] === array());
+$fields = array('fields' => array('properties' => array('baseUrl' => 'assets/cdn/')));
+$different = $call($msAdmin, 'update', $sourceUpdate + $fields + array('dry_run' => true));
+check('media source: dry run identifies a changed override', $different['would_change'] === array('properties'));
+$edit = $call($msAdmin, 'update', $sourceUpdate + $fields);
+$diff = $call($msAdmin, 'history_diff', array('changeset_id' => $edit['changeset_id']))['objects'][0]['changed']['properties'];
+check('media source: history shows stored override values', $diff['old']->baseUrl === 'assets/images/' && $diff['new']->baseUrl === 'assets/cdn/'
+    && $diff['old']->basePath === $diff['new']->basePath && !isset($diff['old']->basePathRelative));
+
+check('properties: serialized objects are ignored without losing plain entries', array_keys(Properties::decode(serialize(array(
+    'plain' => array('value' => 'test'), 'invalid' => array('value' => new \stdClass()),
+)))) === array('plain'));
 
 echo $failures ? "{$failures} of {$checks} PHP checks failed.\n" : "PHP: {$checks} checks passed.\n";
 exit($failures ? 1 : 0);

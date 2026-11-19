@@ -140,6 +140,13 @@ class FakeObject {
         if ($this->class === 'migxConfig') { $migxSync = empty($this->fields['preventformtabhandling']); unset($this->fields['preventformtabhandling']); }
         $this->modx->store($this->class, $this->fields);
         $this->isNew = false;
+        // The native static-file cleanup can run even when OPT_SETUP suppressed file writes.
+        $automated = array('modChunk' => 'chunks', 'modSnippet' => 'snippets', 'modPlugin' => 'plugins', 'modTemplate' => 'templates');
+        if ($stored && isset($automated[$this->class]) && $this->modx->getOption('static_elements_automate_' . $automated[$this->class])) {
+            $old = $stored['static_file'] ?? '';
+            if ($old !== '' && ($old !== ($this->fields['static_file'] ?? '') || ($stored['source'] ?? 0) !== ($this->fields['source'] ?? 0))
+                && is_file($old)) { unlink($old); }
+        }
         if ($migxSync) { $this->modx->migxSyncFormtabs($this); }
         if ($this->class === 'msProductData') { $this->modx->ms2DataSaved($this); }
         if ($this->class === 'msCategoryOption') { $this->modx->ms2LinkSaved($this->fields); }
@@ -296,6 +303,7 @@ class xPDO {
     public function getOption($key, $options = null, $default = null) {
         return array_key_exists($key, $this->options) ? $this->options[$key] : $default;
     }
+    public function setOption($key, $value) { $this->options[$key] = $value; }
     public function prepare($sql) { return $this->pdo->prepare($sql); }
     public function exec($sql) { return $this->pdo->exec($sql); }
     public function lastInsertId() { return $this->pdo->lastInsertId(); }

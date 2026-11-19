@@ -7,6 +7,20 @@ use ModxMCP\Write\Transaction;
 
 /** Files owned by automatic/static conversion, always reserved without overwriting. */
 final class StaticFiles {
+    /** Keep a former static file: a native unlink would be outside the element snapshot. */
+    public static function withoutNativeCleanup(\modX $modx, Kind $kind, callable $save) {
+        $names = array('modChunk' => 'chunks', 'modSnippet' => 'snippets', 'modPlugin' => 'plugins',
+            'modTemplate' => 'templates', 'modTemplateVar' => 'tvs');
+        $class = $kind->modelClass();
+        if (!isset($names[$class])) { return $save(); }
+        $key = 'static_elements_automate_' . $names[$class];
+        $previous = $modx->getOption($key, null, false);
+        if (!$previous) { return $save(); }
+        $modx->setOption($key, false);
+        try { return $save(); }
+        finally { $modx->setOption($key, $previous); }
+    }
+
     public static function makeStatic(Context $context, Transaction $tx, Kind $kind, $id): array {
         $object = Objects::resolveKey($context, $kind, $id);
         if ($object->get('static')) { return array('status' => 'already_static', 'static_file' => (string) $object->get('static_file')); }
@@ -68,7 +82,7 @@ final class StaticFiles {
     }
     public static function removeManaged(\modX $modx, $absolutePath): void {
         try {
-            if (!self::isManaged($modx, $absolutePath)) { return; }
+            if (!self::isManaged($modx, $absolutePath) || !StaticPath::writable($modx, $absolutePath)) { return; }
             $path = realpath($absolutePath);
             $root = realpath(rtrim($modx->getOption('core_path'), '/\\') . '/elements');
             if (!@unlink($path)) { throw new \RuntimeException('Cannot remove managed static file: ' . $path); }

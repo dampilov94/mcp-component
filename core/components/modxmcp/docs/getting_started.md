@@ -17,6 +17,11 @@ read when the client connects, so after a token's rights or a tool group change,
 the client; the bridge refreshes it at once. Over HTTP nothing remembers the revisions you
 have read between calls, so pass `expected_revision` on every write.
 
+When a tool returns a `Warnings` block, read it alongside the result. The HTTP response limit
+(`modxmcp.max_response_bytes`) covers the full MCP response. If a write's result does not fit,
+use the returned `request_id` with `modx_request_status` before retrying. Use smaller batches
+if the server refuses a batch before executing it.
+
 ## Objects and kinds
 
 Everything is addressed as `kind` + `id` (or `name`). The element kinds are `chunk`,
@@ -104,7 +109,7 @@ scenarios it can carry out.
 - `audit {focus?}` — run `modx_audit_site`, group the findings, propose fixes, change only what the person picks.
 - `change_page {page, change}` — change a page through a draft and apply it after the person agrees (needs the `content` scope).
 - `new_page_type {description}` — plan and create a template, TVs and chunks, with a checkpoint (needs the `develop` scope).
-- `fix_errors {since?}` — group the errors of the MODX log, find their causes, fix after confirmation.
+- `fix_errors {since?}` — group errors from the MODX log and fix them after confirmation. Requires `modx_read_log`.
 
 ## Files
 
@@ -119,12 +124,16 @@ scenarios it can carry out.
 - Paths are relative to the source directory. Configuration and credential files are not
   accessible, and a source that covers the whole site is closed unless the administrator
   opened it.
+- File tools and static elements cannot write modxMCP's files, MODX core files or server
+  configuration. Writing in installed component directories through a media source requires
+  `develop`. File tools refuse writes through symbolic links.
 - File changes are journaled and undone like object changes; `modx_delete_path` on a
   directory keeps every file it removed. Use `dry_run` first.
 - Writing `.php` and other server-executed files needs the `develop` scope and the PHP must
   parse. Binary content is passed with `encoding: "base64"`.
 - Code of chunks, snippets, templates and plugins is edited with the object tools even when
-  the element is static; do not edit their files directly.
+  the element is static; do not edit their files directly. When changing the static path or
+  undoing that change, modxMCP leaves the previous file on disk.
 
 ## Changing things
 
@@ -181,7 +190,8 @@ Rules that keep a live site safe:
 - Kind `media_source` has `properties` as `{name: value}` (`basePath`, `basePathRelative`,
   `baseUrl`, `allowedFileTypes`, ...): a write merges the given names into the stored settings. A
   `basePath` that leads into `core/config` or `modxmcp-data`, or outside the site and core
-  directories, is refused unless `modxmcp.allow_root_filesystem_read` is on.
+  directories, is refused unless `modxmcp.allow_root_filesystem_read` is on. Credential
+  properties appear as `[hidden]` below `admin` and in history diffs for every scope.
 
 ## Finding and replacing across code
 
@@ -230,7 +240,8 @@ Rules that keep a live site safe:
 ## Undo
 
 - `modx_checkpoint {label}` before a larger task.
-- `modx_history` — what was changed, newest first; filter by `this_session`, `kind`, `id`.
+- `modx_history` — what was changed, newest first. Filter by `this_session` or `kind`. With
+  `kind`, pass `id` for a numeric ID or `key` for a string key.
 - `modx_history_diff {changeset_id}` — old and new values, and a line diff for code.
 - `modx_undo` with one of `changeset_id`, `last`, `this_session`, `to_checkpoint`.
   Without `confirm: true` it returns the plan. A deleted object comes back with the same

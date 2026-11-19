@@ -43,6 +43,7 @@ function mockSite() {
       const body = JSON.parse(raw);
       state.requests.push(body);
       const meta = { manifest: state.hash, ...(body.request_id ? { request_id: body.request_id } : {}) };
+      if (state.warnings) meta.warnings = state.warnings;
       const ok = (result) => reply(200, { ok: true, result, meta });
       switch (body.action) {
         case "manifest":
@@ -126,6 +127,18 @@ test("bridge serves the site's manifest and proxies calls", async (t) => {
     assert.equal(sent.v, 2);
     assert.equal(sent.request_id, undefined);
     assert.match(sent.session_id, /^[A-Za-z0-9_-]{16,128}$/);
+  });
+
+  await t.test("warnings are a separate redacted text block on success and failure", async () => {
+    site.state.warnings = ["Проверь результат.", `Unexpected token text: ${TOKEN}`, 123];
+    try {
+      const result = await client.callTool({ name: "modx_site_info", arguments: {} });
+      assert.deepEqual(JSON.parse(result.content[0].text), result.structuredContent);
+      assert.equal(result.content[1].text, "Warnings:\n- Проверь результат.\n- Unexpected token text: [redacted]");
+      const failure = await client.callTool({ name: "modx_describe", arguments: { kind: "unknown" } });
+      assert.equal(failure.isError, true);
+      assert.equal(failure.content[1].text, result.content[1].text);
+    } finally { delete site.state.warnings; }
   });
 
   await t.test("a write call gets a request ID and never forwards _request_id as an argument", async () => {

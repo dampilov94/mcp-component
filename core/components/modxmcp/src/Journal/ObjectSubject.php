@@ -3,6 +3,7 @@ namespace ModxMCP\Journal;
 
 use ModxMCP\Code\Diff;
 use ModxMCP\Kind\Kind;
+use ModxMCP\Kind\Properties;
 
 /** A site object of some kind, snapshotted through Snapshot. */
 final class ObjectSubject implements Subject {
@@ -70,6 +71,9 @@ final class ObjectSubject implements Subject {
                 $out[$name] = array('diff' => Diff::lines((string) $old, (string) $new));
             } elseif ($secretColumns !== null ? in_array($column, $secretColumns, true) : preg_match(self::SECRET, $column)) {
                 $out[$name] = array('old' => '[hidden]', 'new' => '[hidden]');
+            } elseif (!empty($definitions[$name]['stored_properties']) || !empty($definitions[$name]['source_properties'])) {
+                $valuesOnly = !empty($definitions[$name]['source_properties']);
+                $out[$name] = array('old' => Properties::forHistory($old, $valuesOnly), 'new' => Properties::forHistory($new, $valuesOnly));
             } elseif (isset($definitions[$name]) && $definitions[$name]['type'] === 'json') {
                 $out[$name] = array('old' => Kind::jsonDecoded($old), 'new' => Kind::jsonDecoded($new));
             } elseif (isset($definitions[$name]) && $definitions[$name]['type'] === 'object') {

@@ -147,8 +147,15 @@ final class Objects {
     }
 
     /** True when a stored value of a field equals the value a caller sent for it (maps compare as maps). */
-    public static function sameValue(Kind $kind, $name, $stored, $value) {
+    public static function sameValue(Kind $kind, $name, $stored, $value, $id) {
         $fields = $kind->fields();
+        if (!empty($fields[$name]['stored_properties'])) {
+            return Kind::canonicalJson(Properties::present(Properties::decode($stored)))
+                === Kind::canonicalJson(Properties::present(Properties::fromApi($value)));
+        }
+        if ($kind instanceof MediaSourceKind && $name === 'properties') {
+            return $kind->propertiesUnchanged($id, $stored, $value);
+        }
         if ($fields[$name]['type'] === 'json') {
             $a = is_string($stored) ? ($stored === '' ? null : json_decode($stored, true)) : json_decode(json_encode($stored), true);
             return Kind::canonicalValue($a) === Kind::canonicalValue(json_decode(json_encode($value), true));
@@ -275,7 +282,9 @@ final class Objects {
             if (array_key_exists($kind->column($name), $columns)) { $touchesPath = true; }
         }
         $touchesCode = $field !== null && array_key_exists($kind->column($field), $columns);
-        if (!$touchesPath && !$touchesCode) { return; }
+        // A native save of an empty element may write its static file even on a metadata-only update.
+        $writesEmptyCode = $columns && $object && $field !== null && empty($object->get($kind->column($field)));
+        if (!$touchesPath && !$touchesCode && !$writesEmptyCode) { return; }
         $value = function ($name, $default) use ($kind, $columns, $object) {
             $column = $kind->column($name);
             if (array_key_exists($column, $columns)) { return $columns[$column]; }
@@ -325,7 +334,9 @@ final class Objects {
                 // A write-only field (a password) is never sent back; its stored value is a hash.
                 if (empty($definition['derived']) && empty($definition['write_only'])) { $data[$kind->column($name)] = $kind->processorValue($object, $name); }
             }
-            self::process($modx, $kind->processorPath() . 'update', $kind->processorData('update', $columns + $data + $kind->processorExtras('update')), $kind->processorOptions());
+            StaticFiles::withoutNativeCleanup($modx, $kind, function () use ($modx, $kind, $columns, $data) {
+                self::process($modx, $kind->processorPath() . 'update', $kind->processorData('update', $columns + $data + $kind->processorExtras('update')), $kind->processorOptions());
+            });
         }
 
         $field = $kind->codeField();
@@ -335,6 +346,9 @@ final class Objects {
             $object = $kind->findByKey($modx, $id);
             $content = $kind->effectiveContent($object);
             if ($content[1] && $content[2] !== null && $content[0] !== $columns[$kind->column($field)]) {
+                if (!StaticPath::writable($modx, $content[2])) {
+                    throw new ApiException('validation_failed', 'MODX resolved the static file outside the allowed write paths.');
+                }
                 Snapshot::writeFile($content[2], $kind->fileContent($columns[$kind->column($field)]));
             } elseif (!$content[1] && $content[0] !== $columns[$kind->column($field)]) {
                 $context->warnings[] = "MODX stored the {$field} of {$kind->name()} {$id} differently from what was sent "

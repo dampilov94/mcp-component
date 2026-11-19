@@ -1,6 +1,7 @@
 <?php
 namespace ModxMCP\Action;
 
+use ModxMCP\ApiException;
 use ModxMCP\Context;
 use ModxMCP\Journal\Authors;
 use ModxMCP\Journal\Subjects;
@@ -21,7 +22,8 @@ final class HistoryAction extends Action {
             'this_session' => Schema::bool('Only changes made since this MCP client was started.'),
             'source'       => array('type' => 'string', 'enum' => array('mcp', 'manager', 'external'), 'description' => 'Who made the change.'),
             'kind'         => Schema::str('Only changesets touching this kind.', array('pattern' => '^[a-z][a-z0-9_]{0,63}$')),
-            'id'           => Schema::int('With kind: only this object.', array('minimum' => 1)),
+            'id'           => Schema::int('With kind: only this numeric object ID.', array('minimum' => 1)),
+            'key'          => Schema::str('With kind: only this object key. Use instead of id.', array('minLength' => 1, 'maxLength' => 255)),
             'since'        => Schema::int('Unix time; only newer changesets.', array('minimum' => 0)),
             'limit'        => Schema::int('Default 20.', array('minimum' => 1, 'maximum' => 100)),
         ));
@@ -32,12 +34,16 @@ final class HistoryAction extends Action {
     }
 
     public function run(array $args, Context $context) {
+        if (isset($args['key']) && (!isset($args['kind']) || isset($args['id']))) {
+            throw new ApiException('validation_failed', 'Use key with kind and without id.');
+        }
         $filter = array();
         if (!empty($args['this_session'])) { $filter['session_id'] = (string) $context->sessionId; }
         foreach (array('source', 'kind', 'since') as $key) {
             if (isset($args[$key])) { $filter[$key] = $args[$key]; }
         }
-        if (isset($args['kind'], $args['id'])) { $filter['object_key'] = (string) $args['id']; }
+        if (isset($args['key'])) { $filter['object_key'] = $args['key']; }
+        elseif (isset($args['kind'], $args['id'])) { $filter['object_key'] = (string) $args['id']; }
         $changesets = $context->journal()->changesets($filter, isset($args['limit']) ? $args['limit'] : 20);
         return array('changesets' => self::entries($context, $changesets));
     }

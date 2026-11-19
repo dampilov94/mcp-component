@@ -31,21 +31,18 @@ final class MovePathAction extends FileWriteAction {
         $root = FileRoot::fromArgs($context, array('source' => $args['source']));
         $from = FileRoot::normalize($args['path']);
         $to = FileRoot::normalize($args['to']);
-        $root->assertWritable($context, $from);
-        $root->assertWritable($context, $to);
-        $fromPath = $root->resolve($from);
-        $toPath = $root->resolve($to);
+        $fromPath = $root->assertWritable($context, $from);
+        $toPath = $root->assertWritable($context, $to);
         if (!file_exists($fromPath)) { throw new ApiException('not_found', "No '{$from}' in {$root->label}."); }
         if (file_exists($toPath)) { throw new ApiException('validation_failed', "'{$to}' already exists."); }
         if (strpos($to . '/', $from . '/') === 0) { throw new ApiException('validation_failed', 'A directory cannot be moved into itself.'); }
 
         $pairs = array();
         if (is_dir($fromPath)) {
-            foreach ($root->filesBelow($from) as $file) { $pairs[$file] = $to . substr($file, strlen($from)); }
+            foreach ($root->filesBelow($context, $from, $to) as $file) { $pairs[$file] = $to . substr($file, strlen($from)); }
         } else {
             $pairs[$from] = $to;
         }
-        foreach ($pairs as $old => $new) { $root->assertWritable($context, $new); }
         $dry = $this->isDryRun($args, $context);
 
         list($result, $info) = Writer::run($context, $this->name(), function ($tx) use ($root, $pairs, $fromPath, $toPath, $from, $to, $dry) {

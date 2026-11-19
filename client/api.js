@@ -115,6 +115,9 @@ class ModxApiClient {
       if (meta.manifest !== undefined && typeof meta.manifest !== "string") {
         throw new ModxApiError("Endpoint returned invalid manifest metadata.", response.status, "invalid_response");
       }
+      const warnings = Array.isArray(meta.warnings)
+        ? meta.warnings.filter((item) => typeof item === "string").map((item) => this.redact(item))
+        : [];
       // A replayed response carries the manifest hash of the original call, not the current one.
       if (response.headers?.["x-mcp-replayed"] !== "1" && meta.manifest !== undefined) {
         this.onManifestHash?.(meta.manifest);
@@ -129,15 +132,17 @@ class ModxApiClient {
         const details = error.details !== undefined ? ` details=${JSON.stringify(error.details).slice(0, 1500)}` : "";
         const errorId = error.error_id ? ` error_id=${error.error_id}` : "";
         const id = requestId ? ` request_id=${requestId}` : "";
-        throw new ModxApiError(
+        const failure = new ModxApiError(
           this.redact(`MODX ${error.code} (HTTP ${response.status}): ${error.message.slice(0, 1500)}${details}${errorId}${id}`),
           response.status, error.code,
         );
+        failure.warnings = warnings;
+        throw failure;
       }
       if (response.status < 200 || response.status >= 300 || !isObject(envelope.result)) {
         throw new ModxApiError("Endpoint returned inconsistent success status or a non-object result.", response.status, "invalid_response");
       }
-      return { result: envelope.result, meta };
+      return { result: envelope.result, meta: { ...meta, warnings } };
     } catch (error) {
       if (error instanceof ModxApiError) {
         if (["invalid_response", "redirect_refused"].includes(error.errorCode)) error.message += this.outcomeHint(requestId);

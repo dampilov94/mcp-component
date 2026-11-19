@@ -26,6 +26,8 @@ final class FileRoot {
     public $label;
 
     private $forbidden = array();
+    private $protectedWrites = array();
+    private $componentDirectories = array();
 
     private function __construct($id, $path, $writable, $label, array $forbidden) {
         $this->id = $id;
@@ -86,7 +88,10 @@ final class FileRoot {
         if ($core !== false) { $forbidden[] = $core . '/config'; }
         $data = self::real($context->dataDir());
         if ($data !== false) { $forbidden[] = $data; }
-        return new self('s' . (int) $id, $root, true, "media source {$id} ({$source->get('name')})", $forbidden);
+        $result = new self('s' . (int) $id, $root, true, "media source {$id} ({$source->get('name')})", $forbidden);
+        $result->protectedWrites = WritePathPolicy::protectedPaths($modx, $context->corePath);
+        $result->componentDirectories = WritePathPolicy::componentDirectories($modx);
+        return $result;
     }
 
     private static function forComponent(Context $context, $namespace, $area) {
@@ -145,11 +150,38 @@ final class FileRoot {
 
     /** Check that this token may write the given relative path here. */
     public function assertWritable(Context $context, $relative) {
-        if (!$this->writable) { throw new ApiException('validation_failed', ucfirst($this->label) . ' is read-only.'); }
-        if (self::normalize($relative) === '') { throw new ApiException('validation_failed', 'The root itself cannot be changed.'); }
-        if (preg_match(self::EXECUTABLE, basename($relative)) && !Scope::allows($context->token['scope'], Scope::DEVELOP)) {
-            throw new ApiException('forbidden_scope', "Writing server-executed files such as '" . basename($relative) . "' requires the 'develop' scope; this token has '{$context->token['scope']}'.");
+        $path = $this->resolveForWrite($relative);
+        if (!Scope::allows($context->token['scope'], Scope::DEVELOP)) {
+            $lexical = $this->path . '/' . self::normalize($relative);
+            foreach (array($lexical, $path) as $location) {
+                if (WritePathPolicy::contains($location, $this->componentDirectories)) {
+                    throw new ApiException('forbidden_scope', 'Writing in component directories requires the develop scope.');
+                }
+                if (self::isExecutable($location)) {
+                    throw new ApiException('forbidden_scope', "Writing server-executed files such as '" . basename($location) . "' requires the 'develop' scope; this token has '{$context->token['scope']}'.");
+                }
+            }
         }
+        return $path;
+    }
+
+    /** Resolve a mutation target, including rollback targets for which the scope is already checked. */
+    public function resolveForWrite($relative) {
+        if (!$this->writable) { throw new ApiException('validation_failed', ucfirst($this->label) . ' is read-only.'); }
+        $relative = self::normalize($relative);
+        if ($relative === '') { throw new ApiException('validation_failed', 'The root itself cannot be changed.'); }
+        $path = $this->resolve($relative);
+        $lexical = $this->path . '/' . $relative;
+        foreach (array($lexical, $path) as $location) {
+            if (WritePathPolicy::isServerConfig($location) || WritePathPolicy::contains($location, $this->protectedWrites)) {
+                throw new ApiException('validation_failed', 'This path is protected from writes.');
+            }
+        }
+        // A journal key identifies the path that was changed, including during a move or undo.
+        if ($path !== $lexical || is_link($lexical)) {
+            throw new ApiException('validation_failed', 'A file cannot be changed through a symbolic link.');
+        }
+        return $path;
     }
 
     /**
@@ -157,17 +189,21 @@ final class FileRoot {
      * refused: following them could reach files outside the root, and removing them is not
      * something a snapshot can undo.
      */
-    public function filesBelow($relative, $limit = 500) {
+    public function filesBelow(Context $context, $relative, $destination = null, $limit = 500) {
         $start = $this->resolve($relative);
         $base = self::normalize($relative);
         $out = array();
         $stack = array(array($start, $base));
         while ($stack) {
             list($dir, $rel) = array_pop($stack);
-            foreach (array_diff((array) scandir($dir), array('.', '..')) as $name) {
+            $entries = @scandir($dir);
+            if ($entries === false) { throw new ApiException('validation_failed', "Cannot inspect '{$rel}' before changing the directory."); }
+            foreach (array_diff($entries, array('.', '..')) as $name) {
                 $full = $dir . '/' . $name;
                 $child = $rel === '' ? $name : $rel . '/' . $name;
                 if (is_link($full)) { throw new ApiException('validation_failed', "'{$child}' is a symbolic link; a directory containing links cannot be changed as a whole."); }
+                $this->assertWritable($context, $child);
+                if ($destination !== null) { $this->assertWritable($context, $destination . substr($child, strlen($base))); }
                 if (is_dir($full)) { $stack[] = array($full, $child); continue; }
                 $out[] = $child;
                 if (count($out) > $limit) { throw new ApiException('validation_failed', "The directory holds more than {$limit} files; change it in parts."); }

@@ -189,7 +189,6 @@ final class TokenService {
     private function label($value) {
         $label = trim((string) $value);
         if ($label === '') { throw new ApiException('validation_failed', 'The token needs a label.'); }
-        if (mb_strlen($label, 'UTF-8') > 190) { throw new ApiException('validation_failed', 'The label is longer than 190 characters.'); }
         return $label;
     }
 

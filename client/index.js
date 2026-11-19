@@ -161,8 +161,15 @@ function validator(kind, tool) {
   return validate;
 }
 
+function resultContent(text, warnings = []) {
+  const content = [{ type: "text", text }];
+  if (warnings.length) content.push({ type: "text", text: `Warnings:\n- ${warnings.join("\n- ")}` });
+  return content;
+}
+
 async function callTool(request, extra) {
   let requestId;
+  let meta;
   try {
     const { name } = request.params;
     let tool = (await currentManifest({ signal: extra.signal })).tools.get(name);
@@ -186,7 +193,7 @@ async function callTool(request, extra) {
     }
     let result;
     try {
-      ({ result } = await api.call(tool.action, args, { requestId, signal: extra.signal }));
+      ({ result, meta } = await api.call(tool.action, args, { requestId, signal: extra.signal }));
     } catch (error) {
       // After a conflict the remembered revision is known to be stale; the next read replaces it.
       if (tracked && error.errorCode === "revision_conflict") seenRevisions.delete(tracked);
@@ -199,13 +206,13 @@ async function callTool(request, extra) {
       throw new Error(`Unexpected tool result: ${output.errorMessage}.${hint}`);
     }
     return {
-      content: [{ type: "text", text: JSON.stringify(result) }],
+      content: resultContent(JSON.stringify(result), meta.warnings),
       structuredContent: result,
       ...(requestId ? { _meta: { request_id: requestId } } : {}),
     };
   } catch (error) {
     return {
-      content: [{ type: "text", text: `Error: ${error.message || "Tool request failed."}` }],
+      content: resultContent(`Error: ${error.message || "Tool request failed."}`, error.warnings ?? meta?.warnings),
       isError: true,
       ...(requestId ? { _meta: { request_id: requestId } } : {}),
     };
