@@ -4,6 +4,7 @@ namespace ModxMCP\Kind;
 use ModxMCP\ApiException;
 use ModxMCP\Auth\Scope;
 use ModxMCP\Context;
+use ModxMCP\Files\Path;
 
 final class MediaSourceKind extends Kind {
     /** @var Context|null */
@@ -158,23 +159,23 @@ final class MediaSourceKind extends Kind {
         if ($expanded === null) { $why = 'it holds tags other than setting tags'; }
         else {
             $absolute = $relative ? rtrim((string) $modx->getOption('base_path'), '/\\') . '/' . ltrim($expanded, '/\\') : $expanded;
-            $n = StaticPath::normalize($absolute === '' ? '/' : $absolute);
+            $n = Path::normalize($absolute === '' ? '/' : $absolute);
             if ($n === null || $absolute === '') { $why = "it cannot be resolved ('..' or an empty absolute path)"; }
             else {
                 $real = $n[1];
                 $core = rtrim((string) $modx->getOption('core_path'), '/\\');
                 $roots = array();
                 foreach (array((string) $modx->getOption('base_path'), $core) as $root) {
-                    $r = $root === '' ? null : StaticPath::normalize($root);
+                    $r = $root === '' ? null : Path::normalize($root);
                     if ($r !== null) { $roots[] = $r[1]; }
                 }
                 foreach (array($core . '/config', $core . '/modxmcp-data') as $protected) {
-                    $p = StaticPath::normalize($protected);
-                    if ($p !== null && StaticPath::inside($real, $p[1])) { $why = 'it lies in ' . basename($protected); }
+                    $p = Path::normalize($protected);
+                    if ($p !== null && Path::inside($real, $p[1])) { $why = 'it lies in ' . basename($protected); }
                 }
                 if ($why === null) {
                     $inside = false;
-                    foreach ($roots as $root) { if (StaticPath::inside($real, $root)) { $inside = true; } }
+                    foreach ($roots as $root) { if (Path::inside($real, $root)) { $inside = true; } }
                     if (!$inside) { $why = 'it lies outside the site and core directories'; }
                 }
             }

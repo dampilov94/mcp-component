@@ -33,8 +33,7 @@ final class WriteFileAction extends FileWriteAction {
     public function run(array $args, Context $context) {
         $root = FileRoot::fromArgs($context, array('source' => $args['source']));
         $relative = FileRoot::normalize($args['path']);
-        $root->assertWritable($context, $relative);
-        $path = $root->resolve($relative);
+        $path = $root->assertWritable($context, $relative);
         if (is_dir($path)) { throw new ApiException('validation_failed', "'{$relative}' is a directory."); }
         $content = $args['content'];
         if (isset($args['encoding']) && $args['encoding'] === 'base64') {

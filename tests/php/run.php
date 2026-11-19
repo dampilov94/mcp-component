@@ -1499,6 +1499,38 @@ check('files: spanning source works when allowed', count($call($dev, 'list_files
 throws('files: configuration stays closed', ApiException::class, function () use ($call, $dev) { $call($dev, 'read_file', array('source' => 2, 'path' => 'core/config/config.inc.php')); });
 throws('files: modxMCP data stays closed', ApiException::class, function () use ($call, $dev) { $call($dev, 'list_files', array('source' => 2, 'path' => 'core/modxmcp-data')); });
 throws('files: configuration cannot be written', ApiException::class, function () use ($call, $dev) { $call($dev, 'write_file', array('source' => 2, 'path' => 'core/config/x.txt', 'content' => 'x')); });
+// Both direct file mutations and directory operations must respect the same boundaries.
+$protectedAssets = $siteDir . '/assets/components/modxmcp';
+mkdir($protectedAssets, 0755, true);
+file_put_contents($protectedAssets . '/fixture.js', 'original');
+file_put_contents($siteDir . '/assets/components/demo.js', 'add-on');
+file_put_contents($siteDir . '/assets/editor.css', 'normal');
+$e = throws('files: content cannot edit installed component assets', ApiException::class, function () use ($call, $editor) {
+    $call($editor, 'write_file', array('source' => 2, 'path' => 'assets/components/demo.js', 'content' => 'changed'));
+});
+check('files: component scope error', $e && $e->errorCode === 'forbidden_scope');
+throws('files: develop cannot edit modxMCP assets', ApiException::class, function () use ($call, $dev) {
+    $call($dev, 'write_file', array('source' => 2, 'path' => 'assets/components/modxmcp/fixture.js', 'content' => 'changed'));
+});
+throws('files: moving a directory cannot move protected descendants', ApiException::class, function () use ($call, $dev) {
+    $call($dev, 'move_path', array('source' => 2, 'path' => 'assets/components', 'to' => 'moved-assets'));
+});
+throws('files: moving into a protected directory is refused', ApiException::class, function () use ($call, $dev) {
+    $call($dev, 'move_path', array('source' => 2, 'path' => 'assets/editor.css', 'to' => 'assets/components/modxmcp/editor.css'));
+});
+unlink($protectedAssets . '/fixture.js');
+throws('files: deleting a parent cannot remove an empty protected directory', ApiException::class, function () use ($call, $dev) {
+    $call($dev, 'delete_path', array('source' => 2, 'path' => 'assets/components'));
+});
+check('files: protected subtree and ordinary assets are intact', is_dir($protectedAssets) && file_get_contents($siteDir . '/assets/editor.css') === 'normal');
+$legacyWrite = $call($dev, 'write_file', array('source' => 2, 'path' => 'assets/editor.css', 'content' => 'journaled'));
+rename($siteDir . '/assets/editor.css', $protectedAssets . '/fixture.css');
+symlink($protectedAssets . '/fixture.css', $siteDir . '/assets/editor.css');
+throws('files: undo refuses a journal path now pointing at a protected file', ApiException::class, function () use ($call, $dev, $legacyWrite) {
+    $call($dev, 'undo', array('changeset_id' => $legacyWrite['changeset_id'], 'confirm' => true));
+});
+check('files: undo left the protected file intact', file_get_contents($protectedAssets . '/fixture.css') === 'journaled');
+unlink($siteDir . '/assets/editor.css');
 $site->options['modxmcp.allow_root_filesystem_read'] = false;
 $component = $call($actor('read'), 'read_file', array('component' => 'demo', 'path' => 'model/demo.class.php'));
 check('files: component code is readable', $component['content'] === '<?php class Demo {}' && $call($actor('read'), 'list_files', array('component' => 'demo'))['writable'] === false);
@@ -1519,7 +1551,7 @@ $bin = $call($editor, 'write_file', array('source' => 1, 'path' => 'img/dot.gif'
 check('write_file: binary through base64', file_get_contents($media . '/img/dot.gif') === "GIF\x00\xff" && $bin['size'] === 5);
 $e = throws('write_file: php needs the develop scope', ApiException::class, function () use ($call, $editor) { $call($editor, 'write_file', array('source' => 1, 'path' => 'x.php', 'content' => '<?php echo 1;')); });
 check('write_file: php refusal is forbidden_scope', $e && $e->errorCode === 'forbidden_scope' && !file_exists($media . '/x.php'));
-throws('write_file: .htaccess needs the develop scope', ApiException::class, function () use ($call, $editor) { $call($editor, 'write_file', array('source' => 1, 'path' => 'img/.htaccess', 'content' => 'x')); });
+throws('write_file: server configuration is protected', ApiException::class, function () use ($call, $editor) { $call($editor, 'write_file', array('source' => 1, 'path' => 'img/.htaccess', 'content' => 'x')); });
 $e = throws('write_file: broken php is refused', ApiException::class, function () use ($call, $dev) { $call($dev, 'write_file', array('source' => 1, 'path' => 'x.php', 'content' => "<p>ok</p>\n<?php echo (;")); });
 check('write_file: lint error with the file line', $e && $e->errorCode === 'lint_failed' && $e->details['line'] === 2 && !file_exists($media . '/x.php'));
 check('write_file: valid php with html around it', $call($dev, 'write_file', array('source' => 1, 'path' => 'x.php', 'content' => "<p>ok</p>\n<?php echo 1;"))['changeset_id'] !== null);
@@ -7706,7 +7738,27 @@ check('static default: refused writes left MODX code untouched', file_get_conten
     && file_get_contents($spDir . '/manager/controllers/x.php') === '<?php // MANAGER');
 $spSite->store('modSnippet', array('id' => 905, 'name' => 'Код MODX', 'snippet' => 'stale', 'static' => 1, 'static_file' => $spDir . '/core/model/modx/modx.class.php', 'source' => 0, 'category' => 0, 'description' => '', 'locked' => 0, 'properties' => null));
 check('static default: MODX code can still be read', strpos($call($spDev, 'get', array('kind' => 'snippet', 'id' => 905))['fields']['content'], 'MODX CORE') !== false);
+mkdir($spDir . '/assets/components/modxmcp', 0755, true);
+file_put_contents($spDir . '/assets/components/modxmcp/fixture.js', 'COMPONENT');
+file_put_contents($spDir . '/.htaccess', 'SERVER');
+$spTry('default: modxMCP assets are protected', array('static_file' => $spDir . '/assets/components/modxmcp/fixture.js'), false);
+$spTry('default: server configuration is protected', array('static_file' => $spDir . '/.htaccess'), false);
 $spSite->options['modxmcp.static_roots'] = $spNarrow;
+
+$spSite->options['static_elements_automate_chunks'] = true;
+$autoOld = $spDir . '/outside/retained.tpl';
+$autoNew = $spDir . '/core/elements/chunks/retained.tpl';
+file_put_contents($autoOld, 'external content');
+file_put_contents($autoNew, 'managed content');
+$spSite->store('modChunk', array('id' => 906, 'name' => 'Prior static file', 'snippet' => 'external content', 'static' => 1,
+    'static_file' => $autoOld, 'source' => 0, 'category' => 0, 'description' => '', 'locked' => 0, 'properties' => null));
+$switched = $call($spDev, 'update', array('kind' => 'chunk', 'id' => 906, 'fields' => array('static_file' => $autoNew, 'content' => 'new content')));
+check('static cleanup: update keeps the former file and restores the MODX setting', file_get_contents($autoOld) === 'external content'
+    && file_get_contents($autoNew) === 'new content' && $spSite->getOption('static_elements_automate_chunks') === true);
+$restored = $call($spDev, 'undo', array('changeset_id' => $switched['changeset_id'], 'confirm' => true));
+check('static cleanup: undo restores the row and leaves both files untouched', $restored['performed'] && $spSite->row('modChunk', 906)['static_file'] === $autoOld
+    && file_get_contents($autoOld) === 'external content' && file_get_contents($autoNew) === 'new content' && $spSite->getOption('static_elements_automate_chunks') === true);
+$spSite->options['static_elements_automate_chunks'] = false;
 
 // 1.x leftovers removed on an upgrade
 $lcDir = $siteDir . '/legacy-cleanup';

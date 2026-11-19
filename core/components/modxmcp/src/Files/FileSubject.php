@@ -53,7 +53,7 @@ final class FileSubject implements Subject {
     }
 
     public function restore($state, array $extra) {
-        $path = $this->root->resolve($this->relative);
+        $path = $this->root->resolveForWrite($this->relative);
         if ($state === null) {
             if (is_file($path) && !@unlink($path)) { throw new \RuntimeException("Cannot remove {$this->relative}."); }
             self::pruneEmptyDirectories(dirname($path), $this->root->path);

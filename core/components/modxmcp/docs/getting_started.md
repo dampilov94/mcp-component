@@ -119,12 +119,16 @@ scenarios it can carry out.
 - Paths are relative to the source directory. Configuration and credential files are not
   accessible, and a source that covers the whole site is closed unless the administrator
   opened it.
+- File tools and static elements cannot write modxMCP's files, MODX core files or server
+  configuration. Writing in installed component directories through a media source requires
+  `develop`. File tools refuse writes through symbolic links.
 - File changes are journaled and undone like object changes; `modx_delete_path` on a
   directory keeps every file it removed. Use `dry_run` first.
 - Writing `.php` and other server-executed files needs the `develop` scope and the PHP must
   parse. Binary content is passed with `encoding: "base64"`.
 - Code of chunks, snippets, templates and plugins is edited with the object tools even when
-  the element is static; do not edit their files directly.
+  the element is static; do not edit their files directly. When changing the static path or
+  undoing that change, modxMCP leaves the previous file on disk.
 
 ## Changing things
 

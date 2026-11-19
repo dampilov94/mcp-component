@@ -216,18 +216,22 @@ final class Snapshot {
 
         // Write the file before saving: modElement::save() compares the file with the column
         // and would otherwise pull stale file content back into the database.
-        if ($kind->codeField() !== null && isset($fields['static']) && $fields['static'] === '1' && empty($state['static_file_missing'])) {
-            $path = $object->getSourceFile();
-            if ($path && strpos($path, '://') === false && !StaticPath::writable($modx, $path)) {
-                // modElement::save() would read this file into the row or write the content to it; setup mode switches both off.
-                $object->setOption(\xPDO::OPT_SETUP, true);
-                self::$notes[] = "{$kind->name()} {$key}: the static file is outside modxmcp.static_roots or in MODX\'s own code; the database row was restored but the file was not written.";
-            } elseif ($path && strpos($path, '://') === false) {
-                self::writeFile($path, $kind->fileContent((string) $fields[$kind->column($kind->codeField())]));
+        if (!empty($fields['static']) && method_exists($object, 'getSourceFile')) {
+            // The snapshot owns the file write. Saving the row must neither read nor write the file again.
+            $object->setOption(\xPDO::OPT_SETUP, true);
+            if ($kind->codeField() !== null && empty($state['static_file_missing'])) {
+                $path = $object->getSourceFile();
+                if ($path && !StaticPath::writable($modx, $path)) {
+                    self::$notes[] = "{$kind->name()} {$key}: the static file is outside modxmcp.static_roots or is protected; the database row was restored but the file was not written.";
+                } elseif ($path) {
+                    self::writeFile($path, $kind->fileContent((string) $fields[$kind->column($kind->codeField())]));
+                }
             }
         }
         $kind->prepareRestore($object);
-        if (!$object->save()) { throw new \RuntimeException("Cannot restore {$kind->name()} {$key}."); }
+        if (!StaticFiles::withoutNativeCleanup($modx, $kind, function () use ($object) { return $object->save(); })) {
+            throw new \RuntimeException("Cannot restore {$kind->name()} {$key}.");
+        }
 
         $rows = $state['relations'] + $extra;
         foreach ($kind->relationSpecs() as $name => $spec) {
