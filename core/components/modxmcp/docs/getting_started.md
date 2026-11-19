@@ -17,6 +17,11 @@ read when the client connects, so after a token's rights or a tool group change,
 the client; the bridge refreshes it at once. Over HTTP nothing remembers the revisions you
 have read between calls, so pass `expected_revision` on every write.
 
+When a tool returns a `Warnings` block, read it alongside the result. The HTTP response limit
+(`modxmcp.max_response_bytes`) covers the full MCP response. If a write's result does not fit,
+use the returned `request_id` with `modx_request_status` before retrying. Use smaller batches
+if the server refuses a batch before executing it.
+
 ## Objects and kinds
 
 Everything is addressed as `kind` + `id` (or `name`). The element kinds are `chunk`,

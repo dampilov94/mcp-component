@@ -687,3 +687,66 @@ test("MCP over HTTP: older protocol versions, auth, methods and the bridge on th
   assert.equal(bridge.status, 200);
   assert.equal(bridge.body.ok, true);
 });
+
+test("MCP over HTTP preserves warnings and bounds individual and batched responses", { skip: available ? false : "PHP with pdo_sqlite is not available" }, async (t) => {
+  const limit = 2200;
+  const site = await startSite({ MODXMCP_TEST_MAX_RESPONSE_BYTES: String(limit), MODXMCP_TEST_ALLOW_RUN: "1" });
+  t.after(site.stop);
+  const token = site.info.tokens.admin;
+  const tool = (id, name, args = {}) => ({ jsonrpc: "2.0", id, method: "tools/call", params: { name: `modx_${name}`, arguments: args } });
+  const rpc = async (body, version = "2025-03-26") => {
+    const response = await fetch(site.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", "X-MCP-Token": token, "MCP-Protocol-Version": version },
+      body: JSON.stringify(body),
+    });
+    const text = await response.text();
+    assert.ok(Buffer.byteLength(text) <= limit, "actual JSON-RPC response stays within the byte cap");
+    return { status: response.status, body: JSON.parse(text) };
+  };
+
+  const firstId = "warnings-replay-0001";
+  const warned = tool(1, "run", { text: "Проверка", _request_id: firstId });
+  const batch = await rpc([warned, tool(2, "site_info")]);
+  assert.equal(batch.status, 200);
+  assert.equal(batch.body[0].result._meta.request_id, firstId);
+  assert.equal(JSON.parse(batch.body[0].result.content[0].text).output, "Проверка");
+  assert.match(batch.body[0].result.content[1].text, /Warnings:.*\n- Changes made by the executed code are not journaled\./);
+  assert.equal(batch.body[1].result.content.length, 1);
+  assert.equal(batch.body[1].result._meta, undefined);
+  const replay = await rpc({ ...warned, id: 3 }, "2025-11-25");
+  assert.deepEqual(replay.body.result.content, batch.body[0].result.content);
+  assert.deepEqual(replay.body.result.structuredContent, JSON.parse(replay.body.result.content[0].text));
+
+  const created = await site.post(token, { v: 2, action: "create", args: { kind: "chunk", fields: { name: "large content", content: "x".repeat(1350), static: false } } });
+  assert.equal(created.body.ok, true);
+  const get = (id) => tool(id, "get", { kind: "chunk", id: created.body.result.id, fields: ["content"] });
+  assert.equal((await rpc(get(4))).body.result.isError, false, "one text copy fits");
+  const large = await rpc(get(5), "2025-11-25");
+  assert.equal(large.status, 500);
+  assert.equal(large.body.id, 5);
+  assert.equal(large.body.error.data.code, "response_too_large");
+  const combined = await rpc([get(6), get(7)]);
+  assert.equal(combined.status, 200);
+  assert.equal(combined.body[0].result.isError, false);
+  assert.equal(combined.body[1].id, 7);
+  assert.equal(combined.body[1].error.data.code, "response_too_large");
+
+  const requestId = "oversized-write-0001";
+  const write = await rpc(tool(8, "run", { text: "y".repeat(1300), _request_id: requestId }), "2025-11-25");
+  assert.equal(write.status, 500);
+  assert.equal(write.body.error.data.request_id, requestId);
+  assert.match(write.body.error.message, /check modx_request_status/);
+  const status = await rpc(tool(9, "request_status", { request_id: requestId }));
+  const recorded = JSON.parse(status.body.result.content[0].text);
+  assert.equal(recorded.state, "completed");
+  assert.equal(recorded.success, true, "the saved result is independent of the transport cap");
+
+  const rejectedId = "rejected-batch-0001";
+  const pings = Array.from({ length: 24 }, (_, i) => ({ jsonrpc: "2.0", id: 11 + i, method: "ping" }));
+  const rejected = await rpc([tool(10, "run", { text: "not started", _request_id: rejectedId }), ...pings]);
+  assert.equal(rejected.status, 413);
+  assert.equal(rejected.body.error.data.code, "batch_too_large");
+  const notStarted = await rpc(tool(40, "request_status", { request_id: rejectedId }));
+  assert.equal(JSON.parse(notStarted.body.result.content[0].text).state, "not_found");
+});
