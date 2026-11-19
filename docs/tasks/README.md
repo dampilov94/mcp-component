@@ -73,6 +73,11 @@ below) or append a `## Review` section to the brief with numbered change request
 | 34 | [MCP over HTTP](34-mcp-http.md) | `task/34-mcp-http` | merged |
 | 35 | [Static paths, cleanup, fixes](35-security-cleanup.md) | `task/35-security-cleanup` | merged |
 | 36 | [property_set, lexicon_entry, source properties](36-missing-kinds.md) | `task/36-missing-kinds` | merged |
+| 37 | [File boundaries and static file cleanup](37-file-boundaries.md) | `task/37-file-boundaries` | merged |
+| 38 | [MCP warnings and response limits](38-mcp-warnings-limits.md) | `task/38-mcp-warnings-limits` | merged |
+| 39 | [Property diffs, history keys and prompts](39-properties-history-prompts.md) | `task/39-properties-history-prompts` | merged |
+| 40 | [Replace 1.x with a fresh 2.0 installation](40-clean-install-guide.md) | `task/40-clean-install-guide` | merged |
+| 41 | [Token labels and credential reads](41-token-and-credential-guards.md) | `task/41-token-and-credential-guards` | merged |
 
 ## Doing several briefs in a row
 
@@ -135,13 +140,15 @@ Lessons from briefs 33–34:
   header before PHP sees it; anything a client must authenticate with goes in a custom header too.
 - A long executor run is lost when the host machine sleeps; commit work in progress early.
 
-## Handoff (2026-11-19)
+## Handoff (2026-11-20)
 
-- Tasks 35?36 are deployed to fordev and merged into `main`. The partial deployment was
-  resumed from `.local/deploy-fordev.json`; original site files are backed up in
-  `.local/resume-fordev-before/`. The Windows checkout uses CRLF, so compare text line endings
-  before deciding that the deployment journal is out of date.
-- `npm run check` and `npm test` passed in WSL on PHP 7.4 (5420 PHP checks, 37 Node tests).
-  Stand checks covered the new kinds, element/resource writes, code tools, duplicate, HTTP
-  connection and undo. Protected-path rejection cases were exercised in the offline suite.
-- The next transport is `modxmcp-2.0.0-alpha2.transport.zip`. The owner installs it on devshop.
+- Tasks 37–41 are merged into local `main`. fordev has the component source from `6c683cd`.
+  The 24 files were verified, with the old files backed up in `.local/fordev-before-6c683cd/`
+  and `.local/deploy-fordev.json` updated. Compare text line endings when using a Windows checkout.
+- `npm run check` and `npm test` passed in WSL on PHP 7.4 (5459 PHP checks and 39 Node tests).
+  Disposable real MODX 2.8.8 checks covered the prior static file and undo, Unicode token labels,
+  credential masking and the `query_db` guard. On fordev, direct HTTP checks covered warning
+  isolation, property previews and diffs, and history by string key. All test fixtures were undone.
+- Devshop is on the previously built `2.0.0-alpha2`. The next transport has yet to be built.
+  The owner chose to uninstall 1.x before a clean 2.0 installation. That path was verified with
+  `1.10.0-pl` and the alpha2 archive. Build and publish only when requested.

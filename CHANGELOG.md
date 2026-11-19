@@ -208,6 +208,18 @@ Changes in the `2.0.0-alpha2` transport:
 - Preserve TV ranks when editing template relations, ignore comment tags in the dependency
   graph, and run both parser passes in `modx_run` text mode.
 
+After alpha2 — tasks 37–41:
+
+- Protect modxMCP, MODX core and server configuration files from file-tool and static-element
+  writes. Check moves, deletions and undo. Preserve the previous file when changing a static path.
+- Deliver warnings through both MCP transports. Cap complete HTTP responses and keep legacy batch
+  calls isolated. An oversized write response keeps its request ID for status checks.
+- Decode stored properties safely and show them in history diffs, with media source credentials
+  masked below `admin` on reads. Dry runs compare effective property values and history accepts
+  a string key. Correct prompt access and unpublished-page preview guidance.
+- Preserve full UTF-8 token labels up to 190 characters. Refuse raw queries of user attributes at
+  every token scope. Document the verified uninstall-and-install path from 1.x.
+
 Stage 7 — manager:
 
 - History page (Components > modxMCP > История): everything recorded in the journal with source,
