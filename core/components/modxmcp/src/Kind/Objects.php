@@ -147,8 +147,15 @@ final class Objects {
     }
 
     /** True when a stored value of a field equals the value a caller sent for it (maps compare as maps). */
-    public static function sameValue(Kind $kind, $name, $stored, $value) {
+    public static function sameValue(Kind $kind, $name, $stored, $value, $id) {
         $fields = $kind->fields();
+        if (!empty($fields[$name]['stored_properties'])) {
+            return Kind::canonicalJson(Properties::present(Properties::decode($stored)))
+                === Kind::canonicalJson(Properties::present(Properties::fromApi($value)));
+        }
+        if ($kind instanceof MediaSourceKind && $name === 'properties') {
+            return $kind->propertiesUnchanged($id, $stored, $value);
+        }
         if ($fields[$name]['type'] === 'json') {
             $a = is_string($stored) ? ($stored === '' ? null : json_decode($stored, true)) : json_decode(json_encode($stored), true);
             return Kind::canonicalValue($a) === Kind::canonicalValue(json_decode(json_encode($value), true));

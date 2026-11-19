@@ -109,7 +109,7 @@ scenarios it can carry out.
 - `audit {focus?}` — run `modx_audit_site`, group the findings, propose fixes, change only what the person picks.
 - `change_page {page, change}` — change a page through a draft and apply it after the person agrees (needs the `content` scope).
 - `new_page_type {description}` — plan and create a template, TVs and chunks, with a checkpoint (needs the `develop` scope).
-- `fix_errors {since?}` — group the errors of the MODX log, find their causes, fix after confirmation.
+- `fix_errors {since?}` — group errors from the MODX log and fix them after confirmation. Requires `modx_read_log`.
 
 ## Files
 
@@ -239,7 +239,8 @@ Rules that keep a live site safe:
 ## Undo
 
 - `modx_checkpoint {label}` before a larger task.
-- `modx_history` — what was changed, newest first; filter by `this_session`, `kind`, `id`.
+- `modx_history` — what was changed, newest first. Filter by `this_session` or `kind`. With
+  `kind`, pass `id` for a numeric ID or `key` for a string key.
 - `modx_history_diff {changeset_id}` — old and new values, and a line diff for code.
 - `modx_undo` with one of `changeset_id`, `last`, `this_session`, `to_checkpoint`.
   Without `confirm: true` it returns the plan. A deleted object comes back with the same

@@ -18,18 +18,52 @@ final class Properties {
     /** A raw column value (serialized text, JSON text or an array) as a map name => entry. */
     public static function decode($raw) {
         if (is_string($raw) && $raw !== '') {
-            $value = @unserialize($raw);
+            $value = @unserialize($raw, array('allowed_classes' => false, 'max_depth' => 64));
             if ($value === false && $raw !== 'b:0;') { $value = json_decode($raw, true); }
             $raw = $value;
         }
         if (!is_array($raw)) { return array(); }
         $out = array();
         foreach ($raw as $key => $entry) {
+            if (!self::isPlain($entry)) { continue; }
             if (!is_array($entry)) { $entry = array('value' => $entry); }
-            $name = isset($entry['name']) && $entry['name'] !== '' ? (string) $entry['name'] : (string) $key;
+            $name = isset($entry['name']) && is_scalar($entry['name']) && $entry['name'] !== '' ? (string) $entry['name'] : (string) $key;
             $out[$name] = $entry + array('name' => $name);
         }
         return $out;
+    }
+
+    private static function isPlain($value, $depth = 0) {
+        if ($depth > 64) { return false; }
+        if (!is_array($value)) { return $value === null || is_scalar($value); }
+        foreach ($value as $item) {
+            if (!self::isPlain($item, $depth + 1)) { return false; }
+        }
+        return true;
+    }
+
+    /** Property values only, as media sources present them. */
+    public static function values(array $stored) {
+        ksort($stored, SORT_STRING);
+        $out = array();
+        foreach ($stored as $name => $entry) { $out[$name] = $entry['value'] ?? ''; }
+        return (object) $out;
+    }
+
+    /** Show recorded properties in the diff without publishing known credential values. */
+    public static function forHistory($raw, $valuesOnly) {
+        if ($raw === null) { return null; }
+        $stored = self::decode($raw);
+        foreach ($stored as $name => &$entry) {
+            $key = preg_replace('/([a-z0-9])([A-Z])/', '$1_$2', (string) $name);
+            $key = str_replace('-', '_', $key);
+            $type = isset($entry['type']) && is_string($entry['type']) ? $entry['type'] : '';
+            if (Secrets::isSecret($key, $type) || strtolower($key) === 'key' || preg_match('/(?:^|_)access_?key(?:_id)?$/i', $key)) {
+                $entry = array('type' => $type, 'value' => Secrets::HIDDEN);
+            }
+        }
+        unset($entry);
+        return $valuesOnly ? self::values($stored) : self::present($stored);
     }
 
     /** The stored map as the API shows it: always an object, keys sorted, empty parts left out. */

@@ -60,7 +60,7 @@ final class UpdateAction extends WriteAction {
                 $would = array();
                 foreach (isset($args['fields']) ? $args['fields'] : array() as $name => $value) {
                     $current = Snapshot::stateValue($kind, $before, $name);
-                    if (!Objects::sameValue($kind, $name, $current, $value)) { $would[] = $name; }
+                    if (!Objects::sameValue($kind, $name, $current, $value, $id)) { $would[] = $name; }
                 }
                 return array('result' => array(
                     'kind' => $kind->name(), $kind->keyField() => $id, 'revision' => Snapshot::revision($before),

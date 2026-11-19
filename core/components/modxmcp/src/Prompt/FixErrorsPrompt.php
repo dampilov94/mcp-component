@@ -5,6 +5,7 @@ final class FixErrorsPrompt extends Prompt {
     public function name() { return 'fix_errors'; }
     public function title() { return 'Разобрать ошибки сайта'; }
     public function description() { return 'Разобрать журнал ошибок, найти причины и предложить исправления.'; }
+    public function requiredTools() { return array('modx_read_log'); }
 
     public function arguments() {
         return array(self::argument('since', 'За какой период, например «сегодня»', false));

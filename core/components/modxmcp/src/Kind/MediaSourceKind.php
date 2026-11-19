@@ -51,11 +51,7 @@ final class MediaSourceKind extends Kind {
 
     public function value($object, $field) {
         if ($field === 'properties') {
-            $out = array();
-            foreach ($this->defaultsOf($object) as $name => $entry) { $out[$name] = isset($entry['value']) ? $entry['value'] : ''; }
-            foreach (Properties::stored($object) as $name => $entry) { $out[$name] = isset($entry['value']) ? $entry['value'] : ''; }
-            ksort($out, SORT_STRING);
-            return $out ? (object) $out : new \stdClass();
+            return Properties::values(Properties::stored($object) + $this->defaultsOf($object));
         }
         if ($field !== 'base_path') { return parent::value($object, $field); }
         if (stripos((string) $object->get('class_key'), 'modFileMediaSource') === false) { return ''; }
@@ -81,9 +77,7 @@ final class MediaSourceKind extends Kind {
      * name the class does not declare (and the source does not store yet) is refused when the class declares anything.
      * @return array name => definition
      */
-    private function merged($object, array $given) {
-        $defaults = $this->defaultsOf($object);
-        $stored = $object !== null && $object->get('id') ? Properties::stored($object) : array();
+    private function merged(array $stored, array $defaults, array $given) {
         $out = $stored;
         foreach ($given as $name => $value) {
             $name = (string) $name;
@@ -107,6 +101,20 @@ final class MediaSourceKind extends Kind {
         return $out;
     }
 
+    private function mergedProperties($object, array $given) {
+        $stored = $object !== null && $object->get('id') ? Properties::stored($object) : array();
+        return $this->merged($stored, $this->defaultsOf($object), $given);
+    }
+
+    /** A partial update is compared as effective values, using the locked snapshot's stored properties. */
+    public function propertiesUnchanged($id, $raw, $given) {
+        $object = $this->findByKey($this->context->modx, $id);
+        $stored = Properties::decode($raw);
+        $defaults = $this->defaultsOf($object);
+        $next = $this->merged($stored, $defaults, (array) $given);
+        return self::canonicalJson(Properties::values($stored + $defaults)) === self::canonicalJson(Properties::values($next + $defaults));
+    }
+
     private function givenProperties(array $columns) {
         if (!array_key_exists('properties', $columns)) { return null; }
         $given = is_string($columns['properties']) ? json_decode($columns['properties'], true) : $columns['properties'];
@@ -123,7 +131,7 @@ final class MediaSourceKind extends Kind {
             $classKey = isset($data['class_key']) && $data['class_key'] !== '' ? $data['class_key'] : 'sources.modFileMediaSource';
             $object = $modx->newObject($classKey);
         }
-        $data['properties'] = $this->merged($object, $this->givenProperties($data));
+        $data['properties'] = $this->mergedProperties($object, $this->givenProperties($data));
         return $data;
     }
 
@@ -133,14 +141,14 @@ final class MediaSourceKind extends Kind {
         if ($given === null) { return; }
         $classKey = isset($columns['class_key']) && $columns['class_key'] !== '' ? $columns['class_key'] : 'sources.modFileMediaSource';
         $object = $this->context->modx->newObject($classKey);
-        $this->assertSafePath($classKey, $this->merged($object, $given));
+        $this->assertSafePath($classKey, $this->mergedProperties($object, $given));
     }
 
     public function assertUpdatable(\modX $modx, $object, array $columns) {
         $given = $this->givenProperties($columns);
         if ($given === null) { return; }
         $classKey = isset($columns['class_key']) ? $columns['class_key'] : (string) $object->get('class_key');
-        $this->assertSafePath($classKey, $this->merged($object, $given));
+        $this->assertSafePath($classKey, $this->mergedProperties($object, $given));
     }
 
     /**

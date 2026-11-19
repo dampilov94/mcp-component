@@ -1886,6 +1886,14 @@ check('keys: delete', $deleted['key'] === 'alpha_copy' && $deleted['deleted'] ==
 $history = $call($keyDev, 'history', array('kind' => 'system_setting'));
 $entry = $history['changesets'][0]['objects'][0];
 check('keys: history entry shows key', $entry === array('kind' => 'system_setting', 'key' => 'alpha_copy', 'name' => 'alpha_copy', 'op' => 'delete'));
+$matching = $call($keyDev, 'history', array('kind' => 'system_setting', 'key' => 'site_tagline'))['changesets'];
+check('keys: history filters by kind and exact string key', array_column($matching, 'changeset_id') === array($updated['changeset_id'], $setCreated['changeset_id']));
+throws('keys: history requires a kind for key', ApiException::class, function () use ($call, $keyDev) {
+    $call($keyDev, 'history', array('key' => 'site_tagline'));
+});
+throws('keys: history rejects key combined with id', ApiException::class, function () use ($call, $keyDev) {
+    $call($keyDev, 'history', array('kind' => 'system_setting', 'key' => 'site_tagline', 'id' => 1));
+});
 $chunkEntry = $call($keyDev, 'history', array('kind' => 'chunk'))['changesets'][0]['objects'][0];
 check('keys: an integer kind still shows id in history', $chunkEntry['id'] === 1 && !array_key_exists('key', $chunkEntry));
 $updateDiff = $call($keyDev, 'history_diff', array('changeset_id' => $updated['changeset_id']));
@@ -7498,12 +7506,13 @@ check('errors: every code has an HTTP status', min(ApiException::CODES) >= 400 &
 $pNames = function ($ctx) { return array_column(Manifest::prompts($ctx), 'name'); };
 $pRegistry = $context('admin')->prompts;
 check('prompts: registry lists the five scenarios', array_keys($pRegistry->all()) === array('study_site', 'audit', 'change_page', 'new_page_type', 'fix_errors'));
-check('prompts: read token sees the read-only scenarios', $pNames($context('read')) === array('study_site', 'audit', 'fix_errors'));
-check('prompts: content token also sees change_page', $pNames($context('content')) === array('study_site', 'audit', 'change_page', 'fix_errors'));
+check('prompts: read token sees the read-only scenarios', $pNames($context('read')) === array('study_site', 'audit'));
+check('prompts: content token also sees change_page', $pNames($context('content')) === array('study_site', 'audit', 'change_page'));
 check('prompts: develop and admin tokens see all', $pNames($context('develop')) === array('study_site', 'audit', 'change_page', 'new_page_type', 'fix_errors') && $pNames($context('admin')) === $pNames($context('develop')));
-check('prompts: change_page is hidden when modx_invoke is unavailable', $pNames($context('content', array('objects'))) === array('study_site', 'audit', 'fix_errors'));
+check('prompts: change_page is hidden when modx_invoke is unavailable', $pNames($context('content', array('objects'))) === array('study_site', 'audit'));
+check('prompts: fix_errors is hidden when the token denies the log tool group', !in_array('fix_errors', $pNames($context('develop', array('verify'))), true));
 $pManifest = (new \ModxMCP\Action\ManifestAction())->run(array(), $context('content'));
-check('prompts: manifest carries them with arguments, and the hash covers them', array_column($pManifest['prompts'], 'name') === array('study_site', 'audit', 'change_page', 'fix_errors')
+check('prompts: manifest carries them with arguments, and the hash covers them', array_column($pManifest['prompts'], 'name') === array('study_site', 'audit', 'change_page')
     && $pManifest['prompts'][2]['arguments'] === array(array('name' => 'page', 'description' => 'Страница: id или заголовок', 'required' => true), array('name' => 'change', 'description' => 'Что изменить', 'required' => true))
     && $pManifest['hash'] === Manifest::currentHash($context('content')) && $pManifest['hash'] !== Manifest::hash(Manifest::tools($context('content'))));
 check('prompts: the hash changes when a prompt becomes unavailable', Manifest::currentHash($context('content')) !== Manifest::currentHash($context('content', array('objects')))
@@ -7521,6 +7530,13 @@ $pRun = function ($ctx, $name, array $arguments = array()) {
     return $result;
 };
 $pText = function ($result) { return $result['messages'][0]['content']['text']; };
+$pPreview = $pText($pRun($context('develop'), 'new_page_type', array('description' => 'Тестовый шаблон')));
+check('prompts: an unpublished page is previewed from the manager', strpos($pPreview, '`published: false`') !== false
+    && strpos($pPreview, 'предпросмотр из менеджера MODX') !== false && strpos($pPreview, '`modx_check_page`') === false);
+$e = throws('prompts: fix_errors cannot be fetched without the log tool', ApiException::class, function () use ($pRun, $context) {
+    $pRun($context('content'), 'fix_errors');
+});
+check('prompts: fix_errors names the missing log tool', $e && $e->details === array('reason' => 'tool_unavailable', 'tool' => 'modx_read_log'));
 $pArgs = array('study_site' => array(), 'audit' => array('focus' => 'только битые ссылки'), 'change_page' => array('page' => 'О компании', 'change' => 'заменить телефон'),
     'new_page_type' => array('description' => 'страница услуги'), 'fix_errors' => array('since' => 'сегодня'));
 foreach ($pArgs as $pName => $pGiven) {
@@ -8237,6 +8253,42 @@ check('media source: refused by scope before anything else, also with the settin
 check('media source: a read token reads the properties', $msProps($call($msCtx('read'), 'get', array('kind' => 'media_source', 'id' => $msMade['id'])))['basePath'] === 'assets/images/');
 $msS3 = $call($msAdmin, 'create', array('kind' => 'media_source', 'fields' => array('name' => 'Облако', 'class_key' => 'sources.modS3MediaSource', 'properties' => array('baseUrl' => 'https://cdn.example/'))));
 check('media source: a source that is not a local directory is not judged by its basePath', $msProps($call($msAdmin, 'get', array('kind' => 'media_source', 'id' => $msS3['id'])))['baseUrl'] === 'https://cdn.example/');
+
+// Use actual PHP-serialized storage rather than the fake's JSON for the before snapshots.
+$define = array('caption' => array('value' => 'До'), 'apiKey' => array('value' => 'fixture-only'));
+$setId = $call($qDev, 'create', array('kind' => 'property_set', 'fields' => array('name' => 'Serialized fixture', 'properties' => $define)))['id'];
+$row = $qSite->row('modPropertySet', $setId);
+$row['properties'] = serialize(Properties::fromApi($define));
+$qSite->store('modPropertySet', $row);
+$setUpdate = array('kind' => 'property_set', 'id' => $setId);
+$same = $call($qDev, 'update', $setUpdate + array('dry_run' => true, 'fields' => array('properties' => array_reverse($define, true))));
+check('properties: identical serialized definitions do not appear in the dry run', $same['would_change'] === array());
+$new = $define;
+$new['caption']['value'] = 'После';
+$edit = $call($qDev, 'update', $setUpdate + array('fields' => array('properties' => $new)));
+$diff = $call($qDev, 'history_diff', array('changeset_id' => $edit['changeset_id']))['objects'][0]['changed']['properties'];
+check('properties: a serialized diff shows both definitions and hides credentials', $diff['old']->caption['value'] === 'До'
+    && $diff['new']->caption['value'] === 'После' && $diff['old']->apiKey['value'] === '[hidden]' && $diff['new']->apiKey['value'] === '[hidden]');
+$call($qDev, 'undo', array('changeset_id' => $edit['changeset_id'], 'confirm' => true));
+check('properties: undo keeps the exact serialized form', $qSite->row('modPropertySet', $setId)['properties'] === $row['properties']);
+
+$sourceRow = $msSite->row('sources.modMediaSource', $msMade['id']);
+$sourceRow['properties'] = serialize(Properties::decode($sourceRow['properties']));
+$msSite->store('sources.modMediaSource', $sourceRow);
+$sourceUpdate = array('kind' => 'media_source', 'id' => $msMade['id']);
+$same = $call($msAdmin, 'update', $sourceUpdate + array('dry_run' => true, 'fields' => array('properties' => array('basePathRelative' => 'true', 'baseUrl' => 'assets/images/'))));
+check('media source: partial dry run compares effective values including defaults', $same['would_change'] === array());
+$fields = array('fields' => array('properties' => array('baseUrl' => 'assets/cdn/')));
+$different = $call($msAdmin, 'update', $sourceUpdate + $fields + array('dry_run' => true));
+check('media source: dry run identifies a changed override', $different['would_change'] === array('properties'));
+$edit = $call($msAdmin, 'update', $sourceUpdate + $fields);
+$diff = $call($msAdmin, 'history_diff', array('changeset_id' => $edit['changeset_id']))['objects'][0]['changed']['properties'];
+check('media source: history shows stored override values', $diff['old']->baseUrl === 'assets/images/' && $diff['new']->baseUrl === 'assets/cdn/'
+    && $diff['old']->basePath === $diff['new']->basePath && !isset($diff['old']->basePathRelative));
+
+check('properties: serialized objects are ignored without losing plain entries', array_keys(Properties::decode(serialize(array(
+    'plain' => array('value' => 'test'), 'invalid' => array('value' => new \stdClass()),
+)))) === array('plain'));
 
 echo $failures ? "{$failures} of {$checks} PHP checks failed.\n" : "PHP: {$checks} checks passed.\n";
 exit($failures ? 1 : 0);

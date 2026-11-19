@@ -129,7 +129,7 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
 
   await t.test("prompts: the manifest lists what the token may use and the prompt action renders them", async () => {
     const names = async (token) => (await call(token, "manifest")).body.result.prompts.map((item) => item.name);
-    assert.deepEqual(await names(read), ["study_site", "audit", "fix_errors"]);
+    assert.deepEqual(await names(read), ["study_site", "audit"]);
     assert.deepEqual(await names(admin), ["study_site", "audit", "change_page", "new_page_type", "fix_errors"]);
     assert.notEqual((await call(read, "manifest")).body.result.hash, (await call(admin, "manifest")).body.result.hash);
     const ok = await call(read, "prompt", { name: "audit", arguments: { focus: "ссылки" } });
