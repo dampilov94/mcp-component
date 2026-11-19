@@ -28,13 +28,13 @@ final class QueryDbAction extends Action {
     );
     /** Tables with credentials or sessions (names without the prefix): refused for every token below admin. */
     const CREDENTIAL_TABLES = array(
-        'users', 'user_attributes', 'user_settings', 'system_settings', 'context_settings', 'transport_providers', 'session', 'media_sources',
+        'user_settings', 'system_settings', 'context_settings', 'transport_providers', 'media_sources',
     );
     /**
      * Refused for every token: API token hashes, password hashes and live sessions. No tool
      * returns these, so neither may the escape hatch (users are read with the kind "user").
      */
-    const SECRET_TABLES = array('modxmcp_tokens', 'users', 'session');
+    const SECRET_TABLES = array('modxmcp_tokens', 'users', 'user_attributes', 'session');
     /** Schemas that expose other accounts and other sessions' statements. */
     const SYSTEM_SCHEMAS_ALL = array('mysql', 'performance_schema', 'sys');
     const SYSTEM_SCHEMAS_BELOW_ADMIN = array('information_schema');
@@ -50,7 +50,7 @@ final class QueryDbAction extends Action {
     public function description() {
         return 'Escape hatch: run one read-only SELECT (or WITH ... SELECT) against the site database; disabled unless the administrator turns it on. '
             . 'Write {prefix} for the table prefix and use ? with params. Rows are cut at limit (default 100, max 1000); long values are shortened. '
-            . 'Tables with credentials are refused (all of them below admin scope). Prefer modx_list / modx_search when they can answer.';
+            . 'Tables with session identifiers or password/token hashes are refused at every scope; other credential tables require admin. Prefer modx_list / modx_search when they can answer.';
     }
 
     public function inputSchema() {

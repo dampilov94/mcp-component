@@ -45,13 +45,17 @@ final class MediaSourceKind extends Kind {
             'properties'  => array('type' => 'object', 'json' => true, 'no_filter' => true, 'source_properties' => true,
                 'description' => 'Settings of the source as {name: value} (basePath, basePathRelative, baseUrl, baseUrlRelative, allowedFileTypes, skipFiles, ... as the class declares). '
                     . 'Shows the effective values (stored over the class defaults); writing merges the given names into the stored definition and keeps each property\'s type and description. '
+                    . 'Credential properties are hidden below the admin scope. '
                     . 'A basePath into core/config, modxmcp-data or outside the site and core directories also needs modxmcp.allow_root_filesystem_read.'),
         );
     }
 
     public function value($object, $field) {
         if ($field === 'properties') {
-            return Properties::values(Properties::stored($object) + $this->defaultsOf($object));
+            $properties = Properties::stored($object) + $this->defaultsOf($object);
+            $scope = $this->context->token['scope'] ?? Scope::READ;
+            if (!Scope::allows($scope, Scope::ADMIN)) { $properties = Properties::redactCredentials($properties); }
+            return Properties::values($properties);
         }
         if ($field !== 'base_path') { return parent::value($object, $field); }
         if (stripos((string) $object->get('class_key'), 'modFileMediaSource') === false) { return ''; }

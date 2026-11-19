@@ -53,7 +53,12 @@ final class Properties {
     /** Show recorded properties in the diff without publishing known credential values. */
     public static function forHistory($raw, $valuesOnly) {
         if ($raw === null) { return null; }
-        $stored = self::decode($raw);
+        $stored = self::redactCredentials(self::decode($raw));
+        return $valuesOnly ? self::values($stored) : self::present($stored);
+    }
+
+    /** Mask recognised credentials in a public property map. Stored entries are left alone. */
+    public static function redactCredentials(array $stored) {
         foreach ($stored as $name => &$entry) {
             $key = preg_replace('/([a-z0-9])([A-Z])/', '$1_$2', (string) $name);
             $key = str_replace('-', '_', $key);
@@ -63,7 +68,7 @@ final class Properties {
             }
         }
         unset($entry);
-        return $valuesOnly ? self::values($stored) : self::present($stored);
+        return $stored;
     }
 
     /** The stored map as the API shows it: always an object, keys sorted, empty parts left out. */

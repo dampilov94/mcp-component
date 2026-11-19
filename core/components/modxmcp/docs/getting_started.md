@@ -190,7 +190,8 @@ Rules that keep a live site safe:
 - Kind `media_source` has `properties` as `{name: value}` (`basePath`, `basePathRelative`,
   `baseUrl`, `allowedFileTypes`, ...): a write merges the given names into the stored settings. A
   `basePath` that leads into `core/config` or `modxmcp-data`, or outside the site and core
-  directories, is refused unless `modxmcp.allow_root_filesystem_read` is on.
+  directories, is refused unless `modxmcp.allow_root_filesystem_read` is on. Credential
+  properties appear as `[hidden]` below `admin` and in history diffs for every scope.
 
 ## Finding and replacing across code
 

@@ -4033,6 +4033,11 @@ foreach (array('modx_modxmcp_tokens', 'modxmcp_tokens', '`MODX_MODXMCP_TOKENS`',
 }
 // Architect's review: password hashes and sessions are refused for every token, like token hashes.
 foreach (array('SELECT username, password FROM {prefix}users', 'SELECT id FROM modx_users', 'SELECT * FROM `MODX_SESSION`') as $xText) { $xQuery("admin, {$xText}", $xText, 'forbidden_scope', $xAdmin); }
+$xQuery('admin cannot query stored user session identifiers', 'SELECT sessionid FROM {prefix}user_attributes', 'forbidden_scope', $xAdmin);
+$e = throws('query_db: a custom prefix protects user attributes', ApiException::class, function () {
+    QueryDbAction::guard('SELECT id FROM `site_user_attributes`', 'site_', true);
+});
+check('query_db: custom-prefix user attributes are refused even for a non-secret column', $e && $e->errorCode === 'forbidden_scope');
 check('query_db: an admin may read the other credential tables', $xSql($xAdmin, 'SELECT COUNT(*) AS n FROM modx_system_settings')['rows'] == array(array(0)));
 $xTokens = $xSite->pdo->query('SELECT COUNT(*) FROM modx_modxmcp_tokens')->fetchColumn();
 check('query_db: nothing in this section touched the token table', (int) $xTokens === 1);
@@ -6935,6 +6940,17 @@ check('tokens page: manager actions name the token id', $tkSite->managerActions[
     && count(array_filter($tkSite->managerActions, function ($a) { return $a['action'] === 'modxmcp_create_token'; })) === 2
     && count(array_filter($tkSite->managerActions, function ($a) { return $a['action'] === 'modxmcp_update_token'; })) === 4);
 
+$tkLong = str_repeat('я', 190);
+$tkLongRecord = $tkService->create(array('label' => $tkLong, 'scope' => 'read'));
+check('tokens page: a 190-character Cyrillic label survives creation and authentication', $tkLongRecord['label'] === $tkLong
+    && $tkStore->authenticate($tkLongRecord['token'])['label'] === $tkLong);
+$tkBoundary = str_repeat('a', 189) . 'я';
+$tkBoundaryRecord = $tkStore->create($tkBoundary, 'read');
+check('tokens page: creation does not split the last multibyte character', $tkStore->get($tkBoundaryRecord['id'])['label'] === $tkBoundary);
+$tkThrows('tokens page: store refuses a long create label just like update', function () use ($tkStore) {
+    $tkStore->create(str_repeat('я', 191), 'read');
+});
+
 // the overview of the main page
 $ovDir = sys_get_temp_dir() . '/modxmcp-overview-' . bin2hex(random_bytes(6));
 mkdir($ovDir . '/core', 0700, true);
@@ -8253,6 +8269,30 @@ check('media source: refused by scope before anything else, also with the settin
 check('media source: a read token reads the properties', $msProps($call($msCtx('read'), 'get', array('kind' => 'media_source', 'id' => $msMade['id'])))['basePath'] === 'assets/images/');
 $msS3 = $call($msAdmin, 'create', array('kind' => 'media_source', 'fields' => array('name' => 'Облако', 'class_key' => 'sources.modS3MediaSource', 'properties' => array('baseUrl' => 'https://cdn.example/'))));
 check('media source: a source that is not a local directory is not judged by its basePath', $msProps($call($msAdmin, 'get', array('kind' => 'media_source', 'id' => $msS3['id'])))['baseUrl'] === 'https://cdn.example/');
+
+// The fake has no S3 class definitions. Use stored properties, as on an existing add-on source.
+$existingSource = $msSite->row('sources.modMediaSource', $msS3['id']);
+$sourceDefinitions = Properties::decode($existingSource['properties']);
+$sourceDefinitions['accessKeyId'] = array('name' => 'accessKeyId', 'type' => 'textfield', 'value' => 'previous-fixture-access');
+$sourceDefinitions['secretAccessKey'] = array('name' => 'secretAccessKey', 'type' => 'text-password', 'value' => 'previous-fixture-secret');
+$existingSource['properties'] = serialize($sourceDefinitions);
+$msSite->store('sources.modMediaSource', $existingSource);
+$secretSourceFields = array('baseUrl' => 'https://cdn.example/', 'accessKeyId' => 'fixture-access', 'secretAccessKey' => 'fixture-secret');
+$secretSource = $call($msAdmin, 'update', array('kind' => 'media_source', 'id' => $msS3['id'], 'fields' => array('properties' => $secretSourceFields)));
+$expectedMask = array_replace($secretSourceFields, array('accessKeyId' => '[hidden]', 'secretAccessKey' => '[hidden]'));
+ksort($expectedMask, SORT_STRING);
+foreach (array('read', 'content', 'develop') as $scope) {
+    $scopeCtx = $msCtx($scope);
+    $fetched = $call($scopeCtx, 'get', array('kind' => 'media_source', 'id' => $msS3['id']));
+    $listed = $call($scopeCtx, 'list', array('kind' => 'media_source', 'where' => array('id' => $msS3['id']), 'fields' => array('properties')));
+    $public = $msProps($fetched);
+    check("media source: {$scope} cannot read credentials in get or list", array_intersect_key($public, $expectedMask) === $expectedMask
+        && (array) $listed['items'][0]['properties'] === $public);
+}
+$adminView = $msProps($call($msAdmin, 'get', array('kind' => 'media_source', 'id' => $msS3['id'])));
+check('media source: admin retains access and masking did not change stored data', $adminView['accessKeyId'] === 'fixture-access' && $adminView['secretAccessKey'] === 'fixture-secret');
+$secretSourceDiff = $call($msAdmin, 'history_diff', array('changeset_id' => $secretSource['changeset_id']));
+check('media source: credential diff remains masked even for admin', (array) $secretSourceDiff['objects'][0]['changed']['properties']['new'] === $expectedMask);
 
 // Use actual PHP-serialized storage rather than the fake's JSON for the before snapshots.
 $define = array('caption' => array('value' => 'До'), 'apiKey' => array('value' => 'fixture-only'));
