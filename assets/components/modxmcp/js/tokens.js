@@ -191,7 +191,7 @@ Ext.onReady(function () {
     }
 
     function scopeBadge(scope) {
-        return el('span', 'k-scope k-scope-' + scope, scope);
+        return el('span', 'k-scope k-scope-' + scope, t('scope_' + scope));
     }
 
     function deniedCell(groups) {

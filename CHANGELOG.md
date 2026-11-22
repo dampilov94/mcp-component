@@ -226,6 +226,11 @@ Changes in the `2.0.0-alpha3` transport (tasks 37–42):
 - Use the manager language on the dependency graph. Include MIGX configuration and VirtualPage
   handler references in dependency and usage checks, and recognize Unicode TV chunk bindings.
 
+After alpha3:
+
+- Add the `draft_only` token scope. It can create unpublished page drafts and edit plain text in
+  drafts it owns. A manager applies or discards the drafts through the existing workflow.
+
 Stage 7 — manager:
 
 - History page (Components > modxMCP > История): everything recorded in the journal with source,

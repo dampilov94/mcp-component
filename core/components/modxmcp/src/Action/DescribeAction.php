@@ -3,6 +3,7 @@ namespace ModxMCP\Action;
 
 use ModxMCP\ApiException;
 use ModxMCP\Context;
+use ModxMCP\Draft\DraftPolicy;
 use ModxMCP\Schema;
 
 final class DescribeAction extends Action {
@@ -36,6 +37,7 @@ final class DescribeAction extends Action {
         if ($reason !== null) {
             throw new ApiException('unavailable', "Kind '{$args['kind']}' is unavailable: {$reason}.", array('reason' => $reason));
         }
-        return $kind->describe();
+        $description = $kind->describe();
+        return DraftPolicy::applies($context) ? DraftPolicy::describe($description) : $description;
     }
 }

@@ -4,6 +4,7 @@ namespace ModxMCP\Action;
 use ModxMCP\ApiException;
 use ModxMCP\Auth\Scope;
 use ModxMCP\Context;
+use ModxMCP\Draft\DraftPolicy;
 use ModxMCP\Journal\Snapshot;
 use ModxMCP\Kind\Objects;
 use ModxMCP\Schema;
@@ -28,6 +29,9 @@ final class InvokeAction extends WriteAction {
         return Schema::obj(array('kind' => Schema::str(), 'op' => Schema::str()), array('kind', 'op'), true);
     }
     public function run(array $args, Context $context) {
+        if (DraftPolicy::applies($context) && ($args['kind'] !== DraftPolicy::KIND || !in_array($args['op'], DraftPolicy::OPERATIONS, true))) {
+            throw new ApiException('forbidden_scope', 'A draft-only token can only create or list page drafts.');
+        }
         $kind = Objects::kind($context, $args['kind']);
         $ops = $kind->operations();
         if (!isset($ops[$args['op']])) { throw new ApiException('not_found', 'Unknown operation. Available: ' . implode(', ', array_keys($ops)) . '; see modx_describe.'); }

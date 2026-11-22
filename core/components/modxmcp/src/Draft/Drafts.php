@@ -226,7 +226,8 @@ final class Drafts {
         $modx = $context->modx;
         $authors = new Authors($modx);
         $items = array();
-        foreach (self::store($context)->all() as $link) {
+        $owner = DraftPolicy::applies($context) ? $context->token['id'] : null;
+        foreach (self::store($context)->all($owner) as $link) {
             $original = $modx->getObject('modResource', array('id' => $link['original_id']));
             list($changed, $names) = self::originalChanged($kind, $modx, $link);
             $items[] = array(

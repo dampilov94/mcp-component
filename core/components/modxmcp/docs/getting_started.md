@@ -99,6 +99,15 @@ and `draft_of` on a draft. A page with a draft, and a draft, cannot be deleted u
 is applied or discarded. A person can apply or discard a draft from the Drafts block on the
 component's page in the manager, which shows the same plan first.
 
+### Draft-only tokens
+
+The **Drafts only** (`draft_only`) token can read resources and run `resource.create_draft` and
+`resource.list_drafts` through `modx_invoke`. The list shows drafts created by that token.
+After creating a draft, use `modx_update` with the `draft_id` to change `pagetitle`, `longtitle`,
+`description`, `introtext`, `content` or `menutitle`. Supply plain text without markup or template
+delimiters. The draft must remain unpublished and unscheduled. Give its preview link to the manager,
+who can review the changes and apply or discard the draft in the component's **Drafts** block.
+
 ## Scenarios
 
 The site offers ready-made scenarios as MCP prompts. In Claude Code call them as commands

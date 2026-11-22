@@ -56,7 +56,7 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
   const call = (token, action, args = {}, extra = {}) => site.post(token, { v: 2, action, args, ...extra });
 
   await t.test("tokens are stored only as hashes", () => {
-    assert.equal(site.info.listed, 4);
+    assert.equal(site.info.listed, 5);
     assert.equal(site.info.leaks, false);
     assert.equal(site.info.stored_plain, 0);
     assert.match(admin, /^mcp_[0-9a-f]{64}$/);
@@ -261,6 +261,40 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
     assert.equal(response.body.meta.request_id, "read-request-000001");
     assert.equal(response.headers.get("x-mcp-replayed"), null);
   });
+});
+
+test("draft-only tokens have the same policy on both HTTP transports", { skip: available ? false : "PHP with pdo_sqlite is not available" }, async (t) => {
+  const site = await startSite();
+  t.after(site.stop);
+  const { admin, draft } = site.info.tokens;
+  const call = (token, action, args) => site.post(token, { v: 2, action, args });
+  const published = await call(admin, "create", { kind: "resource", fields: { pagetitle: "Draft-only fixture", content: "Old text", published: true } });
+  assert.equal(published.body.ok, true, JSON.stringify(published.body));
+  const originalId = published.body.result.id;
+  const created = await call(draft, "invoke", { kind: "resource", op: "create_draft", id: originalId });
+  assert.equal(created.body.ok, true, JSON.stringify(created.body));
+  const draftId = created.body.result.draft_id;
+  const refused = await call(draft, "update", { kind: "resource", id: originalId, fields: { content: "New text" } });
+  assert.equal(refused.body.error.code, "forbidden_scope");
+  const applied = await call(draft, "invoke", { kind: "resource", op: "apply_draft", id: draftId, args: { confirm: true } });
+  assert.equal(applied.body.error.code, "forbidden_scope");
+
+  const rpc = await httpClient(site, draft, "2025-11-25");
+  t.after(() => rpc.client.close());
+  const legacy = await call(draft, "capabilities", {});
+  const discovered = await rpc.client.listTools();
+  assert.deepEqual(discovered.tools.map((tool) => tool.name), legacy.body.result.tools);
+  assert.deepEqual((await rpc.client.listPrompts()).prompts, []);
+  const draftUpdate = { kind: "resource", id: draftId, fields: { content: "New text" } };
+  const write = await rpc.client.callTool({ name: "modx_update", arguments: draftUpdate });
+  assert.equal(write.isError, false, JSON.stringify(write));
+  const publish = await rpc.client.callTool({ name: "modx_update", arguments: { ...draftUpdate, fields: { published: true } } });
+  assert.equal(publish.isError, true);
+  assert.match(publish.content[0].text, /forbidden_scope/);
+  const read = async (id) => (await call(admin, "get", { kind: "resource", id })).body.result.fields;
+  assert.equal((await read(originalId)).content, "Old text");
+  assert.equal((await read(draftId)).content, "New text");
+  assert.equal((await read(draftId)).published, false);
 });
 
 test("kernel: site switches", { skip: available ? false : "PHP with pdo_sqlite is not available" }, async (t) => {

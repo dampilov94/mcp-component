@@ -79,6 +79,7 @@ if (PHP_SAPI === 'cli') {
     $tokens = array(
         'admin'   => $store->create('admin', 'admin'),
         'read'    => $store->create('reader', 'read'),
+        'draft'   => $store->create('draft editor', 'draft_only'),
         'revoked' => $store->create('revoked', 'admin'),
         'expired' => $store->create('expired', 'admin', false, array(), time() + 3600),
     );

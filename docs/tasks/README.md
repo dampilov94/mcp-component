@@ -79,7 +79,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 40 | [Replace 1.x with a fresh 2.0 installation](40-clean-install-guide.md) | `task/40-clean-install-guide` | merged |
 | 41 | [Token labels and credential reads](41-token-and-credential-guards.md) | `task/41-token-and-credential-guards` | merged |
 | 42 | [Alpha2 review follow-ups](42-review-followups.md) | `task/42-review-followups` | merged |
-| 43 | [Draft-only token](43-draft-only.md) | `task/43-draft-only` | in progress |
+| 43 | [Draft-only token](43-draft-only.md) | `task/43-draft-only` | merged |
 
 ## Doing several briefs in a row
 
@@ -144,7 +144,13 @@ Lessons from briefs 33–34:
 
 ## Handoff (2026-11-22)
 
-- Task 42 is merged into local `main`. fordev has the component source from `634cb85`.
+- Task 43 is merged into local `main`. fordev has the component source from `3a22cf5`.
+  The 14 changed files were verified, the original files were saved in
+  `.local/fordev-before-3a22cf5/`, and `.local/deploy-fordev.json` was updated. The existing
+  admin connection and manager approval path were checked after deployment. The draft-only
+  workflow was verified on disposable MODX 2.8.8 with Chrome. PHP 7.4 checks passed with
+  5511 PHP checks and 41 Node tests.
+- Task 42 was deployed to fordev from `634cb85` and merged into local `main`.
   Verified all 19 deployed files and updated `.local/deploy-fordev.json`. Backups are in
   `.local/fordev-before-634cb85/`. Both attempts' staging files were removed. MIGX, VirtualPage,
   Unicode TV bindings and MCP over HTTP passed on fordev. Chrome checks used disposable MODX

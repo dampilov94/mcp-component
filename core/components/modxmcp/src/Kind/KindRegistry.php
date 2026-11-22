@@ -3,6 +3,7 @@ namespace ModxMCP\Kind;
 
 use ModxMCP\Auth\Scope;
 use ModxMCP\Context;
+use ModxMCP\Draft\DraftPolicy;
 
 /** The object kinds this build knows. Add a class name here to add a kind. */
 final class KindRegistry {
@@ -77,6 +78,7 @@ final class KindRegistry {
 
     /** Why this token cannot read the kind, or null when it can. */
     public function blockReason(Kind $kind, Context $context) {
+        if (DraftPolicy::applies($context) && $kind->name() !== DraftPolicy::KIND) { return 'draft_only'; }
         if (!Scope::allows($context->token['scope'], $kind->readScope())) { return 'forbidden_scope'; }
         return $context->capabilities->groupBlockReason($kind->group(), $context->token);
     }

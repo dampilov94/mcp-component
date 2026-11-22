@@ -3,6 +3,7 @@ namespace ModxMCP\Prompt;
 
 use ModxMCP\Auth\Scope;
 use ModxMCP\Context;
+use ModxMCP\Draft\DraftPolicy;
 use ModxMCP\Manifest;
 
 /** The prompts this build provides. Add a class name here to add a scenario. */
@@ -40,6 +41,7 @@ final class Registry {
      * forbidden_scope or tool_unavailable (tool names the missing tool).
      */
     public function blockReason(Prompt $prompt, Context $context) {
+        if (DraftPolicy::applies($context)) { return array('tool_unavailable', 'prompt'); }
         if (!Scope::allows($context->token['scope'], $prompt->requiredScope())) { return array('forbidden_scope', null); }
         foreach ($prompt->requiredTools() as $tool) {
             $name = strncmp($tool, Manifest::TOOL_PREFIX, strlen(Manifest::TOOL_PREFIX)) === 0 ? substr($tool, strlen(Manifest::TOOL_PREFIX)) : $tool;
