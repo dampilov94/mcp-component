@@ -44,3 +44,33 @@ ownership, normal and forced conflicts, direct publication refusal, discard, and
 apply including restoration of staged prices. Run `npm run check` and `npm test` on PHP 7.4.
 Native MODX/miniShop2 must confirm properties survive an ordinary text edit and that only text
 and explicitly staged prices affect the original. Preserve existing scopes and package metadata.
+
+## Report
+
+Based on `main` at `d22a906`.
+
+- `Drafts` and `ProductDraft` create a hidden `modDocument` from an eligible product. The
+  saved base determines whether the draft is a product draft. `stage_product_prices`
+  validates the native DECIMAL(12,2) range, checks access before taking the resource lock
+  and rechecks inside the writer. The shadow's private properties hold the staged prices.
+- The resource save and bulk paths protect the shadow's publication and structure. The
+  normal update processor preserves its properties. Apply computes editorial changes from
+  the base and sends only staged prices to the existing miniShop2 relation writer. The normal
+  draft archive and journal handle discard and undo.
+- Resource reads expose `staged_prices`; the manager plan displays current and proposed
+  prices. The normal product draft has no storefront preview URL. The shared preview
+  uses the same text-only rules as before. Updated help in the component and user guide.
+- `npm run check` and `npm test` passed in WSL on PHP 7.4.33, with 5599 PHP fixture checks
+  and 41 Node tests. The architect also verified MODX 2.8.8 with miniShop2 3.0.7 and pdoTools
+  2.13.3, including property preservation, product apply and undo, and the manager price plan.
+
+## Review
+
+- On a disposable MODX 2.8.8 install with miniShop2 3.0.7, a restricted token staged a price
+  and cleared the old price. Editing text retained that state. Manager approval changed the
+  selected fields and undo restored the product and shadow with its staged values. Chrome
+  showed both current and proposed prices in the approval panel.
+- Applied and verified all 11 component files on fordev. A temporary native miniShop2 item
+  verified staging, no extra catalog product, approval with a fractional price and a zero old
+  price, and an unchanged live revision before approval. Undid and verified removal of all
+  fixture objects and refreshed the MODX cache.

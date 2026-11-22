@@ -5,6 +5,7 @@ use ModxMCP\ApiException;
 use ModxMCP\Auth\Scope;
 use ModxMCP\Context;
 use ModxMCP\Draft\DraftStore;
+use ModxMCP\Draft\ProductDraft;
 use ModxMCP\Draft\Drafts;
 use ModxMCP\Integration\MiniShop2;
 use ModxMCP\Integration\Migx;
@@ -119,15 +120,21 @@ final class ResourceKind extends Kind {
 
     public function operations() {
         $confirm = Schema::bool('Really do it. Without it only the plan is returned.');
+        $price = array('type' => 'number', 'minimum' => 0, 'maximum' => ProductDraft::MAX_PRICE);
         return array(
             'create_draft' => array(
-                'description' => 'Make a draft of this page: an unpublished copy (same parent, TV values copied, no children) that can be edited with modx_update / modx_edit_code and looked at under preview_url while the live page stays as it is. '
-                    . 'Only modDocument pages; one open draft per page. Returns {draft_id, preview_url, preview_note, base_revision}. Reversible with modx_undo.',
-                'read_only' => false, 'needs_object' => true, 'check_open' => false, 'input' => Schema::obj(), 'handler' => 'opCreateDraft'),
+                'description' => 'Make an unpublished draft of a modDocument page or miniShop2 product. A page draft copies its TV values and has a preview URL. '
+                    . 'A product draft is a hidden document with the editorial text, and prices can be staged separately. One open draft per original.',
+                'read_only' => false, 'needs_object' => true, 'check_open' => false, 'input' => Schema::obj(), 'handler' => 'opCreateDraft', 'preflight' => 'planCreateDraft'),
+            ProductDraft::STAGE_OP => array(
+                'description' => 'Stage price and/or old_price in a miniShop2 shadow draft by its draft_id. The current product prices change when the draft is applied. Returns staged_prices.',
+                'read_only' => false, 'needs_object' => true, 'input' => Schema::obj(array('price' => $price, 'old_price' => $price)),
+                'handler' => 'opStageProductPrices', 'preflight' => 'planStageProductPrices'),
             'apply_draft' => array(
                 'description' => 'Put a draft on its live page (call it on the page or on the draft). Without confirm: true it returns what would change on the page: field values (content as a line diff), TV values, and original_changed (the page was edited after the draft was made, with the changed fields). '
                     . 'Confirmed, it copies pagetitle, longtitle, description, introtext, content, menutitle, link_attributes, template, richtext and all TV values of the draft onto the page (alias, parent, published and schedule stay), removes the draft and records one changeset: modx_undo brings back the old page and the draft. '
-                    . 'If the page changed after the draft was made, the confirmed call is refused with revision_conflict unless force: true. A page open in the manager is refused like any write.',
+                    . 'For a product, the plan shows price changes and apply saves edited text and explicitly staged prices. '
+                    . 'If the original changed after the draft was made, the confirmed call is refused with revision_conflict unless force: true. A resource open in the manager is refused like any write.',
                 'read_only' => false, 'needs_object' => true, 'plan' => 'planApplyDraft', 'handler' => 'opApplyDraft',
                 'input' => Schema::obj(array('confirm' => $confirm))),
             'discard_draft' => array(
@@ -142,6 +149,18 @@ final class ResourceKind extends Kind {
 
     public function opCreateDraft(Context $context, Transaction $tx, $object, array $args): array {
         return Drafts::create($this, $context, $tx, $object, $args);
+    }
+
+    public function planCreateDraft(Context $context, $object, array $args): array {
+        return Drafts::planCreate($context, $object);
+    }
+
+    public function planStageProductPrices(Context $context, $object, array $args): array {
+        return ProductDraft::planStage($this, $context, $object, $args);
+    }
+
+    public function opStageProductPrices(Context $context, Transaction $tx, $object, array $args): array {
+        return ProductDraft::stage($this, $context, $tx, $object, $args);
     }
 
     public function planApplyDraft(Context $context, $object, array $args) {
@@ -174,11 +193,23 @@ final class ResourceKind extends Kind {
         $flags = array();
         try {
             $link = (new DraftStore($context->modx))->linkOf((int) $object->get('id'));
-            if ($link) { $flags = $link['draft_id'] === (int) $object->get('id') ? array('draft_of' => $link['original_id']) : array('draft_id' => $link['draft_id']); }
+            if ($link && $link['draft_id'] === (int) $object->get('id')) {
+                $flags = array('draft_of' => $link['original_id']);
+                if (ProductDraft::isLink($link)) {
+                    $flags['product_draft'] = true;
+                    if (MiniShop2::available($context)) { $flags['staged_prices'] = ProductDraft::stagedPrices($object) ?: new \stdClass(); }
+                }
+            } elseif ($link) {
+                $flags = array('draft_id' => $link['draft_id']);
+            }
         } catch (\Throwable $e) {
             // The markers are a convenience; a read never fails because of them.
         }
         return array($fields, $relations, $flags);
+    }
+
+    public function assertUpdatable(\modX $modx, $object, array $columns) {
+        if ($columns) { ProductDraft::assertUpdate($modx, $object, $columns); }
     }
 
     /** A page with an open draft, or a draft, is not deleted through the generic tools: the draft would be left behind or lost. */
@@ -241,6 +272,10 @@ final class ResourceKind extends Kind {
     }
 
     public function assertUndoable(\modX $modx, $key, $target) {
+        if ($target !== null) {
+            $link = (new DraftStore($modx))->ofDraft($key);
+            if (ProductDraft::isLink($link)) { ProductDraft::assertShadow($modx, $link, $target['fields']); }
+        }
         if ($target === null || $this->ms2Active()) { return; }
         foreach (array('ms2_data', 'ms2_options', 'ms2_categories') as $name) {
             if (!empty($target['relations'][$name])) {

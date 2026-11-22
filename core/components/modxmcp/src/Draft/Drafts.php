@@ -12,17 +12,19 @@ use ModxMCP\Kind\ResourceKind;
 use ModxMCP\Write\Transaction;
 
 /**
- * Resource drafts: the operations create_draft, apply_draft, discard_draft and list_drafts of the kind resource.
+ * Resource drafts: the create, apply, discard and list operations of the resource kind.
  *
  * A draft is an unpublished copy of a page (made the way modx_duplicate copies it). The live page is not touched until the
  * draft is applied: then the editorial fields and the TV values go onto the live page through the normal update path, and the
  * draft resource is removed the way an undo removes an object (not through the delete processor: nothing lands in the trash).
+ * A product draft stores only the editorial text and explicitly staged prices in its shadow document.
  */
 final class Drafts {
     /** What an applied draft copies to the original. Everything else (alias, parent, published, schedule, …) stays as it is. */
     const FIELDS = array('pagetitle', 'longtitle', 'description', 'introtext', 'content', 'menutitle', 'link_attributes', 'template', 'richtext');
 
     const PREVIEW_NOTE = 'The draft is an unpublished page. MODX shows it only to a user who is logged in to the manager in the same browser; everyone else gets the "page not found" page.';
+    const PRODUCT_PREVIEW_NOTE = 'Review this product draft’s changes in the manager. Share preview can show its changed text on HTTPS sites.';
 
     private static function store(Context $context) {
         return new DraftStore($context->modx);
@@ -30,27 +32,40 @@ final class Drafts {
 
     // ---- create_draft ----
 
-    private static function assertDraftable(ResourceKind $kind, DraftStore $store, $original) {
+    private static function assertDraftable(Context $context, DraftStore $store, $original) {
         $id = (int) $original->get('id');
         $class = (string) $original->get('class_key');
-        if ($class !== 'modDocument') {
-            throw new ApiException('validation_failed', "Resource {$id} has the class {$class}: drafts are made for modDocument pages only (a copy would not carry the data that class keeps outside the resource).");
+        if ($class !== 'modDocument' && $class !== 'msProduct') {
+            throw new ApiException('validation_failed', "Resource {$id} has the class {$class}: drafts support pages (modDocument) and miniShop2 products (msProduct).");
         }
         if ((bool) $original->get('deleted')) { throw new ApiException('validation_failed', "Resource {$id} is in the trash; restore it before making a draft."); }
         $link = $store->linkOf($id);
         if ($link && $link['draft_id'] === $id) { throw new ApiException('validation_failed', "Resource {$id} is itself a draft of resource {$link['original_id']}; a draft cannot have a draft."); }
         if ($link) { throw new ApiException('validation_failed', "Resource {$id} already has the open draft {$link['draft_id']}; apply or discard it first."); }
+        if ($class === 'msProduct') { ProductDraft::originalData($context, $original); }
+    }
+
+    public static function planCreate(Context $context, $original) {
+        if ($original->get('class_key') === 'msProduct') { self::assertDraftable($context, self::store($context), $original); }
+        return array();
     }
 
     public static function create(ResourceKind $kind, Context $context, Transaction $tx, $original, array $args) {
         $modx = $context->modx;
         $store = self::store($context);
         $id = (int) $original->get('id');
-        self::assertDraftable($kind, $store, $original);
+        self::assertDraftable($context, $store, $original);
+        $product = $original->get('class_key') === 'msProduct';
 
         $values = array();
-        foreach ($kind->fields() as $field => $definition) {
-            if (empty($definition['read_only']) && empty($definition['derived']) && empty($definition['write_only'])) { $values[$field] = $kind->value($original, $field); }
+        if ($product) {
+            foreach (DraftPolicy::FIELDS as $field) { $values[$field] = $kind->value($original, $field); }
+            $values += array('class_key' => 'modDocument', 'template' => 0, 'parent' => (int) $original->get('parent'),
+                'context_key' => (string) $original->get('context_key'));
+        } else {
+            foreach ($kind->fields() as $field => $definition) {
+                if (empty($definition['read_only']) && empty($definition['derived']) && empty($definition['write_only'])) { $values[$field] = $kind->value($original, $field); }
+            }
         }
         $alias = (string) $original->get('alias');
         // The alias carries the draft's id, which is known only once it exists: a unique placeholder first.
@@ -60,20 +75,25 @@ final class Drafts {
         ));
         $columns = Objects::normalize($kind, $values, true);
         // As modx_duplicate copies a resource: the TV values (resource groups are not writable through the API, so not copied).
-        $relations = array('tvs' => (array) $kind->storedRelation($modx, $original, 'tvs'));
+        $relations = $product ? array() : array('tvs' => (array) $kind->storedRelation($modx, $original, 'tvs'));
         Objects::assertWritableRelations($kind, $relations, $context);
 
         $base = Snapshot::capture($modx, $kind, $id);
         $draftId = (int) Objects::save($context, $tx, $kind, null, $columns, $relations);
         $final = ($alias !== '' ? mb_substr($alias, 0, 200, 'UTF-8') . '-draft-' : 'draft-') . $draftId;
         Objects::save($context, $tx, $kind, $draftId, array('alias' => $final), array());
+        if ($product) {
+            ProductDraft::assertShadow($modx, array('draft_id' => $draftId, 'base_state' => $base),
+                $kind->objectColumns(self::load($kind, $context, $draftId)));
+        }
 
         // Last: a draft without a link is a plain page, a link without a draft is dropped by reconcile().
         $store->add($id, $draftId, time(), $context->token['id'], $context->actingUserId(), (string) Snapshot::revision($base), $base);
         return array(
-            'draft_id' => $draftId, 'preview_url' => self::previewUrl($modx, $draftId), 'preview_note' => self::PREVIEW_NOTE,
+            'draft_id' => $draftId, 'preview_url' => $product ? '' : self::previewUrl($modx, $draftId),
+            'preview_note' => $product ? self::PRODUCT_PREVIEW_NOTE : self::PREVIEW_NOTE,
             'base_revision' => Snapshot::revision($base), 'summary' => "create draft {$draftId} of resource {$id}",
-        );
+        ) + ($product ? array('product_draft' => true) : array());
     }
 
     private static function previewUrl(\modX $modx, $draftId) {
@@ -137,7 +157,13 @@ final class Drafts {
         $link = self::linkFor(self::store($context), $object->get('id'));
         $original = self::load($kind, $context, $link['original_id']);
         $draft = self::load($kind, $context, $link['draft_id']);
-        list($fields, $tvs) = self::differences($kind, $modx, $original, $draft);
+        $product = ProductDraft::isLink($link);
+        if ($product) {
+            list(, $fields, , $prices) = ProductDraft::changes($kind, $context, $link, $original, $draft);
+            $tvs = array();
+        } else {
+            list($fields, $tvs) = self::differences($kind, $modx, $original, $draft);
+        }
         list($changed, $names) = self::originalChanged($kind, $modx, $link);
         $plan = array(
             'performed' => false, 'original_id' => $link['original_id'], 'draft_id' => $link['draft_id'],
@@ -148,7 +174,7 @@ final class Drafts {
                 . ($changed ? ' The live page was changed after the draft was made: confirming needs force: true and overwrites those changes in the fields above.' : ''),
         );
         $open = Objects::openPlan($context, $kind, $link['original_id']);
-        return $plan + $open;
+        return $plan + $open + ($product ? array('product_draft' => true, 'prices' => $prices ?: new \stdClass()) : array());
     }
 
     public static function apply(ResourceKind $kind, Context $context, Transaction $tx, $object, array $args) {
@@ -162,6 +188,10 @@ final class Drafts {
         foreach (array($originalId, $draftId) as $other) {
             if ($other !== (int) $object->get('id')) { Objects::assertNotOpen($context, $kind, $other, array('force' => $force)); }
         }
+        $original = self::load($kind, $context, $originalId);
+        $draft = self::load($kind, $context, $draftId);
+        $product = ProductDraft::isLink($link);
+        if ($product) { list($values, $fields, $prices) = ProductDraft::changes($kind, $context, $link, $original, $draft); }
         list($changed, $names, $current) = self::originalChanged($kind, $modx, $link);
         if ($changed && !$force) {
             throw new ApiException('revision_conflict', "Resource {$originalId} was changed after draft {$draftId} was made"
@@ -170,24 +200,26 @@ final class Drafts {
         }
         if ($changed) { $context->warnings[] = "Resource {$originalId} was changed after the draft was made; applied anyway because force is set."; }
 
-        $original = self::load($kind, $context, $originalId);
-        $draft = self::load($kind, $context, $draftId);
-        list($fields, $tvDiff) = self::differences($kind, $modx, $original, $draft);
-
-        $values = array();
-        foreach (self::FIELDS as $field) { $values[$field] = $kind->value($draft, $field); }
-        $columns = Objects::normalize($kind, $values, false);
-        // Every TV of the draft's template: its stored value, or its default (which clears the value on the original).
-        $stored = (array) $kind->storedRelation($modx, $draft, 'tvs');
-        $tvs = array();
-        foreach ($kind->templateTvs($modx, $draft) as $name => $tv) { $tvs[$name] = array_key_exists($name, $stored) ? $stored[$name] : $tv[1]; }
-        Objects::save($context, $tx, $kind, $originalId, $columns, array('tvs' => $tvs));
+        if ($product) {
+            $tvDiff = array();
+            $relations = $prices ? array('ms2_data' => $prices) : array();
+        } else {
+            list($fields, $tvDiff) = self::differences($kind, $modx, $original, $draft);
+            $values = array();
+            foreach (self::FIELDS as $field) { $values[$field] = $kind->value($draft, $field); }
+            // Every TV of the draft's template: its stored value, or its default (which clears the value on the original).
+            $stored = (array) $kind->storedRelation($modx, $draft, 'tvs');
+            $tvs = array();
+            foreach ($kind->templateTvs($modx, $draft) as $name => $tv) { $tvs[$name] = array_key_exists($name, $stored) ? $stored[$name] : $tv[1]; }
+            $relations = array('tvs' => $tvs);
+        }
+        if ($values || $relations) { Objects::save($context, $tx, $kind, $originalId, Objects::normalize($kind, $values, false), $relations); }
 
         self::removeDraft($kind, $context, $draftId);
         return array(
             'original_id' => $originalId, 'draft_id' => $draftId, 'applied' => true, 'applied_fields' => array_keys($fields), 'applied_tvs' => array_keys($tvDiff),
             'summary' => "apply draft {$draftId} to resource {$originalId}",
-        );
+        ) + ($product ? array('applied_prices' => array_keys($prices)) : array());
     }
 
     /** Remove the draft resource the way an undo removes an object: no trash, no processors. It is touched already. */
@@ -213,7 +245,9 @@ final class Drafts {
     public static function discard(ResourceKind $kind, Context $context, Transaction $tx, $object, array $args) {
         $link = self::linkFor(self::store($context), $object->get('id'));
         $draftId = $link['draft_id'];
-        if ($tx->touch($kind, $draftId) === null) { throw new ApiException('not_found', 'The draft no longer exists.'); }
+        $state = $tx->touch($kind, $draftId);
+        if ($state === null) { throw new ApiException('not_found', 'The draft no longer exists.'); }
+        if (ProductDraft::isLink($link)) { ProductDraft::assertShadow($context->modx, $link, $state['fields']); }
         Objects::assertNotOpen($context, $kind, $draftId, array('force' => !empty($args['force'])));
         self::removeDraft($kind, $context, $draftId);
         return array('original_id' => $link['original_id'], 'draft_id' => $draftId, 'discarded' => true, 'summary' => "discard draft {$draftId} of resource {$link['original_id']}");
@@ -229,14 +263,15 @@ final class Drafts {
         $owner = DraftPolicy::applies($context) ? $context->token['id'] : null;
         foreach (self::store($context)->all($owner) as $link) {
             $original = $modx->getObject('modResource', array('id' => $link['original_id']));
+            $product = ProductDraft::isLink($link);
             list($changed, $names) = self::originalChanged($kind, $modx, $link);
             $items[] = array(
                 'original_id' => $link['original_id'], 'original_title' => (string) $original->get('pagetitle'), 'draft_id' => $link['draft_id'],
                 'created_at' => $link['created_at'], 'time' => date('c', $link['created_at']),
                 'author' => $authors->name(array('source' => $link['user_id'] !== null ? 'manager' : 'mcp', 'token_id' => $link['token_id'], 'user_id' => $link['user_id'])),
-                'preview_url' => self::previewUrl($modx, $link['draft_id']),
+                'preview_url' => $product ? '' : self::previewUrl($modx, $link['draft_id']),
                 'original_changed' => $changed, 'original_changed_fields' => $names,
-            );
+            ) + ($product ? array('product_draft' => true) : array());
         }
         return $items;
     }

@@ -7303,7 +7303,7 @@ check('draft-only: advertises just the permitted tools and resource kind', $draf
     && $draftCapabilities['tools'] === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_update', 'modx_invoke', 'modx_resource_tree')
     && $draftCapabilities['tools'] === array_column(Manifest::tools($draftEditor), 'name') && Manifest::prompts($draftEditor) === array());
 $draftDescription = $call($draftEditor, 'describe', array('kind' => 'resource'));
-check('draft-only: describes only available operations and marks non-editorial fields read-only', array_column($draftDescription['operations'], 'op') === array('create_draft', 'list_drafts')
+check('draft-only: describes only available operations and marks non-editorial fields read-only', array_column($draftDescription['operations'], 'op') === array('create_draft', 'stage_product_prices', 'list_drafts')
     && array_column(array_filter($draftDescription['fields'], function ($field) { return empty($field['read_only']); }), 'name')
         === array('pagetitle', 'longtitle', 'description', 'introtext', 'menutitle', 'content')
     && !in_array(true, array_column($draftDescription['relations'], 'writable'), true));
@@ -7462,6 +7462,147 @@ check('draft preview: undo restores the draft without reviving its old share', $
     && $preview->redeem($beforeDiscardToken, $previewTime) === null && $preview->redeem($preview->issue($previewId, $previewTime), $previewTime) === $previewFields);
 $dSite->pdo->prepare('UPDATE modx_modxmcp_drafts SET base_state = NULL WHERE draft_id = ?')->execute(array($previewId));
 $previewUnavailable('draft preview: a draft without a saved base snapshot cannot issue a link');
+
+// Product drafts use the same draft links and manager approval with independent staged prices.
+$pdOwner = $sActor('draft_only', array('id' => 701));
+$pdOther = $sActor('draft_only', array('id' => 702));
+$pdTemplate = 9101;
+$sSite->store('modTemplate', array('id' => $pdTemplate, 'templatename' => 'Product template'));
+$sSite->store('modTemplateVar', array('id' => 9101, 'name' => 'pd_label', 'default_text' => '', 'caption' => '', 'type' => 'text', 'category' => 0));
+$sSite->store('modTemplateVarTemplate', array('tmplvarid' => 9101, 'templateid' => $pdTemplate, 'rank' => 0));
+$sSite->store('modUser', array('id' => 82, 'username' => 'Manager', 'primary_group' => 0));
+$pdProduct = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('class_key' => 'msProduct',
+    'parent' => $catPhones, 'pagetitle' => 'Черновик товара', 'content' => 'Original text', 'description' => 'Original description',
+    'template' => $pdTemplate, 'published' => true), 'relations' => array('tvs' => array('pd_label' => 'Original TV'),
+    'ms2_data' => array('price' => 300, 'old_price' => 600, 'article' => 'DRAFT-45',
+    'tags' => array('existing')), 'ms2_categories' => array($catAccessories))));
+$pdOriginalId = $pdProduct['id'];
+$pdRead = function ($id) use ($call, $sAdmin) { return $call($sAdmin, 'get', array('kind' => 'resource', 'id' => $id)); };
+$pdOriginal = $pdRead($pdOriginalId);
+$pdTablesBefore = $sTables();
+$pdCreate = $dInvoke($pdOwner, 'create_draft', $pdOriginalId);
+$pdId = $pdCreate['draft_id'];
+$pdShadow = $sSite->row('modResource', $pdId);
+check('product draft: an unpublished hidden modDocument with the original context and parent', $pdCreate['product_draft'] && $pdCreate['preview_url'] === ''
+    && $pdShadow['class_key'] === 'modDocument' && (int) $pdShadow['template'] === 0 && (int) $pdShadow['parent'] === $catPhones
+    && $pdShadow['context_key'] === $sSite->row('modResource', $pdOriginalId)['context_key'] && !$pdShadow['published'] && $pdShadow['hidemenu']
+    && !$pdShadow['searchable'] && !(int) $pdShadow['pub_date'] && !(int) $pdShadow['unpub_date']);
+check('product draft: creating a shadow keeps the original revision and adds no miniShop2 rows', $pdRead($pdOriginalId)['revision'] === $pdOriginal['revision']
+    && $sTables() === $pdTablesBefore && !$sSite->getCount('modTemplateVarResource', array('contentid' => $pdId)));
+$sSite->store('modResource', array('properties' => '{"custom":{"keep":"yes"}}') + $pdShadow);
+$pdStageOp = 'stage_product_prices';
+$pdStagePlan = $dInvoke($sActor('draft_only', array('id' => 701, 'plan_only' => true)), $pdStageOp, $pdId, array('price' => 123.45));
+check('product draft: plan-only stages nothing and returns its price proposal', $pdStagePlan['planned'] && $pdStagePlan['staged_prices'] === array('price' => 123.45)
+    && (array) $pdRead($pdId)['staged_prices'] === array());
+$pdStaged = $dInvoke($pdOwner, $pdStageOp, $pdId, array('price' => 375));
+$pdStagedRead = $pdRead($pdId);
+check('product draft: explicitly staged prices and shadow revision are returned by stage, get and list', $pdStaged['staged_prices'] === array('price' => 375.0)
+    && $pdStagedRead['staged_prices'] === $pdStaged['staged_prices'] && $pdStagedRead['revision'] === $pdStaged['revision']
+    && $call($pdOwner, 'list', array('kind' => 'resource', 'where' => array('id' => $pdId)))['items'][0]['staged_prices'] === $pdStaged['staged_prices']);
+$call($pdOwner, 'update', array('kind' => 'resource', 'id' => $pdId, 'fields' => array('content' => 'Новый текст')));
+$pdProperties = $sSite->getObject('modResource', $pdId)->get('properties');
+check('product draft: normal text edit preserves staged and unrelated native properties', $pdRead($pdId)['staged_prices'] === array('price' => 375.0)
+    && $pdProperties['custom'] === array('keep' => 'yes') && $pdRead($pdOriginalId)['revision'] === $pdOriginal['revision']);
+$pdSaved = $pdRead($pdId);
+$sSite->lockResource($pdId, 82);
+$e = throws('product draft: an open manager draft prevents staging', ApiException::class, function () use ($dInvoke, $pdOwner, $pdStageOp, $pdId) {
+    $dInvoke($pdOwner, $pdStageOp, $pdId, array('price' => 1));
+});
+check('product draft: manager lock returns locked', $e && $e->errorCode === 'locked');
+$e = throws('product draft: a draft-only token cannot force staging past the manager lock', ApiException::class, function () use ($dInvoke, $pdOwner, $pdStageOp, $pdId) {
+    $dInvoke($pdOwner, $pdStageOp, $pdId, array('price' => 1), array('force' => true));
+});
+check('product draft: force by a restricted token is forbidden', $e && $e->errorCode === 'forbidden_scope');
+$sSite->unlockResource($pdId);
+foreach (array(
+    array($pdOwner, $pdStageOp, $pdOriginalId, array('price' => 1), 'forbidden_scope'),
+    array($pdOther, $pdStageOp, $pdId, array('price' => 1), 'forbidden_scope'),
+    array($pdOwner, $pdStageOp, $pdId, array('price' => -1), 'validation_failed'),
+    array($pdOwner, $pdStageOp, $pdId, array('price' => 1.001), 'validation_failed'),
+    array($pdOwner, $pdStageOp, $pdId, array('price' => 10000000000), 'validation_failed'),
+    array($pdOwner, $pdStageOp, $pdId, array('old_price' => '2'), 'validation_failed'),
+    array($pdOwner, $pdStageOp, $pdId, array(), 'validation_failed'),
+    array($sActor('content', array('denied_groups' => array('minishop2'))), $pdStageOp, $pdId, array('price' => 2), 'unavailable'),
+    array($pdOwner, 'apply_draft', $pdId, array('confirm' => true), 'forbidden_scope'),
+    array($pdOwner, 'discard_draft', $pdId, array('confirm' => true), 'forbidden_scope'),
+) as $index => list($pdActor, $pdOp, $pdTarget, $pdArgs, $pdCode)) {
+    $e = throws('product draft: invalid stage or write request ' . $index, ApiException::class, function () use ($dInvoke, $pdActor, $pdOp, $pdTarget, $pdArgs) {
+        $dInvoke($pdActor, $pdOp, $pdTarget, $pdArgs);
+    });
+    check('product draft: expected rejection ' . $index, $e && $e->errorCode === $pdCode);
+}
+foreach (array(array('published' => true), array('pub_date' => '2030-11-08'), array('class_key' => 'msProduct')) as $pdFields) {
+    throws('product draft: rejects publishing, scheduling or conversion through update', ApiException::class, function () use ($call, $sEditor, $pdId, $pdFields) {
+        $call($sEditor, 'update', array('kind' => 'resource', 'id' => $pdId, 'fields' => $pdFields));
+    });
+}
+foreach (array(false, true) as $pdDry) {
+    throws('product draft: bulk publish refuses the shadow even when forced', ApiException::class, function () use ($call, $sEditor, $pdId, $pdDry) {
+        $call($sEditor, 'bulk_resources', array('operation' => 'publish', 'ids' => array($pdId), 'dry_run' => $pdDry, 'force' => true));
+    });
+}
+check('product draft: all denied requests left the shadow and live item unchanged', $pdRead($pdId)['revision'] === $pdSaved['revision']
+    && $pdRead($pdOriginalId)['revision'] === $pdOriginal['revision']);
+
+$pdService = new DraftService($sSite, $sSite->getObject('modUser', 82));
+$pdPlan = $pdService->apply($pdId);
+check('product draft: manager review shows only the staged price and changed text', $pdPlan['prices'] === array('price' => array('old' => 300.0, 'new' => 375.0))
+    && array_keys($pdPlan['changes']) === array('content') && (array) $pdPlan['tvs'] === array());
+$call($sEditor, 'update', array('kind' => 'resource', 'id' => $pdOriginalId, 'fields' => array('description' => 'Other edit'),
+    'relations' => array('ms2_data' => array('old_price' => 850))));
+$pdBeforeApply = $pdRead($pdOriginalId);
+$e = throws('product draft: the full product revision still detects conflicts', ApiException::class, function () use ($pdService, $pdId) { $pdService->apply($pdId, true); });
+check('product draft: external text or product data changes require force', $e && $e->errorCode === 'revision_conflict');
+$sSite->options['modxmcp.disabled_groups'] = 'minishop2';
+$e = throws('product draft: force cannot apply with the integration disabled', ApiException::class, function () use ($dInvoke, $sActor, $pdId) {
+    $dInvoke($sActor('admin'), 'apply_draft', $pdId, array('confirm' => true), array('force' => true));
+});
+check('product draft: disabled group is the reason for refusal', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'disabled_group');
+unset($sSite->options['modxmcp.disabled_groups']);
+$pdApplied = $pdService->apply($pdId, true, true);
+$pdAfterApply = $pdRead($pdOriginalId);
+$pdExpectedData = array_replace((array) $pdBeforeApply['relations']['ms2_data'], array('price' => 375.0));
+check('product draft: forced apply preserves unstaged price, product data, other text and relations', $pdApplied['applied_prices'] === array('price')
+    && $pdAfterApply['fields']['description'] === 'Other edit' && $pdAfterApply['fields']['content'] === 'Новый текст'
+    && $pdAfterApply['fields']['class_key'] === 'msProduct' && $pdAfterApply['fields']['published'] && $pdAfterApply['fields']['template'] === $pdTemplate
+    && $pdAfterApply['relations']['tvs'] === array('pd_label' => 'Original TV') && $pdAfterApply['relations']['ms2_data'] === $pdExpectedData
+    && $pdAfterApply['relations']['ms2_categories'] === $pdBeforeApply['relations']['ms2_categories'] && $sSite->row('modResource', $pdId) === null);
+$call($sAdmin, 'undo', array('changeset_id' => $pdApplied['changeset_id'], 'confirm' => true));
+check('product draft: undo restores original revision, link and staged shadow prices', $pdRead($pdOriginalId)['revision'] === $pdBeforeApply['revision']
+    && $pdRead($pdId)['staged_prices'] === array('price' => 375.0) && $pdRead($pdId)['draft_of'] === $pdOriginalId
+    && $sSite->getObject('modResource', $pdId)->get('properties')['custom'] === array('keep' => 'yes'));
+$pdService->discard($pdId, true);
+check('product draft: discard leaves the live product unchanged', $pdRead($pdOriginalId)['revision'] === $pdBeforeApply['revision']
+    && $sSite->row('modResource', $pdId) === null);
+
+$pdPriceOnly = $dInvoke($pdOwner, 'create_draft', $pdOriginalId)['draft_id'];
+$dInvoke($pdOwner, $pdStageOp, $pdPriceOnly, array('old_price' => 0));
+$pdPriceApply = $pdService->apply($pdPriceOnly, true);
+check('product draft: a price-only apply writes zero with no editorial changes', $pdPriceApply['applied_fields'] === array()
+    && $pdPriceApply['applied_prices'] === array('old_price') && $pdRead($pdOriginalId)['relations']['ms2_data']['old_price'] === 0.0);
+$call($sAdmin, 'undo', array('changeset_id' => $pdPriceApply['changeset_id'], 'confirm' => true));
+check('product draft: price-only undo restores the previous price and staged zero', $pdRead($pdOriginalId)['relations']['ms2_data']['old_price'] === 850.0
+    && $pdRead($pdPriceOnly)['staged_prices'] === array('old_price' => 0.0));
+$pdSafeShadow = $sSite->row('modResource', $pdPriceOnly);
+$sSite->store('modResource', array('published' => 1) + $pdSafeShadow);
+$e = throws('product draft: forcing approval cannot use a published shadow', ApiException::class, function () use ($pdService, $pdPriceOnly) {
+    $pdService->apply($pdPriceOnly, true, true);
+});
+check('product draft: unsafe shadow is refused', $e && $e->errorCode === 'validation_failed');
+$sSite->store('modResource', $pdSafeShadow);
+$pdLiveRow = $sSite->row('modResource', $pdOriginalId);
+$sSite->store('modResource', array('class_key' => 'modDocument') + $pdLiveRow);
+$e = throws('product draft: forcing approval cannot use a converted original', ApiException::class, function () use ($pdService, $pdPriceOnly) {
+    $pdService->apply($pdPriceOnly, true, true);
+});
+check('product draft: converted original is refused', $e && $e->errorCode === 'validation_failed');
+$sSite->store('modResource', $pdLiveRow);
+$sSite->removeCollection('msProductData', array('id' => $pdOriginalId));
+$e = throws('product draft: forcing approval cannot recreate missing product data', ApiException::class, function () use ($pdService, $pdPriceOnly) {
+    $pdService->apply($pdPriceOnly, true, true);
+});
+check('product draft: missing original data still leaves the shadow intact', $e && $e->errorCode === 'validation_failed'
+    && $sSite->getCount('modResource', array('id' => $pdPriceOnly)) === 1);
 
 // --- Fenom (pdoTools): references, syntax check ---
 use ModxMCP\Code\Fenom;

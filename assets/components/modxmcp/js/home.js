@@ -152,7 +152,8 @@ Ext.onReady(function () {
                 add(panel, el('h4', '', dt('plan_apply', { title: draft.original_title })));
                 var fields = Object.keys(plan.changes || {});
                 var tvs = Object.keys(plan.tvs || {});
-                if (!fields.length && !tvs.length) { add(panel, el('div', 'o-muted', dt('plan_no_changes'))); }
+                var prices = Object.keys(plan.prices || {});
+                if (!fields.length && !tvs.length && !prices.length) { add(panel, el('div', 'o-muted', dt('plan_no_changes'))); }
                 if (fields.length) {
                     add(panel, el('h4', '', dt('plan_fields')));
                     fields.forEach(function (name) {
@@ -173,6 +174,16 @@ Ext.onReady(function () {
                         var change = plan.tvs[name];
                         var row = el('div', 'd-change');
                         add(row, el('b', '', name), el('div', 'd-old', dt('plan_old') + ': ' + shown(change.old)), el('div', 'd-new', dt('plan_new') + ': ' + shown(change['new'])));
+                        add(panel, row);
+                    });
+                }
+                if (prices.length) {
+                    add(panel, el('h4', '', dt('plan_prices')));
+                    prices.forEach(function (name) {
+                        var change = plan.prices[name];
+                        var row = el('div', 'd-change');
+                        add(row, el('b', '', dt('price_' + name)), el('div', 'd-old', dt('plan_old') + ': ' + shown(change.old)),
+                            el('div', 'd-new', dt('plan_new') + ': ' + shown(change['new'])));
                         add(panel, row);
                     });
                 }
