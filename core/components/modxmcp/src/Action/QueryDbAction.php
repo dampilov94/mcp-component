@@ -73,7 +73,8 @@ final class QueryDbAction extends Action {
 
     /**
      * Split SQL into tokens, leaving out whitespace and comments. Each token is [type, lowercase value, paren depth] with the
-     * types word, qword (backtick), dq (double quotes), str, sym. Refuses what cannot be read with certainty: executable comments, hints,
+     * types word, qword (backtick), dq (double quotes), str, sym. Each token also has its start and end byte offsets.
+     * Refuses what cannot be read with certainty: executable comments, hints,
      * unterminated strings or comments.
      * @param bool $backslash whether a backslash escapes inside string literals (MySQL default; off with NO_BACKSLASH_ESCAPES)
      */
@@ -98,7 +99,7 @@ final class QueryDbAction extends Action {
                     $j++;
                 }
                 // A double-quoted text is an identifier when the server runs in ANSI_QUOTES mode: its content is checked as a name too.
-                $tokens[] = $c === '"' ? array('dq', mb_strtolower(trim(str_replace(array('""', '\\'), array('"', ''), substr($sql, $i + 1, $j - $i - 1))), 'UTF-8'), $depth) : array('str', '', $depth);
+                $tokens[] = ($c === '"' ? array('dq', mb_strtolower(trim(str_replace(array('""', '\\'), array('"', ''), substr($sql, $i + 1, $j - $i - 1))), 'UTF-8'), $depth) : array('str', '', $depth)) + array(3 => $i, 4 => $j + 1);
                 $i = $j + 1;
                 continue;
             }
@@ -114,7 +115,7 @@ final class QueryDbAction extends Action {
                     $name .= $sql[$j];
                     $j++;
                 }
-                $tokens[] = array('qword', mb_strtolower(trim($name), 'UTF-8'), $depth);
+                $tokens[] = array('qword', mb_strtolower(trim($name), 'UTF-8'), $depth, $i, $j + 1);
                 $i = $j + 1;
                 continue;
             }
@@ -136,13 +137,13 @@ final class QueryDbAction extends Action {
             if (preg_match('/[A-Za-z0-9_$]/', $c) || $o >= 128) {
                 $j = $i;
                 while ($j < $length && (preg_match('/[A-Za-z0-9_$]/', $sql[$j]) || ord($sql[$j]) >= 128)) { $j++; }
-                $tokens[] = array('word', mb_strtolower(substr($sql, $i, $j - $i), 'UTF-8'), $depth);
+                $tokens[] = array('word', mb_strtolower(substr($sql, $i, $j - $i), 'UTF-8'), $depth, $i, $j);
                 $i = $j;
                 continue;
             }
-            if ($c === '(') { $tokens[] = array('sym', '(', $depth); $depth++; }
-            elseif ($c === ')') { $depth = max(0, $depth - 1); $tokens[] = array('sym', ')', $depth); }
-            else { $tokens[] = array('sym', $c, $depth); }
+            if ($c === ')') { $depth = max(0, $depth - 1); }
+            $tokens[] = array('sym', $c, $depth, $i, $i + 1);
+            if ($c === '(') { $depth++; }
             $i++;
         }
         return $tokens;
@@ -236,6 +237,44 @@ final class QueryDbAction extends Action {
         catch (\Throwable $e) { return false; }
     }
 
+    /** Bound the rows sent by MySQL itself, including when an explicit LIMIT overrides any session default. */
+    private static function boundedQuery($sql, array $params, $cap) {
+        $result = null;
+        foreach (array(true, false) as $backslash) {
+            $tokens = self::tokens($sql, $backslash);
+            if (end($tokens)[0] === 'sym' && end($tokens)[1] === ';') { array_pop($tokens); }
+            $end = end($tokens)[4];
+            $query = substr($sql, 0, $end) . ' LIMIT ' . $cap;
+            $bound = $params;
+            foreach ($tokens as $i => $token) {
+                if ($token[0] !== 'word' || $token[1] !== 'limit' || $token[2] !== 0) { continue; }
+                // LIMIT offset,count and LIMIT count OFFSET offset both keep the caller's offset.
+                $count = $i + ((isset($tokens[$i + 2]) && array_slice($tokens[$i + 2], 0, 2) === array('sym', ',')) ? 3 : 1);
+                $value = $tokens[$count] ?? array('', '');
+                $query = substr($sql, 0, $end);
+                if ($value[0] === 'sym' && $value[1] === '?') {
+                    $position = count(array_filter(array_slice($tokens, 0, $count), function ($part) {
+                        return $part[0] === 'sym' && $part[1] === '?';
+                    }));
+                    $number = $bound[$position];
+                    if (!(is_int($number) || is_string($number)) || !ctype_digit((string) $number)) {
+                        throw new ApiException('validation_failed', 'The LIMIT count must be a non-negative integer.');
+                    }
+                    $bound[$position] = min((int) $number, $cap);
+                } elseif ($value[0] === 'word' && ctype_digit($value[1])) {
+                    $query = substr_replace($query, (string) min((int) $value[1], $cap), $value[3], $value[4] - $value[3]);
+                } else {
+                    throw new ApiException('validation_failed', 'Use an integer or a placeholder for the LIMIT count.');
+                }
+                break;
+            }
+            $next = array($query, $bound);
+            if ($result !== null && $result !== $next) { throw new ApiException('validation_failed', 'Cannot apply a row limit to an ambiguous query.'); }
+            $result = $next;
+        }
+        return $result;
+    }
+
     public function run(array $args, Context $context) {
         $modx = $context->modx;
         $prefix = (string) $modx->getOption('table_prefix', null, '');
@@ -243,7 +282,6 @@ final class QueryDbAction extends Action {
         $sql = str_replace('{prefix}', $prefix, (string) $args['sql']);
         $admin = Scope::allows($context->token['scope'], Scope::ADMIN);
         $tokens = self::guard($sql, $prefix, $admin);
-        $sql = rtrim(rtrim($sql), ';');  // the guard allowed at most one ; and only at the very end (comments may follow it)
         $params = isset($args['params']) ? array_values($args['params']) : array();
         $placeholders = count(array_filter($tokens, function ($token) { return $token[0] === 'sym' && $token[1] === '?'; }));
         if ($placeholders !== count($params)) {
@@ -256,6 +294,8 @@ final class QueryDbAction extends Action {
         $driver = 'unknown';
         try { if ($pdo) { $driver = (string) $pdo->getAttribute(\PDO::ATTR_DRIVER_NAME); } } catch (\Throwable $e) { /* unknown */ }
         $mysql = $driver === 'mysql';
+        if ($mysql) { list($sql, $params) = self::boundedQuery($sql, $params, $limit + 1); }
+        else { $sql = rtrim(rtrim($sql), ';'); }
         $inTransaction = false;
         $readOnly = false;
         $timeout = null;
