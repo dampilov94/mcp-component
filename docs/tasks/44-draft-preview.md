@@ -48,3 +48,24 @@ field, missing base state, unsafe state, changed or removed draft, UTC TTL and H
 with locally generated fixtures, and HTTPS and permission gating. Architect should check the
 native manager and preview flow with a local MODX fixture before integrating. On an HTTP dev
 stand only check normal routes, files and the explicit HTTPS requirement.
+
+## Report
+
+Based on `main` at `0473177`. Implementation commit `5a96106`.
+
+- The manager drafts table requests a URL explicitly through a POST processor. The processor
+  checks the manager session and `settings`. The configured connection address supplies the
+  preview endpoint and must match the site's HTTPS origin. Issuance and redemption respect
+  the existing component enabled setting.
+- `DraftPreview` checks open draft state and compares the editorial fields with the saved
+  base. Its 30-minute signature covers the exact draft link, the draft ID and the hash of
+  the output and draft row. `PreviewKey` provisions its guarded key from the manager path
+  and reads it without writes during redemption. No database migration is required.
+- The public asset uses MODX configuration and models without initializing a context or
+  session. It serves a static HTTPS shell that removes the fragment before posting it and
+  renders only text. Invalid requests get the same unavailable response. No changes to the
+  MCP contract or package version.
+- `npm run check` and `npm test` passed on PHP 7.4.33 in WSL. The offline tests cover key
+  provisioning and protection, changed and cleared fields, expiry and signature validation,
+  unsafe states, undo, proxy and URL checks, and manager permission and method guards using
+  fixtures. The architect can verify MODX's native session, browser and TLS behavior separately.
