@@ -208,7 +208,7 @@ Changes in the `2.0.0-alpha2` transport:
 - Preserve TV ranks when editing template relations, ignore comment tags in the dependency
   graph, and run both parser passes in `modx_run` text mode.
 
-After alpha2 — tasks 37–42:
+Changes in the `2.0.0-alpha3` transport (tasks 37–42):
 
 - Protect modxMCP, MODX core and server configuration files from file-tool and static-element
   writes. Check moves, deletions and undo. Preserve the previous file when changing a static path.

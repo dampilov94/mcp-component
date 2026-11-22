@@ -156,6 +156,9 @@ Lessons from briefs 33–34:
   Disposable real MODX 2.8.8 checks covered the prior static file and undo, Unicode token labels,
   credential masking and the `query_db` guard. On fordev, direct HTTP checks covered warning
   isolation, property previews and diffs, and history by string key. All test fixtures were undone.
-- Devshop is on the previously built `2.0.0-alpha2`. The next transport has yet to be built.
-  The owner chose to uninstall 1.x before a clean 2.0 installation. That path was verified with
-  `1.10.0-pl` and the alpha2 archive. Build and publish only when requested.
+- The `2.0.0-alpha3` transport and its SHA-256 file are in `_packages/`. On disposable MODX
+  2.8.8 with PHP 7.4, upgrading from alpha2 preserved the token, journal and retained request
+  response, which the new resolver indexed. Removing `1.10.0-pl` and then installing alpha3
+  preserved existing site content and allowed a new admin token. On Devshop, the package list
+  shows alpha3 installed. The existing MCP connection could read site info, the dependency
+  graph and history.
