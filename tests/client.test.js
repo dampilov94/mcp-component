@@ -25,6 +25,9 @@ function mockSite() {
     tool("help", { inputSchema: object({ topic: { type: "string" } }) }),
     tool("describe", { inputSchema: object({ kind: { type: "string", pattern: "^[a-z]+$" } }) }),
     tool("get", { inputSchema: object({ kind: { type: "string" }, id: { type: "integer" }, key: { type: "string" } }) }),
+    tool("read_file", { inputSchema: object({ source: { type: "integer" }, path: { type: "string" } }) }),
+    tool("write_file", { inputSchema: object({ source: { type: "integer" }, path: { type: "string" }, content: { type: "string" }, expected_revision: { type: "string" } }),
+      effect: { read_only: false, destructive: true, reversible: true, open_world: false } }),
     tool("undo", { inputSchema: object({ confirm: { type: "boolean" } }), effect: { read_only: false, destructive: true, reversible: true, open_world: false } }),
     tool("update", {
       inputSchema: object({ kind: { type: "string" }, id: { type: "integer" }, key: { type: "string" }, expected_revision: { type: "string" } }, ["kind"]),
@@ -66,6 +69,10 @@ function mockSite() {
           return reply(404, { ok: false, error: { code: "not_found", message: `Unknown kind '${body.args.kind}'. Token ${TOKEN}`, details: { hint: "list kinds" } }, meta });
         case "get":
           return ok({ kind: body.args.kind, id: body.args.id, key: body.args.key, revision: state.revision });
+        case "read_file":
+          return ok({ path: "css/site.css", revision: "file-before" });
+        case "write_file":
+          return ok({ files: [{ path: "css/site.css", revision: "file-after", op: "update" }] });
         case "undo":
           return ok({ performed: true });
         case "update":
@@ -108,7 +115,7 @@ test("bridge serves the site's manifest and proxies calls", async (t) => {
 
   await t.test("tools are built from the manifest", async () => {
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map((item) => item.name), ["modx_site_info", "modx_help", "modx_describe", "modx_get", "modx_undo", "modx_update"]);
+    assert.deepEqual(tools.map((item) => item.name), ["modx_site_info", "modx_help", "modx_describe", "modx_get", "modx_read_file", "modx_write_file", "modx_undo", "modx_update"]);
     const read = tools.find((item) => item.name === "modx_site_info");
     assert.equal(read.annotations.readOnlyHint, true);
     assert.equal(read.inputSchema.properties._request_id, undefined);
@@ -139,6 +146,17 @@ test("bridge serves the site's manifest and proxies calls", async (t) => {
       assert.equal(failure.isError, true);
       assert.equal(failure.content[1].text, result.content[1].text);
     } finally { delete site.state.warnings; }
+  });
+
+  await t.test("file revisions follow normalized media source paths", async () => {
+    await client.callTool({ name: "modx_read_file", arguments: { source: 3, path: "css/site.css" } });
+    const write = (source, path) => client.callTool({ name: "modx_write_file", arguments: { source, path, content: "body {}" } });
+    await write(4, "css/site.css");
+    assert.equal(site.state.requests.at(-1).args.expected_revision, undefined);
+    await write(3, "css\\.\\site.css");
+    assert.equal(site.state.requests.at(-1).args.expected_revision, "file-before");
+    await write(3, "css/site.css");
+    assert.equal(site.state.requests.at(-1).args.expected_revision, "file-after");
   });
 
   await t.test("a write call gets a request ID and never forwards _request_id as an argument", async () => {
