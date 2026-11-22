@@ -1,0 +1,45 @@
+# 46 — ClientConfig values
+
+Branch `task/46-clientconfig` from local `main` after task 45. Read native ClientConfig 2.5.0
+from the official transport in `.local/upgrade-check/clientconfig-2.5.0-pl.transport.zip`.
+Inspect `cgSetting`, `cgContextValue`, `ClientConfig::getSettings`, and the manager processors
+`mgr/settings/update` and `mgr/settings/save`. Read the project setting kinds, `Writer`,
+`Snapshot` and the optional integration registry. Keep the package version.
+
+## Scope
+
+- Register the optional `clientconfig` capability and a `clientconfig_setting` kind for
+  existing settings. Use the native `cgSetting` ID and lookup by exact ClientConfig key.
+  List and get show global value, metadata (key, label, xtype, group, required flag and static
+  options) and the stored context overrides. Reads and writes require `admin`. Preserve the
+  existing group switch and `draft_only` rules. `list` need not include all context overrides.
+- Global updates run the native `mgr/settings/update` processor with existing metadata and
+  checkbox flags. Support updates of existing text, textarea, number and checkbox values.
+  Leave other xtypes readable and keep their writes in ClientConfig's own interface. Preserve
+  required text behavior and normalize checkbox input following the native save path. Store
+  native string values. Refuse setting and group creation, cloning, removal and metadata updates.
+- Support changes to explicitly named context overrides through a writable `context_values`
+  map on the setting using native `mgr/settings/save`. It reads `$_POST['values']` directly,
+  so make its call within the writer with a locally prepared payload and restore the original
+  superglobal in `finally`. Support a real existing non-manager context when context mode is
+  enabled. An omitted key is left alone. Allow an explicit empty value for a non-required
+  setting. No operation to remove the override is needed. Make the `cgContextValue` rows a
+  snapshot relation, validate all targeted contexts and values before writing, and verify the
+  expected value after each native save so failures roll back. Document conflicts and undo.
+- Block writes to MCP keys, credentials and keys that collide with MODX system/context settings.
+  Mask named or password-typed secret values in the result, including context values and history
+  snapshots shown through the public API. Preserve other settings when updating or undoing.
+  ClientConfig's native write processors invalidate its settings cache and emit its event.
+  Undo and rollback must invalidate that cache as well and respect changed class/schema or
+  unavailable integration and newly protected keys. Follow existing raw SQL restrictions for
+  settings tables and avoid exporting sensitive data in tests or logs.
+- Add en/ru capability labels and help. Preserve existing token scope contracts, APIs, package
+  metadata and the draft-only workflow.
+
+## Verification
+
+Run `npm run check` and `npm test` on PHP 7.4. Test installed/missing integration, visibility,
+native processor input, typed value changes, mixed global/context revisions, protected keys,
+dry runs, unchanged definitions and other overrides, context mode off, invalid context/code,
+and rollback and undo. Architect will exercise native ClientConfig 2.5.0 with MODX 2.8.8 on a
+disposable local installation. fordev has no ClientConfig and verifies the optional absence path.
