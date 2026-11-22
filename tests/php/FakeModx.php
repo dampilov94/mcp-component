@@ -1123,7 +1123,7 @@ class modX extends xPDO {
             elseif ($value[$i] === '_') { $pattern .= '.'; }
             else { $pattern .= preg_quote($value[$i], '/'); }
         }
-        return preg_match('/^' . $pattern . '$/is', (string) $row[substr($key, 0, -5)]) === 1;
+        return preg_match('/^' . $pattern . '$/is', (string) ($row[substr($key, 0, -5)] ?? '')) === 1;
     }
     private function match($class, $criteria) {
         $groups = $criteria instanceof FakeQuery ? $criteria->groups : array();

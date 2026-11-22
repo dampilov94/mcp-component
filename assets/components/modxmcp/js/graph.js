@@ -325,7 +325,7 @@ Ext.onReady(function () {
         ['template', 'chunk', 'snippet', 'tv', 'plugin', 'resource', 'missing'].forEach(function (t) {
             if (!counts[t]) { return; }
             html += '<label><input type="checkbox" data-type="' + t + '"' + (typeOn[t] !== false ? ' checked' : '') + '>'
-                 + dot(t) + '<span class="c">' + LABEL[t] + '</span><span class="n">' + counts[t] + '</span></label>';
+                 + dot(t) + '<span class="c">' + esc(LABEL[t]) + '</span><span class="n">' + counts[t] + '</span></label>';
         });
         $('g-types').innerHTML = html;
         Array.prototype.forEach.call($('g-types').querySelectorAll('input'), function (b) {
@@ -339,7 +339,7 @@ Ext.onReady(function () {
     function renderLegend(counts) {
         var html = '';
         ['template', 'chunk', 'snippet', 'tv', 'plugin', 'resource', 'missing'].forEach(function (t) {
-            if (counts[t]) { html += '<span>' + dot(t) + LABEL[t] + '</span>'; }
+            if (counts[t]) { html += '<span>' + dot(t) + esc(LABEL[t]) + '</span>'; }
         });
         $('g-legend').innerHTML = html;
     }
