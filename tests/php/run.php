@@ -7362,6 +7362,107 @@ $dService->apply($ownDraft, true);
 check('draft-only: manager approval applies the draft and removes it from the owner list', $dGet($dB['id'])['fields']['content'] === "Новый адрес\nУлица Мира"
     && $dLast()['source'] === 'manager' && $dInvoke($draftEditor, 'list_drafts', null)['drafts'] === array());
 
+// Shareable previews use separate, short-lived credentials and expose just the changed plain text.
+$preview = new \ModxMCP\Draft\DraftPreview($dSite);
+$previewKeyPath = $dSite->getOption('core_path') . 'modxmcp-data/draft-preview/key.php';
+$previewTime = (new DateTimeImmutable('2026-11-22T12:00:00+00:00'))->getTimestamp();
+$previewSource = $call($dDev, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Page to review',
+    'description' => 'Description to clear', 'content' => '<p>Original body</p>', 'introtext' => 'Unchanged introduction')));
+$previewId = $dInvoke($dDev, 'create_draft', $previewSource['id'])['draft_id'];
+$previewLink = function () use ($dSite, $previewId) { return (new DraftStore($dSite))->ofDraft($previewId); };
+$previewUpdate = function (array $fields) use ($call, $dDev, $previewId) {
+    $call($dDev, 'update', array('kind' => 'resource', 'id' => $previewId, 'fields' => $fields));
+};
+$previewUnavailable = function ($label) use ($preview, $previewId, $previewTime) {
+    $e = throws($label, ApiException::class, function () use ($preview, $previewId, $previewTime) {
+        $preview->issue($previewId, $previewTime);
+    });
+    check($label . ' reports preview unavailable', $e && $e->errorCode === 'preview_unavailable');
+};
+$unsigned = 'v1.1.' . $previewId . '.' . ($previewTime + 100) . '.' . str_repeat('0', 64) . '.' . str_repeat('0', 64);
+check('draft preview: redemption never provisions a signing key', $preview->redeem($unsigned, $previewTime) === null && !is_file($previewKeyPath));
+$previewUnavailable('draft preview: refuses issuance before any change');
+$previewUpdate(array('content' => '<p>Edited markup body</p>'));
+$previewUnavailable('draft preview: refuses issuance for markup-only changes');
+check('draft preview: a failed issuance does not provision a key', !is_file($previewKeyPath));
+$previewUpdate(array('pagetitle' => 'Новый заголовок', 'description' => ''));
+$testTimezone = date_default_timezone_get();
+date_default_timezone_set('Asia/Irkutsk');
+try { $previewToken = $preview->issue($previewId, $previewTime); } finally { date_default_timezone_set($testTimezone); }
+$previewParts = explode('.', $previewToken);
+$previewFields = array('pagetitle' => 'Новый заголовок', 'description' => '');
+check('draft preview: signature is bound to the draft row and expires after 30 UTC minutes', $previewParts[0] === 'v1'
+    && (int) $previewParts[1] === $previewLink()['id'] && (int) $previewParts[2] === $previewId && (int) $previewParts[3] === $previewTime + 1800);
+$previewStoredKey = file_get_contents($previewKeyPath);
+$previewGuard = \ModxMCP\Request\RequestStore::FILE_GUARD;
+check('draft preview: signing key is guarded, random-sized and restricted', substr($previewStoredKey, 0, strlen($previewGuard)) === $previewGuard
+    && preg_match('/^[a-f0-9]{64}$/D', substr($previewStoredKey, strlen($previewGuard))) === 1
+    && (DIRECTORY_SEPARATOR === '\\' || (fileperms($previewKeyPath) & 0777) === 0600));
+check('draft preview: excludes unchanged values and changed markup while retaining an empty change',
+    $preview->redeem($previewToken, $previewTime + 1799) === $previewFields);
+$modifiedSignature = substr($previewToken, 0, -1) . (substr($previewToken, -1) === 'a' ? 'b' : 'a');
+check('draft preview: rejects an invalid HMAC, an expired grant and a grant from the future', $preview->redeem($modifiedSignature, $previewTime) === null
+    && $preview->redeem($previewToken, $previewTime + 1800) === null && $preview->redeem($previewToken, $previewTime - 1) === null);
+
+$previewHTTPS = array('HTTPS' => 'on', 'REMOTE_ADDR' => '192.0.2.20');
+$previewHttp = array('REMOTE_ADDR' => '192.0.2.20', 'HTTP_X_FORWARDED_PROTO' => 'https');
+$previewEndpoint = 'https://example.test/assets/components/modxmcp/draft-preview.php';
+$dSite->options['assets_url'] = '/assets/';
+check('draft preview: a configured HTTPS site issues a fragment link', strpos($dService->share($previewId, $previewHTTPS)['url'], $previewEndpoint . '#v1.') === 0);
+check('draft preview: untrusted forwarding and plain HTTP cannot issue a preview', DraftService::shareEndpoint($dSite, $previewHttp) === null
+    && !\ModxMCP\Draft\DraftPreview::isHttps($dSite, $previewHttp));
+$dSite->options['modxmcp.trusted_proxies'] = '192.0.2.20';
+check('draft preview: trusts configured HTTPS proxy detection', DraftService::shareEndpoint($dSite, $previewHttp) === $previewEndpoint
+    && DraftService::shareEndpoint($dSite, $previewHTTPS) === null);
+unset($dSite->options['modxmcp.trusted_proxies']);
+$dSite->options['modxmcp.assets_url'] = 'https://elsewhere.example/assets/components/modxmcp/';
+check('draft preview: rejects a configured preview URL on another origin', DraftService::shareEndpoint($dSite, $previewHTTPS) === null);
+$dSite->options['modxmcp.assets_url'] = 'https://example.test:443/assets/components/modxmcp/';
+check('draft preview: normalizes the default HTTPS port for origin comparison', DraftService::shareEndpoint($dSite, $previewHTTPS)
+    === 'https://example.test:443/assets/components/modxmcp/draft-preview.php');
+unset($dSite->options['modxmcp.assets_url']);
+$dSite->options['modxmcp.enabled'] = false;
+check('draft preview: the component kill switch prevents issuance', DraftService::shareEndpoint($dSite, $previewHTTPS) === null);
+unset($dSite->options['modxmcp.enabled']);
+
+require_once $dCore . 'processors/mgr/drafts/share.class.php';
+$previewManager = new ModxmcpDraftsShareProcessor($dSite, array('id' => $previewId));
+$savedPreviewUser = $dSite->user;
+$dSite->user = null;
+check('draft preview: processor requires a current manager session', !$previewManager->checkPermissions());
+$dSite->user = new class {
+    public function hasSessionContext($key) { return $key === 'mgr'; }
+};
+$dSite->options['fake_permissions'] = array('settings' => false);
+check('draft preview: a manager session without settings cannot issue links', !$previewManager->checkPermissions());
+$dSite->options['fake_permissions'] = array('settings' => true);
+check('draft preview: a manager with settings may issue links', $previewManager->checkPermissions());
+unset($dSite->options['fake_permissions']);
+$dSite->user = $savedPreviewUser;
+$savedPreviewMethod = $_SERVER['REQUEST_METHOD'] ?? null;
+$_SERVER['REQUEST_METHOD'] = 'GET';
+check('draft preview: processor rejects GET without issuing a link', !$previewManager->process()['success']);
+if ($savedPreviewMethod === null) { unset($_SERVER['REQUEST_METHOD']); } else { $_SERVER['REQUEST_METHOD'] = $savedPreviewMethod; }
+
+$initialDraft = $dSite->row('modResource', $previewId);
+foreach (array('published', 'deleted', 'pub_date', 'unpub_date') as $flag) {
+    $dSite->store('modResource', array($flag => 1) + $initialDraft);
+    $previewUnavailable('draft preview: unsafe draft flag ' . $flag);
+    check('draft preview: cannot redeem when ' . $flag . ' changes', $preview->redeem($previewToken, $previewTime) === null);
+    $dSite->store('modResource', $initialDraft);
+}
+$previewUpdate(array('content' => '<p>Further markup edit</p>'));
+check('draft preview: even a change to an unshared editable field invalidates the link', $preview->redeem($previewToken, $previewTime) === null);
+$beforeDiscardToken = $preview->issue($previewId, $previewTime);
+$beforeDiscardLink = $previewLink()['id'];
+$dService->discard($previewId, true);
+check('draft preview: removal invalidates the link', $preview->redeem($beforeDiscardToken, $previewTime) === null);
+$call($dDev, 'undo', array('changeset_id' => $dLast()['id'], 'confirm' => true));
+check('draft preview: undo restores the draft without reviving its old share', $previewLink()['id'] !== $beforeDiscardLink
+    && $preview->redeem($beforeDiscardToken, $previewTime) === null && $preview->redeem($preview->issue($previewId, $previewTime), $previewTime) === $previewFields);
+$dSite->pdo->prepare('UPDATE modx_modxmcp_drafts SET base_state = NULL WHERE draft_id = ?')->execute(array($previewId));
+$previewUnavailable('draft preview: a draft without a saved base snapshot cannot issue a link');
+
 // --- Fenom (pdoTools): references, syntax check ---
 use ModxMCP\Code\Fenom;
 use ModxMCP\Verify\SiteAudit as FenomAudit;

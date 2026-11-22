@@ -108,6 +108,13 @@ After creating a draft, use `modx_update` with the `draft_id` to change `pagetit
 delimiters. The draft must remain unpublished and unscheduled. Give its preview link to the manager,
 who can review the changes and apply or discard the draft in the component's **Drafts** block.
 
+### Sharing a preview link
+
+On an HTTPS site, a manager with the `settings` permission can choose **Share preview** in the
+component's **Drafts** block. Anyone with the link can view changed plain-text fields for
+30 minutes. Copy a fresh link after editing the draft. Applying or discarding it closes the
+preview. Use the regular manager preview to see the page with its MODX template and TV values.
+
 ## Scenarios
 
 The site offers ready-made scenarios as MCP prompts. In Claude Code call them as commands

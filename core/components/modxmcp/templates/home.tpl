@@ -44,6 +44,8 @@
 #mcpo .d-table th { text-align:left; font-weight:normal; color:var(--muted); padding:4px 6px; border-bottom:1px solid var(--line); }
 #mcpo .d-table td { padding:6px; border-bottom:1px solid #eef1f5; vertical-align:top; }
 #mcpo .d-actions button, #mcpo .d-actions a { margin:0 6px 4px 0; }
+#mcpo .d-share { display:block; margin:6px 0; }
+#mcpo .d-share input { box-sizing:border-box; display:block; width:100%; padding:6px; margin:4px 0; }
 #mcpo .d-plan { margin:6px 0 10px; padding:10px 12px; border:1px solid var(--line); border-radius:5px; background:#fbfcfd; }
 #mcpo .d-plan h4 { margin:0 0 6px; }
 #mcpo .d-change { margin:6px 0; }

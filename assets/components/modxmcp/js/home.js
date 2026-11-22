@@ -131,6 +131,7 @@ Ext.onReady(function () {
             params.action = action;
             MODx.Ajax.request({
                 url: cfg.connector_url,
+                method: 'POST',
                 params: params,
                 listeners: {
                     success: { fn: function (r) { onOk(r.object || {}); } },
@@ -225,6 +226,26 @@ Ext.onReady(function () {
                     }, function (r) { clear(box); failed(box, r); });
                 };
                 if (draft.preview_url) { add(actions, anchor(dt('preview'), draft.preview_url, true)); }
+                if (cfg.share_preview) {
+                    var share = button(dt('share'), function () {
+                        share.disabled = true;
+                        clear(box);
+                        add(box, el('div', 'o-muted', dt('share_loading')));
+                        call('mgr/drafts/share', { id: draft.draft_id }, function (result) {
+                            share.disabled = false;
+                            clear(box);
+                            var label = el('label', 'd-share', dt('share_link'));
+                            var input = el('input');
+                            input.type = 'text';
+                            input.readOnly = true;
+                            input.value = result.url || '';
+                            input.addEventListener('focus', function () { input.select(); });
+                            add(box, add(label, input));
+                            input.focus();
+                        }, function (r) { share.disabled = false; clear(box); failed(box, r); });
+                    });
+                    add(actions, share);
+                }
                 add(actions, button(dt('apply'), function () { show('apply'); }), button(dt('discard'), function () { show('discard'); }), box);
                 add(row, page, created, actions);
                 add(table, row);

@@ -33,7 +33,7 @@ and the normal draft approval and discard routes remain available.
   recompute the digest, and reject missing, edited or non-draft targets. Bind the digest to the
   draft's current editable fields too, so changes in an editable HTML field also expire links.
   A draft removed and restored via undo has a new link row and cannot revive an old share.
-- Require HTTPS to redeem the bearer using the existing trusted-proxy-aware detection. Neither
+- Require HTTPS to serve the page and redeem the bearer using trusted-proxy-aware detection. Neither
   endpoint method should start a manager session. Use no-store, no-referrer, noindex and a
   restrictive Content Security Policy. Reject invalid links uniformly without exposing IDs,
   database errors or private state. Use a small payload limit before doing protected reads.
@@ -48,3 +48,34 @@ field, missing base state, unsafe state, changed or removed draft, UTC TTL and H
 with locally generated fixtures, and HTTPS and permission gating. Architect should check the
 native manager and preview flow with a local MODX fixture before integrating. On an HTTP dev
 stand only check normal routes, files and the explicit HTTPS requirement.
+
+## Report
+
+Based on `main` at `0473177`. Implementation commit `5a96106`.
+
+- The manager drafts table requests a URL explicitly through a POST processor. The processor
+  checks the manager session and `settings`. The configured connection address supplies the
+  preview endpoint and must match the site's HTTPS origin. Issuance and redemption respect
+  the existing component enabled setting.
+- `DraftPreview` checks open draft state and compares the editorial fields with the saved
+  base. Its 30-minute signature covers the exact draft link, the draft ID and the hash of
+  the output and draft row. `PreviewKey` provisions its guarded key from the manager path
+  and reads it without writes during redemption. No database migration is required.
+- The public asset uses MODX configuration and models without initializing a context or
+  session. It serves a static HTTPS shell that removes the fragment before posting it and
+  renders only text. Invalid requests get the same unavailable response. No changes to the
+  MCP contract or package version.
+- `npm run check` and `npm test` passed on PHP 7.4.33 in WSL. The offline tests cover key
+  provisioning and protection, changed and cleared fields, expiry and signature validation,
+  unsafe states, undo, proxy and URL checks, and manager permission and method guards using
+  fixtures. The architect can verify MODX's native session, browser and TLS behavior separately.
+
+## Review
+
+- On disposable MODX 2.8.8 with PHP 7.4, the native processor refused issuance without the
+  manager context and issued a link after the fixture established that context. A separate
+  client over loopback TLS received only changed text and the cleared field. Neither preview
+  response set a session cookie. HTTP, an invalid signature and an old link after editing were
+  refused. Checked the page script's fragment removal and text rendering with a simulated DOM.
+- Deployed and verified 13 files on fordev. Its HTTP endpoint refused both preview requests.
+  The existing MCP tools and draft approval remained available after the cache refresh.

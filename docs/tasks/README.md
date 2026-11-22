@@ -80,7 +80,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 41 | [Token labels and credential reads](41-token-and-credential-guards.md) | `task/41-token-and-credential-guards` | merged |
 | 42 | [Alpha2 review follow-ups](42-review-followups.md) | `task/42-review-followups` | merged |
 | 43 | [Draft-only token](43-draft-only.md) | `task/43-draft-only` | merged |
-| 44 | [Shareable draft preview](44-draft-preview.md) | `task/44-draft-preview` | in progress |
+| 44 | [Shareable draft preview](44-draft-preview.md) | `task/44-draft-preview` | merged |
 
 ## Doing several briefs in a row
 
@@ -145,7 +145,11 @@ Lessons from briefs 33–34:
 
 ## Handoff (2026-11-22)
 
-- Task 43 is merged into local `main`. fordev has the component source from `3a22cf5`.
+- Task 44 is merged into local `main`. fordev has the component source from `5a96106`.
+  Verified all 13 files and updated `.local/deploy-fordev.json`. Backups are in
+  `.local/fordev-before-5a96106/`. fordev confirmed refusal over plain HTTP and the existing MCP
+  workflow. A disposable MODX 2.8.8 instance confirmed issuance and anonymous redemption over TLS.
+- Task 43 was deployed to fordev from `3a22cf5` and merged into local `main`.
   The 14 changed files were verified, the original files were saved in
   `.local/fordev-before-3a22cf5/`, and `.local/deploy-fordev.json` was updated. The existing
   admin connection and manager approval path were checked after deployment. The draft-only
