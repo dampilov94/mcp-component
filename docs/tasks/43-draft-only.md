@@ -71,3 +71,14 @@ Based on `main` at `a3725b4`. Implementation commit `3a22cf5`.
   between legacy v2 and direct MCP HTTP. These suites use the MODX stand-in. The architect's
   separate disposable MODX check covered manager issuance, editing, publication refusal and
   approval, with the scope selector verified in Chrome.
+
+## Review
+
+- Verified with native MODX 2.8.8 and PHP 7.4 on an existing alpha3 token table. Manager issuance
+  and authentication worked without a schema change. The draft owner could edit text and list
+  its draft. A second token, a generic update of a live or ordinary unpublished resource, and
+  attempts to publish, apply or add markup were refused. Manager approval applied the changes
+  and removed the draft. Chrome confirmed the new choice in the token dialog.
+- Deployed all 14 files to fordev and verified each checksum. The existing admin connection and
+  draft approval operation remained available. The updated guide was served and the MODX cache
+  was refreshed. Draft-only tokens were issued and exercised on the disposable MODX instance.
