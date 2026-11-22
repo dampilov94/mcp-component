@@ -7,6 +7,8 @@ use Throwable;
 /** Persistent request IDs live outside MODX cache, so clearing the cache cannot erase them. */
 final class RequestStore {
     const FILE_GUARD = "<?php http_response_code(404); exit; ?>\n";
+    private const CLEANUP_BATCH = 32;
+    private const DAY = 86400;
     private $dir;
     private $retention;
     private $maxResponse;
@@ -83,31 +85,85 @@ final class RequestStore {
             $record['state'] = 'expired';
             // Publish a tombstone first. Removing a response never makes its ID reusable.
             $this->write($this->dir . '/' . $key . '.state.php', json_encode($record, JSON_THROW_ON_ERROR));
-            @unlink($this->dir . '/' . $key . '.response.php');
         }
+        if ($record['state'] === 'expired') { @unlink($this->dir . '/' . $key . '.response.php'); }
         return $record;
     }
 
-    /** Compact old results at most every five minutes, retaining ID tombstones. */
+    /** Index only retained responses by completion day. Tombstones never enter this index. */
+    private function indexResponse($key, $completedAt) {
+        $bucket = $this->dir . '/expiry/' . intdiv($completedAt, self::DAY);
+        for ($attempt = 0; $attempt < 2; ++$attempt) {
+            if (!is_dir($bucket)) { @mkdir($bucket, 0700, true); }
+            if (@touch($bucket . '/' . $key)) { return; }
+            clearstatcache(true, $bucket);
+        }
+        throw new RequestStoreException('Cannot index the retained response.');
+    }
+
+    /** One-time install/upgrade pass for responses that predate the index. */
+    public function indexLegacyResponses() {
+        if (!is_dir($this->dir)) { return; }
+        $marker = $this->dir . '/legacy-index.stamp';
+        if (is_file($marker)) { return; }
+        $complete = true;
+        foreach (new DirectoryIterator($this->dir) as $file) {
+            if (!preg_match('/^([a-f0-9]{64})\.response\.php$/D', $file->getFilename(), $match)) { continue; }
+            $key = $match[1];
+            $lock = $this->lock($key);
+            if (!$lock) { $complete = false; continue; }
+            try {
+                $record = $this->readRecord($key);
+                if ($record === null || $record['state'] === 'pending') { continue; }
+                $record = $this->expire($key, $record);
+                if ($record['state'] === 'completed') { $this->indexResponse($key, $record['completed_at']); }
+            } catch (RequestStoreException $e) {
+                // An unreadable record remains in place and still blocks replay.
+                $complete = false;
+            } finally { flock($lock, LOCK_UN); fclose($lock); }
+        }
+        if ($complete) { @touch($marker); }
+    }
+
+    /** Expire a bounded batch from the index, staying off the path of tombstones and legacy IDs. */
     private function cleanup() {
         $gc = $this->lock('cleanup');
         if (!$gc) { return; }
         try {
             $stamp = $this->dir . '/cleanup.stamp';
             if (file_exists($stamp) && time() - filemtime($stamp) < 300) { return; }
-            @touch($stamp);
-            foreach (new DirectoryIterator($this->dir) as $file) {
-                if (!$file->isFile() || !preg_match('/^([a-f0-9]{64})\.state\.php$/D', $file->getFilename(), $match)) { continue; }
-                $lock = $this->lock($match[1]);
-                if (!$lock) { continue; }
-                try {
-                    $record = $this->readRecord($match[1]);
-                    if ($record !== null) { $this->expire($match[1], $record); }
-                } catch (Throwable $e) {
-                    // A maintenance error must not permit replay or break another request.
-                } finally { flock($lock, LOCK_UN); fclose($lock); }
+            $index = $this->dir . '/expiry';
+            $cutoff = intdiv(time() - $this->retention, self::DAY);
+            $budget = self::CLEANUP_BATCH;
+            if (is_dir($index)) {
+                foreach (new DirectoryIterator($index) as $bucket) {
+                    if ($bucket->isDot() || !$bucket->isDir() || !ctype_digit($bucket->getFilename()) || (int) $bucket->getFilename() >= $cutoff) { continue; }
+                    $path = $bucket->getPathname();
+                    foreach (new DirectoryIterator($path) as $marker) {
+                        if ($marker->isDot()) { continue; }
+                        $key = $marker->getFilename();
+                        if (preg_match('/^[a-f0-9]{64}$/D', $key)) { $this->cleanIndexedResponse($key, $marker->getPathname()); }
+                        if (--$budget === 0) { return; }
+                    }
+                    @rmdir($path);
+                }
             }
+            @touch($stamp);
         } finally { flock($gc, LOCK_UN); fclose($gc); }
+    }
+
+    private function cleanIndexedResponse($key, $marker) {
+        $lock = $this->lock($key);
+        if (!$lock) { return; }
+        try {
+            $record = $this->readRecord($key);
+            if ($record !== null && $this->expire($key, $record)['state'] === 'completed') { return; }
+            if ($record !== null && $record['state'] !== 'pending' && is_file($this->dir . '/' . $key . '.response.php')) { return; }
+            @unlink($marker);
+        } catch (RequestStoreException $e) {
+            // Leave the response and state untouched; a corrupt item must not stall the queue.
+            @unlink($marker);
+        } finally { flock($lock, LOCK_UN); fclose($lock); }
     }
 
     private function response($key, array $record) {
@@ -146,9 +202,11 @@ final class RequestStore {
             // Record pending before any business action, even if PHP later terminates.
             $frame = $callback();
             try {
+                $completedAt = time();
+                $this->indexResponse($key, $completedAt);
                 $this->write($this->dir . '/' . $key . '.response.php', base64_encode($frame['body']));
                 $record['state'] = 'completed';
-                $record['completed_at'] = time();
+                $record['completed_at'] = $completedAt;
                 $record['http_status'] = $frame['status'];
                 $record['response_hash'] = hash('sha256', $frame['body']);
                 $record['success'] = $frame['status'] >= 200 && $frame['status'] < 300;

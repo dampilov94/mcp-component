@@ -93,10 +93,28 @@ function trackedKey(source) {
   return null;
 }
 
-function rememberRevisions(tool, result) {
+function fileRevisionKey(source, path) {
+  if (!Number.isInteger(source) || typeof path !== "string") return null;
+  const relative = path.replaceAll("\\", "/").split("/").filter((part) => part && part !== ".").join("/");
+  return `file:${source}:${relative}`;
+}
+
+function rememberRevisions(tool, args, result) {
   if (tool.action === "undo" && result.performed === true) {
     seenRevisions.clear();   // an undo moves any number of objects to older states
     return;
+  }
+  if (Number.isInteger(args.source)) {
+    if (result.dry_run === true) return;
+    const files = tool.action === "read_file" ? [result] : result.files;
+    if (Array.isArray(files)) {
+      for (const file of files) {
+        const key = fileRevisionKey(args.source, file.path);
+        if (!key) continue;
+        if (typeof file.revision === "string") seenRevisions.set(key, file.revision);
+        else if (file.op === "delete") seenRevisions.delete(key);
+      }
+    }
   }
   const tracked = trackedKey(result);
   if (tracked === null) return;
@@ -187,7 +205,8 @@ async function callTool(request, extra) {
       requestId = args._request_id || randomUUID();
       delete args._request_id;
     }
-    const tracked = write && tool.inputSchema.properties?.expected_revision ? trackedKey(args) : null;
+    const tracked = write && tool.inputSchema.properties?.expected_revision
+      ? (tool.action === "write_file" ? fileRevisionKey(args.source, args.path) : trackedKey(args)) : null;
     if (tracked && args.expected_revision === undefined && seenRevisions.has(tracked)) {
       args.expected_revision = seenRevisions.get(tracked);
     }
@@ -199,12 +218,12 @@ async function callTool(request, extra) {
       if (tracked && error.errorCode === "revision_conflict") seenRevisions.delete(tracked);
       throw error;
     }
-    rememberRevisions(tool, result);
     const output = validator("out", tool)(result);
     if (!output.valid) {
       const hint = requestId ? ` The action may have completed; check modx_request_status for request_id=${requestId}.` : "";
       throw new Error(`Unexpected tool result: ${output.errorMessage}.${hint}`);
     }
+    rememberRevisions(tool, args, result);
     return {
       content: resultContent(JSON.stringify(result), meta.warnings),
       structuredContent: result,

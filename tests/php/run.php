@@ -102,6 +102,27 @@ $status = $store->status($id, true);
 check('store: status completed', $status['state'] === 'completed' && $status['success'] === true && $status['response']['result']['n'] === 1);
 check('store: unknown id', $store->status('request-id-unknown-01')['state'] === 'not_found');
 throws('store: invalid id', RequestStoreException::class, function () use ($store) { $store->status('bad id'); });
+$key = hash('sha256', $id);
+$statePath = $dir . '/' . $key . '.state.php';
+$state = json_decode(substr(file_get_contents($statePath), strlen(RequestStore::FILE_GUARD)), true);
+$bucket = $dir . '/expiry/' . intdiv($state['completed_at'], 86400);
+$state['completed_at'] -= 172800;
+$oldBucket = $dir . '/expiry/' . intdiv($state['completed_at'], 86400);
+mkdir($oldBucket, 0700);
+rename($bucket . '/' . $key, $oldBucket . '/' . $key);
+file_put_contents($statePath, RequestStore::FILE_GUARD . json_encode($state));
+unlink($dir . '/cleanup.stamp');
+$store->execute('request-id-000000002', str_repeat('a', 64), $callback);
+check('store: indexed cleanup drops the retained response, preserving the request ID', !is_file($dir . '/' . $key . '.response.php')
+    && !is_file($oldBucket . '/' . $key) && $store->status($id)['state'] === 'expired');
+throws('store: indexed cleanup cannot enable a retry', RequestStoreException::class, function () use ($store, $id, $callback) {
+    $store->execute($id, str_repeat('a', 64), $callback);
+});
+foreach (glob($dir . '/expiry/*') as $path) {
+    foreach (glob($path . '/*') as $marker) { unlink($marker); }
+    rmdir($path);
+}
+rmdir($dir . '/expiry');
 foreach (glob($dir . '/*') as $file) { unlink($file); }
 rmdir($dir);
 
@@ -1142,12 +1163,13 @@ $tvRuntime = new class extends modX {
 $tvRead = new Context($tvRuntime, array('scope' => 'read') + $dev->token, $dev->corePath, function () {});
 $types = $call($tvRead, 'invoke', array('kind' => 'tv', 'op' => 'list_input_types'));
 check('tv inputs: core and empty custom match legacy values', count($types['core']) === 20 && $types['custom'] === array()
-    && $types['core']['image'] === array('label' => 'Image', 'use' => 'pick/upload an image', 'requires' => array('media_source (id)')));
+    && $types['core']['image'] === array('label' => 'Image', 'use' => 'pick/upload an image', 'requires' => array('Set the media source in the MODX manager.')));
 $imageSuggestion = $call($tvRead, 'invoke', array('kind' => 'tv', 'op' => 'suggest_type', 'args' => array('description' => 'IMAGE PHOTO')));
 check('tv inputs: ranked image suggestion exact values', $imageSuggestion['description'] === 'IMAGE PHOTO' && $imageSuggestion['recommended'] === 'image'
     && $imageSuggestion['candidates'] === array(array('type' => 'image', 'why' => 'a single image', 'score' => 2, 'matched' => array('image', 'photo'), 'order' => 1))
-    && $imageSuggestion['create_skeleton'] === array('action' => 'create_element', 'type' => 'tv', 'data' => array('name' => '<tv_name>', 'caption' => '<Caption>',
-        'field_type' => 'image', 'templates' => array('<template id>'), 'media_source' => '<media source id — see modx_list_media_sources>')) && $imageSuggestion['note'] === null);
+    && $imageSuggestion['create_skeleton'] === array('tool' => 'modx_create', 'arguments' => array('kind' => 'tv',
+        'fields' => array('name' => '<tv_name>', 'caption' => '<Caption>', 'type' => 'image'),
+        'relations' => array('templates' => array('<template id>')))) && $imageSuggestion['note'] === null);
 $colorSuggestion = $call($tvRead, 'invoke', array('kind' => 'tv', 'op' => 'suggest_type', 'args' => array('description' => 'ЦВЕТ')));
 check('tv inputs: Cyrillic and unavailable color fallback', $colorSuggestion['recommended'] === 'text' && $colorSuggestion['candidates'][0]['matched'] === array('цвет')
     && $colorSuggestion['note'] === 'No colorpicker input type is installed; suggesting text. Install a colorpicker add-on for a real picker.');
@@ -8293,6 +8315,20 @@ $adminView = $msProps($call($msAdmin, 'get', array('kind' => 'media_source', 'id
 check('media source: admin retains access and masking did not change stored data', $adminView['accessKeyId'] === 'fixture-access' && $adminView['secretAccessKey'] === 'fixture-secret');
 $secretSourceDiff = $call($msAdmin, 'history_diff', array('changeset_id' => $secretSource['changeset_id']));
 check('media source: credential diff remains masked even for admin', (array) $secretSourceDiff['objects'][0]['changed']['properties']['new'] === $expectedMask);
+
+// Add-on references are used by both the graph and deletion previews, including named MIGX JSON.
+$mSite->store('modChunk', array('id' => 901, 'name' => 'СтрокаГрида', 'snippet' => '', 'static' => 0));
+$mSite->store('migxConfig', array('id' => 901, 'name' => 'Review graph fixture', 'deleted' => 0,
+    'formtabs' => '[]', 'columns' => json_encode(array(array('renderchunktpl' => 'СтрокаГрида')), JSON_UNESCAPED_UNICODE)));
+$namedGraph = (new \ModxMCP\Graph\GraphBuilder($mSite))->build();
+$namedNode = array_column($namedGraph['nodes'], null, 'name')['СтрокаГрида'] ?? array();
+$namedPreview = $call($mDev, 'delete', array('kind' => 'chunk', 'id' => 901, 'dry_run' => true));
+check('graph: a named MIGX grid renderer is used in the graph and delete preview', ($namedNode['used_by'] ?? '') === 'migx_config #901'
+    && in_array('migx_config', array_column($namedPreview['usages']['items'], 'kind'), true));
+$vSite->store('modSnippet', array('id' => 901, 'name' => 'PrivateRouteHandler', 'snippet' => 'return "test";', 'static' => 0));
+$vSite->store('vpHandler', array('id' => 901, 'name' => 'Review graph fixture', 'type' => 1, 'entry' => 901, 'active' => 1));
+$handlerUsages = $call($vDev, 'find_usages', array('kind' => 'snippet', 'id' => 901));
+check('find_usages: an entry ID of a VirtualPage handler is a structural reference', in_array('vp_handler', array_column($handlerUsages['usages'], 'kind'), true));
 
 // Use actual PHP-serialized storage rather than the fake's JSON for the before snapshots.
 $define = array('caption' => array('value' => 'До'), 'apiKey' => array('value' => 'fixture-only'));

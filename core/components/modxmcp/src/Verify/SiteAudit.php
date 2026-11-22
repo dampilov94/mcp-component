@@ -153,17 +153,21 @@ final class SiteAudit {
                 if ($this->wants('duplicate_alias')) {
                     $this->summary['duplicate_alias']['scanned']++;
                     $uri = (string) $resource->get('uri');
-                    if ($uri !== '') { $routes[(string) $resource->get('context_key') . "\0" . $uri][] = array($id, $title); }
+                    if ($uri !== '') {
+                        $route = (string) $resource->get('context_key') . "\0" . mb_strtolower($uri, 'UTF-8');
+                        $routes[$route][] = array($id, $title, $uri);
+                    }
                 }
             }
         }
         foreach ($routes as $route => $group) {
             if (count($group) < 2) { continue; }
-            list($contextKey, $uri) = explode("\0", $route, 2);
+            $contextKey = explode("\0", $route, 2)[0];
             $groupIds = array_column($group, 0);
             sort($groupIds);
             $first = null;
             foreach ($group as $entry) { if ($entry[0] === $groupIds[0]) { $first = $entry; } }
+            $uri = $first[2];
             $this->add('duplicate_alias', 'warning', 'resource', $first[0], $first[1],
                 count($group) . " resources share the address '{$uri}' in context '{$contextKey}'.",
                 array('uri' => $uri, 'context' => $contextKey, 'ids' => $groupIds));

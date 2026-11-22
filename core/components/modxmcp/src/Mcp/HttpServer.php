@@ -52,18 +52,10 @@ final class HttpServer {
         return stripos($accept, 'text/event-stream') !== false || self::header($server, 'MCP-Protocol-Version') !== null;
     }
 
-    /** Does a POST body look like JSON-RPC (an object, or a non-empty list, whose first message says "jsonrpc": "2.0")? */
-    public static function isJsonRpc($raw, $oversize = false) {
-        if ($oversize) {
-            $head = substr($raw, 0, 4096);
-            return preg_match('/^\s*[\[{]/', $head) === 1 && preg_match('/"jsonrpc"\s*:\s*"2\.0"/', $head) === 1;
-        }
-        $trimmed = ltrim($raw);
-        if ($trimmed === '' || ($trimmed[0] !== '{' && $trimmed[0] !== '[')) { return false; }
-        $decoded = json_decode($raw, true, 512);
-        if (!is_array($decoded) || $decoded === array()) { return false; }
-        $first = isset($decoded['jsonrpc']) ? $decoded : (array_keys($decoded) === range(0, count($decoded) - 1) ? $decoded[0] : null);
-        return is_array($first) && isset($first['jsonrpc']) && $first['jsonrpc'] === '2.0';
+    /** Recognise the decoded JSON-RPC message, or the first message of a batch. */
+    public static function isJsonRpc($decoded) {
+        $first = is_array($decoded) ? ($decoded[0] ?? null) : $decoded;
+        return is_object($first) && ($first->jsonrpc ?? null) === '2.0';
     }
 
     /** The site's own origin or a listed one; a request without Origin (command-line clients) passes. */

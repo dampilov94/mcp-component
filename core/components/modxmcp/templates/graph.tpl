@@ -77,47 +77,47 @@
 
 <div id="mcpg">
     <div class="g-bar">
-        <h2>Граф связей</h2>
+        <h2>{$graph_labels.heading|escape}</h2>
         <div class="g-search">
-            <input type="search" id="g-q" placeholder="Найти элемент…" autocomplete="off">
+            <input type="search" id="g-q" placeholder="{$graph_labels.search|escape}" autocomplete="off">
             <div class="g-results" id="g-res"></div>
         </div>
         <span class="g-seg">
-            <button class="g-btn g-lay on" data-lay="lanes" title="Каждый тип в своём ряду, порядок как в дереве элементов менеджера">Слои</button><button class="g-btn g-lay" data-lay="clusters" title="Типы собраны в отдельные облака">Кластеры</button><button class="g-btn g-lay" data-lay="free" title="Свободная укладка, без разделения по типам">Свободно</button>
+            <button class="g-btn g-lay on" data-lay="lanes" title="{$graph_labels.lanes_hint|escape}">{$graph_labels.lanes|escape}</button><button class="g-btn g-lay" data-lay="clusters" title="{$graph_labels.clusters_hint|escape}">{$graph_labels.clusters|escape}</button><button class="g-btn g-lay" data-lay="free" title="{$graph_labels.free_hint|escape}">{$graph_labels.free|escape}</button>
         </span>
-        <button class="g-btn" id="g-reload">Обновить</button>
-        <button class="g-btn" id="g-fit">Вписать</button>
-        <button class="g-btn" id="g-reset" disabled>Показать всё</button>
-        <span class="g-stat" id="g-stat">Загружаю…</span>
-        <a href="{$settings_url}" style="margin-left:4px;">Настройки&nbsp;&rarr;</a>
+        <button class="g-btn" id="g-reload">{$graph_labels.reload|escape}</button>
+        <button class="g-btn" id="g-fit">{$graph_labels.fit|escape}</button>
+        <button class="g-btn" id="g-reset" disabled>{$graph_labels.reset|escape}</button>
+        <span class="g-stat" id="g-stat">{$graph_labels.loading|escape}</span>
+        <a href="{$settings_url}" style="margin-left:4px;">{$graph_labels.settings|escape}&nbsp;&rarr;</a>
     </div>
 
     <div class="g-body">
         <div class="g-side">
             <section>
-                <h3>Типы узлов</h3>
+                <h3>{$graph_labels.types|escape}</h3>
                 <div id="g-types"></div>
             </section>
             <section>
-                <h3>Фильтры</h3>
-                <label title="Элементы компонентов, до которых не дотягивается ни один ваш элемент"><input type="checkbox" id="g-hide-vendor"><span class="c">Скрыть вендорные без использования</span><span class="n" id="g-nvendor">0</span></label>
-                <label><input type="checkbox" id="g-hide-orphans"><span class="c">Скрыть неиспользуемые</span><span class="n" id="g-norph2">0</span></label>
-                <label><input type="checkbox" id="g-only-issues"><span class="c">Только проблемные</span></label>
-                <label><input type="checkbox" id="g-res-nodes"><span class="c">Ресурсы по <code>[[~id]]</code></span></label>
+                <h3>{$graph_labels.filters|escape}</h3>
+                <label title="{$graph_labels.vendor_hint|escape}"><input type="checkbox" id="g-hide-vendor"><span class="c">{$graph_labels.hide_vendor|escape}</span><span class="n" id="g-nvendor">0</span></label>
+                <label><input type="checkbox" id="g-hide-orphans"><span class="c">{$graph_labels.hide_orphans|escape}</span><span class="n" id="g-norph2">0</span></label>
+                <label><input type="checkbox" id="g-only-issues"><span class="c">{$graph_labels.issues_only|escape}</span></label>
+                <label><input type="checkbox" id="g-res-nodes"><span class="c">{$graph_labels.resource_links|escape}<code>[[~id]]</code></span></label>
             </section>
             <section>
-                <h3>Плотность</h3>
+                <h3>{$graph_labels.density|escape}</h3>
                 <input type="range" id="g-spread" min="60" max="260" value="100" style="width:100%">
                 <div style="display:flex;justify-content:space-between;color:#7b8794;font-size:11px;">
-                    <span>плотно</span><span>свободно</span>
+                    <span>{$graph_labels.dense|escape}</span><span>{$graph_labels.spread|escape}</span>
                 </div>
             </section>
             <section>
-                <h3>Битые ссылки (<span id="g-nmiss">0</span>)</h3>
+                <h3>{$graph_labels.broken_links|escape} (<span id="g-nmiss">0</span>)</h3>
                 <ul class="g-list" id="g-miss"></ul>
             </section>
             <section>
-                <h3>Не используются (<span id="g-norph">0</span>)</h3>
+                <h3>{$graph_labels.unused|escape} (<span id="g-norph">0</span>)</h3>
                 <ul class="g-list" id="g-orph"></ul>
                 <p class="g-empty-note" id="g-orph-note" style="font-size:11px;margin-top:6px;"></p>
             </section>
@@ -126,8 +126,8 @@
         <div class="g-stage">
             <canvas id="g-canvas"></canvas>
             <div class="g-crumb" id="g-crumb"></div>
-            <div class="g-overlay" id="g-overlay">Загружаю граф…</div>
-            <div class="g-hint">колесо — масштаб · тяните узел или фон · двойной клик по узлу — изолировать · Esc — сбросить</div>
+            <div class="g-overlay" id="g-overlay">{$graph_labels.loading_graph|escape}</div>
+            <div class="g-hint">{$graph_labels.controls|escape}</div>
             <div class="g-legend" id="g-legend"></div>
         </div>
 

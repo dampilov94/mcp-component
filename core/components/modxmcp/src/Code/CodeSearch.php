@@ -46,12 +46,12 @@ final class CodeSearch {
         $trimmed = ltrim($line);
         $byteOffset = max(0, $byteOffset - (strlen($line) - strlen($trimmed)));
         $line = rtrim($trimmed);
-        $chars = preg_split('//u', $line, -1, PREG_SPLIT_NO_EMPTY);
-        if ($chars === false) { $chars = str_split($line); }
-        $prefix = preg_split('//u', substr($line, 0, $byteOffset), -1, PREG_SPLIT_NO_EMPTY);
-        $position = $prefix === false ? $byteOffset : count($prefix);
+        $unicode = mb_check_encoding($line, 'UTF-8');
+        $prefix = substr($line, 0, $byteOffset);
+        $position = $unicode && mb_check_encoding($prefix, 'UTF-8') ? mb_strlen($prefix, 'UTF-8') : $byteOffset;
         $start = $position > 250 ? max(0, $position - 40) : 0;
-        $cut = count($chars) > $start + 300;
-        return ($start ? '…' : '') . implode('', array_slice($chars, $start, 300)) . (!$start && $cut ? '…' : '');
+        $length = $unicode ? mb_strlen($line, 'UTF-8') : strlen($line);
+        $excerpt = $unicode ? mb_substr($line, $start, 300, 'UTF-8') : substr($line, $start, 300);
+        return ($start ? '…' : '') . $excerpt . (!$start && $length > 300 ? '…' : '');
     }
 }

@@ -78,6 +78,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 39 | [Property diffs, history keys and prompts](39-properties-history-prompts.md) | `task/39-properties-history-prompts` | merged |
 | 40 | [Replace 1.x with a fresh 2.0 installation](40-clean-install-guide.md) | `task/40-clean-install-guide` | merged |
 | 41 | [Token labels and credential reads](41-token-and-credential-guards.md) | `task/41-token-and-credential-guards` | merged |
+| 42 | [Alpha2 review follow-ups](42-review-followups.md) | `task/42-review-followups` | merged |
 
 ## Doing several briefs in a row
 
@@ -140,9 +141,15 @@ Lessons from briefs 33–34:
   header before PHP sees it; anything a client must authenticate with goes in a custom header too.
 - A long executor run is lost when the host machine sleeps; commit work in progress early.
 
-## Handoff (2026-11-20)
+## Handoff (2026-11-22)
 
-- Tasks 37–41 are merged into local `main`. fordev has the component source from `6c683cd`.
+- Task 42 is merged into local `main`. fordev has the component source from `634cb85`.
+  Verified all 19 deployed files and updated `.local/deploy-fordev.json`. Backups are in
+  `.local/fordev-before-634cb85/`. Both attempts' staging files were removed. MIGX, VirtualPage,
+  Unicode TV bindings and MCP over HTTP passed on fordev. Chrome checks used disposable MODX
+  2.8.8. The PHP 7.4 suite passed 5463 PHP checks and 40 Node tests.
+
+- Tasks 37–41 were previously deployed to fordev from `6c683cd` and merged into local `main`.
   The 24 files were verified, with the old files backed up in `.local/fordev-before-6c683cd/`
   and `.local/deploy-fordev.json` updated. Compare text line endings when using a Windows checkout.
 - `npm run check` and `npm test` passed in WSL on PHP 7.4 (5459 PHP checks and 39 Node tests).

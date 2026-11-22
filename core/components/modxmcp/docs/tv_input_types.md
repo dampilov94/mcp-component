@@ -6,9 +6,9 @@ requirements, plus custom types registered by installed add-ons.
 `modx_invoke {kind: "tv", op: "suggest_type", args: {description: "…"}}` ranks input types
 from an English or Russian description. Neither operation takes an object id or name.
 
-The recommendation's `create_skeleton` preserves the historical suggestion format. Use
-it as a hint: build the current API call with `fields.type` and `relations.templates`, as
-below. Consult `modx_describe {kind: "tv"}` for fields this API currently exposes.
+The recommendation's `create_skeleton` gives a `modx_create` call. Replace the placeholders
+in its arguments before using it. Consult `modx_describe {kind: "tv"}` for supported fields.
+For an image or file TV, set its media source in the MODX manager.
 
 ## Pick by task
 

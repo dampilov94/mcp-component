@@ -64,8 +64,7 @@ final class LogReader {
                         $raw = $parts[4];
                     }
                 }
-                $chars = preg_split('//u', $raw, -1, PREG_SPLIT_NO_EMPTY);
-                $entry['message'] = count($chars) > 2000 ? implode('', array_slice($chars, 0, 2000)) . '…' : $raw;
+                $entry['message'] = mb_strlen($raw, 'UTF-8') > 2000 ? mb_substr($raw, 0, 2000, 'UTF-8') . '…' : $raw;
                 $entries[] = $entry;
             }
             if (count($entries) > $limit) { $truncated = true; $entries = array_slice($entries, -$limit); }

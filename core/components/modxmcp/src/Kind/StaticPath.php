@@ -53,6 +53,7 @@ final class StaticPath {
         foreach (self::roots($modx) as $root) {
             $r = Path::normalize($root);
             if ($r === null) { continue; }
+            if (Path::inside($lexical, $r[1])) { $r[0] = $r[1]; }
             $rootLexical = rtrim($r[0], '/');
             $rootReal = rtrim($r[1], '/');
             if (strpos($lexical, $rootLexical . '/') !== 0 || strpos($real, $rootReal . '/') !== 0) { continue; }
@@ -124,6 +125,11 @@ final class StaticPath {
     public static function assertAllowed(\modX $modx, $staticFile, $source) {
         $path = self::resolveFor($modx, $staticFile, $source);
         if ($path === null || !self::writable($modx, $path)) {
+            $filename = self::settingTags($modx, (string) $staticFile);
+            if ((int) $source < 1 && is_string($filename) && preg_match('#^(?:[A-Za-z]:[/\\\\]|/)#D', $filename)
+                && !file_exists($filename) && self::writable($modx, $filename)) {
+                throw new ApiException('validation_failed', 'MODX resolves a missing absolute file under element_static_path, outside modxmcp.static_roots. Use make_static to create the file, or select an existing file.');
+            }
             throw new ApiException('validation_failed', 'The static file must be inside one of modxmcp.static_roots: ' . self::rootsSetting($modx)
                 . ' (not through a symbolic link, not in config, cache, packages or modxmcp-data, not a credentials file, and not protected code or server configuration).');
         }
