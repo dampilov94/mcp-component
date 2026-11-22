@@ -102,6 +102,27 @@ $status = $store->status($id, true);
 check('store: status completed', $status['state'] === 'completed' && $status['success'] === true && $status['response']['result']['n'] === 1);
 check('store: unknown id', $store->status('request-id-unknown-01')['state'] === 'not_found');
 throws('store: invalid id', RequestStoreException::class, function () use ($store) { $store->status('bad id'); });
+$key = hash('sha256', $id);
+$statePath = $dir . '/' . $key . '.state.php';
+$state = json_decode(substr(file_get_contents($statePath), strlen(RequestStore::FILE_GUARD)), true);
+$bucket = $dir . '/expiry/' . intdiv($state['completed_at'], 86400);
+$state['completed_at'] -= 172800;
+$oldBucket = $dir . '/expiry/' . intdiv($state['completed_at'], 86400);
+mkdir($oldBucket, 0700);
+rename($bucket . '/' . $key, $oldBucket . '/' . $key);
+file_put_contents($statePath, RequestStore::FILE_GUARD . json_encode($state));
+unlink($dir . '/cleanup.stamp');
+$store->execute('request-id-000000002', str_repeat('a', 64), $callback);
+check('store: indexed cleanup drops the retained response, preserving the request ID', !is_file($dir . '/' . $key . '.response.php')
+    && !is_file($oldBucket . '/' . $key) && $store->status($id)['state'] === 'expired');
+throws('store: indexed cleanup cannot enable a retry', RequestStoreException::class, function () use ($store, $id, $callback) {
+    $store->execute($id, str_repeat('a', 64), $callback);
+});
+foreach (glob($dir . '/expiry/*') as $path) {
+    foreach (glob($path . '/*') as $marker) { unlink($marker); }
+    rmdir($path);
+}
+rmdir($dir . '/expiry');
 foreach (glob($dir . '/*') as $file) { unlink($file); }
 rmdir($dir);
 
