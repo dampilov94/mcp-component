@@ -230,6 +230,8 @@ After alpha3:
 
 - Add the `draft_only` token scope. It can create unpublished page drafts and edit plain text in
   drafts it owns. A manager applies or discards the drafts through the existing workflow.
+- Managers can share changed draft text via an HTTPS preview link valid for up to 30 minutes.
+  The recipient can open it without signing in to MODX.
 
 Stage 7 — manager:
 

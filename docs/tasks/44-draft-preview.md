@@ -33,7 +33,7 @@ and the normal draft approval and discard routes remain available.
   recompute the digest, and reject missing, edited or non-draft targets. Bind the digest to the
   draft's current editable fields too, so changes in an editable HTML field also expire links.
   A draft removed and restored via undo has a new link row and cannot revive an old share.
-- Require HTTPS to redeem the bearer using the existing trusted-proxy-aware detection. Neither
+- Require HTTPS to serve the page and redeem the bearer using trusted-proxy-aware detection. Neither
   endpoint method should start a manager session. Use no-store, no-referrer, noindex and a
   restrictive Content Security Policy. Reject invalid links uniformly without exposing IDs,
   database errors or private state. Use a small payload limit before doing protected reads.
@@ -69,3 +69,13 @@ Based on `main` at `0473177`. Implementation commit `5a96106`.
   provisioning and protection, changed and cleared fields, expiry and signature validation,
   unsafe states, undo, proxy and URL checks, and manager permission and method guards using
   fixtures. The architect can verify MODX's native session, browser and TLS behavior separately.
+
+## Review
+
+- On disposable MODX 2.8.8 with PHP 7.4, the native processor refused issuance without the
+  manager context and issued a link after the fixture established that context. A separate
+  client over loopback TLS received only changed text and the cleared field. Neither preview
+  response set a session cookie. HTTP, an invalid signature and an old link after editing were
+  refused. Checked the page script's fragment removal and text rendering with a simulated DOM.
+- Deployed and verified 13 files on fordev. Its HTTP endpoint refused both preview requests.
+  The existing MCP tools and draft approval remained available after the cache refresh.
