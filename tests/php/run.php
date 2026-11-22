@@ -7290,6 +7290,78 @@ $e = throws('drafts: the manager gets the API\'s refusals', ApiException::class,
 check('drafts: applying a page without a draft is validation_failed', $e && $e->errorCode === 'validation_failed');
 check('drafts: no stale link or archive row of an open draft remains', $dCount('drafts') === 0 && $dCount('draft_archive', 'draft_id = ?', array($dBDraft)) === 1);
 
+// Draft-only tokens share the normal resource draft and update paths, with narrower authorization.
+$draftTokenService = new \ModxMCP\Manager\TokenService($dSite, $dSite->user);
+$draftIssued = $draftTokenService->create(array('label' => 'Черновики для сайта', 'scope' => 'draft_only'));
+$draftRecord = $dTokens->authenticate($draftIssued['token']);
+check('draft-only: a manager can issue a token with a persistent draft-only scope', $draftRecord['scope'] === 'draft_only' && $draftRecord['id'] === $draftIssued['id']);
+$draftEditor = $dActor($draftRecord);
+$otherIssued = $dTokens->create('Second editor', 'draft_only');
+$otherEditor = $dActor($dTokens->authenticate($otherIssued['token']));
+$draftCapabilities = $call($draftEditor, 'capabilities');
+check('draft-only: advertises just the permitted tools and resource kind', $draftCapabilities['kinds'] === array('resource')
+    && $draftCapabilities['tools'] === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_update', 'modx_invoke', 'modx_resource_tree')
+    && $draftCapabilities['tools'] === array_column(Manifest::tools($draftEditor), 'name') && Manifest::prompts($draftEditor) === array());
+$draftDescription = $call($draftEditor, 'describe', array('kind' => 'resource'));
+check('draft-only: describes only available operations and marks non-editorial fields read-only', array_column($draftDescription['operations'], 'op') === array('create_draft', 'list_drafts')
+    && array_column(array_filter($draftDescription['fields'], function ($field) { return empty($field['read_only']); }), 'name')
+        === array('pagetitle', 'longtitle', 'description', 'introtext', 'menutitle', 'content')
+    && !in_array(true, array_column($draftDescription['relations'], 'writable'), true));
+
+$draftOriginal = $dGet($dB['id']);
+$draftUnpublished = $call($dDev, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Unpublished page', 'published' => false)));
+$ownDraft = $dInvoke($draftEditor, 'create_draft', $dB['id'])['draft_id'];
+$otherDraft = $dInvoke($otherEditor, 'create_draft', $dSection['id'])['draft_id'];
+check('draft-only: each token lists only the draft it created', array_column($dInvoke($draftEditor, 'list_drafts', null)['drafts'], 'draft_id') === array($ownDraft)
+    && array_column($dInvoke($otherEditor, 'list_drafts', null)['drafts'], 'draft_id') === array($otherDraft)
+    && count($dService->drafts()) === 2);
+$draftEdit = array('kind' => 'resource', 'id' => $ownDraft, 'fields' => array('content' => "Новый адрес\nУлица Мира"));
+$draftRevision = $dGet($ownDraft)['revision'];
+$draftPlan = $call($dActor(array('plan_only' => true) + $draftRecord), 'update', $draftEdit + array('expected_revision' => $draftRevision));
+check('draft-only: plan-only previews an allowed edit without saving', !empty($draftPlan['planned']) && $dGet($ownDraft)['revision'] === $draftRevision);
+$call($draftEditor, 'update', $draftEdit + array('expected_revision' => $draftRevision));
+$savedDraft = $dGet($ownDraft);
+check('draft-only: saves text on its own draft without changing the original', $savedDraft['fields']['content'] === "Новый адрес\nУлица Мира"
+    && !$savedDraft['fields']['published'] && $dGet($dB['id'])['revision'] === $draftOriginal['revision']);
+
+foreach (array(
+    array('update', array('id' => $dB['id']) + $draftEdit, 'forbidden_scope'),
+    array('update', array('id' => $draftUnpublished['id'], 'dry_run' => true) + $draftEdit, 'forbidden_scope'),
+    array('update', array('id' => $otherDraft) + $draftEdit, 'forbidden_scope'),
+    array('update', array('fields' => array('published' => true)) + $draftEdit, 'forbidden_scope'),
+    array('update', array('fields' => array('pub_date' => '2030-11-08')) + $draftEdit, 'forbidden_scope'),
+    array('update', array('fields' => array('content' => '<p>Markup</p>')) + $draftEdit, 'validation_failed'),
+    array('update', array('relations' => array('tvs' => array('seo' => 'new'))) + $draftEdit, 'forbidden_scope'),
+    array('update', array('force' => true) + $draftEdit, 'forbidden_scope'),
+    array('update', array('skip_lint' => true) + $draftEdit, 'forbidden_scope'),
+    array('update', array('expected_revision' => $draftRevision) + $draftEdit, 'revision_conflict'),
+    array('invoke', array('kind' => 'resource', 'id' => $ownDraft, 'op' => 'apply_draft', 'args' => array('confirm' => true), 'force' => true), 'forbidden_scope'),
+    array('invoke', array('kind' => 'resource', 'id' => $ownDraft, 'op' => 'discard_draft', 'dry_run' => true), 'forbidden_scope'),
+    array('create', array('kind' => 'resource'), 'unavailable'),
+    array('bulk_resources', array(), 'unavailable'),
+    array('undo', array(), 'unavailable'),
+    array('get', array('kind' => 'template', 'id' => 2), 'unavailable'),
+) as $case => list($draftAction, $draftArgs, $draftCode)) {
+    $e = throws('draft-only: refuses unauthorized request ' . $case, ApiException::class, function () use ($call, $draftEditor, $draftAction, $draftArgs) {
+        $call($draftEditor, $draftAction, $draftArgs);
+    });
+    check('draft-only: expected refusal code for request ' . $case, $e && $e->errorCode === $draftCode);
+}
+check('draft-only: refusals leave both original and draft unchanged', $dGet($ownDraft)['revision'] === $savedDraft['revision']
+    && $dGet($dB['id'])['revision'] === $draftOriginal['revision']);
+$draftRaw = $dSite->row('modResource', $ownDraft);
+foreach (array('published', 'deleted', 'pub_date', 'unpub_date') as $unsafeFlag) {
+    $dSite->store('modResource', array($unsafeFlag => 1) + $draftRaw);
+    $e = throws('draft-only: refuses unsafe draft ' . $unsafeFlag, ApiException::class, function () use ($call, $draftEditor, $draftEdit) {
+        $call($draftEditor, 'update', $draftEdit + array('dry_run' => true));
+    });
+    check('draft-only: unsafe draft is outside its write scope', $e && $e->errorCode === 'forbidden_scope');
+    $dSite->store('modResource', $draftRaw);
+}
+$dService->apply($ownDraft, true);
+check('draft-only: manager approval applies the draft and removes it from the owner list', $dGet($dB['id'])['fields']['content'] === "Новый адрес\nУлица Мира"
+    && $dLast()['source'] === 'manager' && $dInvoke($draftEditor, 'list_drafts', null)['drafts'] === array());
+
 // --- Fenom (pdoTools): references, syntax check ---
 use ModxMCP\Code\Fenom;
 use ModxMCP\Verify\SiteAudit as FenomAudit;

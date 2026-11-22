@@ -82,9 +82,11 @@ final class DraftStore {
     }
 
     /** Every open draft (both resources exist), oldest first. */
-    public function all() {
+    public function all($tokenId = null) {
         $out = array();
-        foreach ($this->run('SELECT * FROM ' . $this->t('drafts') . ' ORDER BY `id` ASC')->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+        $where = $tokenId === null ? '' : ' WHERE `token_id` = ? AND `user_id` IS NULL';
+        $params = $tokenId === null ? array() : array((int) $tokenId);
+        foreach ($this->run('SELECT * FROM ' . $this->t('drafts') . $where . ' ORDER BY `id` ASC', $params)->fetchAll(\PDO::FETCH_ASSOC) as $row) {
             if ($this->exists($row['draft_id']) && $this->exists($row['original_id'])) { $out[] = self::row($row); }
         }
         return $out;

@@ -3,6 +3,7 @@ namespace ModxMCP\Action;
 
 use ModxMCP\ApiException;
 use ModxMCP\Context;
+use ModxMCP\Draft\DraftPolicy;
 use ModxMCP\Journal\Snapshot;
 use ModxMCP\Kind\Objects;
 use ModxMCP\Schema;
@@ -30,9 +31,12 @@ final class UpdateAction extends WriteAction {
 
     public function run(array $args, Context $context) {
         $kind = Objects::kind($context, $args['kind'], true);
+        $draftOnly = DraftPolicy::applies($context);
+        if ($draftOnly) { DraftPolicy::assertUpdateArguments($args); }
         Objects::assertGenericWrites($kind);
         $object = Objects::resolve($context, $kind, $args);
         $id = $kind->keyOf($object);
+        if ($draftOnly) { DraftPolicy::assertOwnDraft($context, $id, $kind->objectColumns($object)); }
         $columns = Objects::normalize($kind, isset($args['fields']) ? $args['fields'] : array(), false);
         Objects::assertImmutable($kind, $object, $columns);
         $kind->assertObjectWritable($context->modx, $object, 'update');
@@ -50,9 +54,10 @@ final class UpdateAction extends WriteAction {
         if (!$columns && !$relations) { throw new ApiException('validation_failed', 'Nothing to change: give fields or relations.'); }
         $dry = $this->isDryRun($args, $context);
 
-        list($result, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $kind, $id, $columns, $relations, $args, $dry) {
+        list($result, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $kind, $id, $columns, $relations, $args, $dry, $draftOnly) {
             $before = $tx->touch($kind, $id);
             if ($before === null) { throw new ApiException('not_found', "No {$kind->name()} with " . Objects::keyText($kind, $id) . '.'); }
+            if ($draftOnly) { DraftPolicy::assertOwnDraft($context, $id, $before['fields']); }
             Objects::assertRevision($context, $kind, $id, $before, $args);
             if (!$dry) { Objects::assertNotOpen($context, $kind, $id, $args); }
             Objects::lint($context, $kind, $columns, !empty($args['skip_lint']));

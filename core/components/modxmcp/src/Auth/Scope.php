@@ -1,14 +1,17 @@
 <?php
 namespace ModxMCP\Auth;
 
-/** Token access levels; each level includes everything below it. */
+use ModxMCP\Draft\DraftPolicy;
+
+/** Token access levels. The draft-only scope also has its own action and kind rules. */
 final class Scope {
     const READ = 'read';
+    const DRAFT_ONLY = DraftPolicy::SCOPE;
     const CONTENT = 'content';
     const DEVELOP = 'develop';
     const ADMIN = 'admin';
 
-    const LEVELS = array(self::READ => 1, self::CONTENT => 2, self::DEVELOP => 3, self::ADMIN => 4);
+    const LEVELS = array(self::READ => 1, self::DRAFT_ONLY => 2, self::CONTENT => 2, self::DEVELOP => 3, self::ADMIN => 4);
 
     public static function valid($scope) {
         return is_string($scope) && isset(self::LEVELS[$scope]);
