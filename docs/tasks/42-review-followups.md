@@ -44,3 +44,7 @@ Based on: main at `6273a6e`. Branch `task/42-review-followups`.
 - On disposable MODX 2.8.8 with MIGX 3.0.2-beta1 and the fordev copy of VirtualPage 1.0.9-beta,
   the graph, `modx_find_usages` and deletion previews found the chunk referenced by each add-on.
   A Cyrillic TV `@CHUNK` binding also appeared in the graph. The fixture session was undone.
+- On fordev, backed up the original files and verified all 19 deployed files by SHA-256. Repeated
+  the two add-on checks and the Cyrillic TV binding check against the installed models. Undid the
+  fixture session and verified that all temporary records were gone. Direct MCP over HTTP listed
+  35 tools and returned `modx_site_info`. The manager UI was checked on the disposable instance.
