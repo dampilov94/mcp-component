@@ -52,6 +52,7 @@ final class UpdateAction extends WriteAction {
             }
         }
         if (!$columns && !$relations) { throw new ApiException('validation_failed', 'Nothing to change: give fields or relations.'); }
+        list($columns, $relations) = $kind->prepareUpdate($context, $kind->objectColumns($object), $columns, $relations);
         $dry = $this->isDryRun($args, $context);
 
         list($result, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $kind, $id, $columns, $relations, $args, $dry, $draftOnly) {
@@ -60,10 +61,12 @@ final class UpdateAction extends WriteAction {
             if ($draftOnly) { DraftPolicy::assertOwnDraft($context, $id, $before['fields']); }
             Objects::assertRevision($context, $kind, $id, $before, $args);
             if (!$dry) { Objects::assertNotOpen($context, $kind, $id, $args); }
+            list($columns, $relations) = $kind->prepareUpdate($context, $before['fields'], $columns, $relations);
             Objects::lint($context, $kind, $columns, !empty($args['skip_lint']));
             if ($dry) {
                 $would = array();
                 foreach (isset($args['fields']) ? $args['fields'] : array() as $name => $value) {
+                    if (isset($kind->fields()[$name]['input_types'])) { $value = $columns[$kind->column($name)]; }
                     $current = Snapshot::stateValue($kind, $before, $name);
                     if (!Objects::sameValue($kind, $name, $current, $value, $id)) { $would[] = $name; }
                 }

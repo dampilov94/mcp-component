@@ -40,7 +40,9 @@ final class HistoryDiffAction extends Action {
         };
 
         $objects = array();
+        $restricted = false;
         foreach ($changeset['changes'] as $change) {
+            if (!HistoryAction::changeVisible($context, $change)) { $restricted = true; continue; }
             $item = array('kind' => $change['kind'], Subjects::keyField($context, $change['kind']) => Subjects::publicKey($context, $change['kind'], $change['object_key']),
                 'name' => $change['label'], 'op' => $change['op']);
             $before = $load($change['before_revision']);
@@ -60,9 +62,10 @@ final class HistoryDiffAction extends Action {
             if ($change['note'] !== '') { $item['note'] = $change['note']; }
             $objects[] = $item;
         }
+        if (!$objects && $changeset['changes']) { throw new ApiException('not_found', "No changeset {$args['changeset_id']}."); }
         return array(
             'changeset_id' => $changeset['id'], 'at' => $changeset['created_at'], 'time' => date('c', $changeset['created_at']), 'source' => $changeset['source'],
-            'tool' => $changeset['tool'], 'summary' => $changeset['summary'], 'status' => $changeset['status'],
+            'tool' => $changeset['tool'], 'summary' => $restricted ? HistoryAction::RESTRICTED_SUMMARY : $changeset['summary'], 'status' => $changeset['status'],
             'objects' => $objects,
         );
     }

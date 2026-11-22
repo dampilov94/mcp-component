@@ -216,6 +216,7 @@ $_lang['modxmcp_cmp_danger_lint_php'] = 'Проверять код сниппе�
 $_lang['modxmcp_cmp_danger_require_https'] = 'Принимать запросы к API только по HTTPS. Если выключено, токен может пройти по сети открытым текстом.';
 $_lang['modxmcp_cmp_danger_allowed_ips'] = 'Список адресов, с которых принимаются запросы к API. Пусто означает, что можно с любого адреса.';
 $_lang['modxmcp_group_virtualpage'] = 'VirtualPage (роуты / события)';
+$_lang['modxmcp_group_clientconfig'] = 'ClientConfig (глобальные значения и значения контекстов)';
 $_lang['modxmcp_group_minishop2'] = 'miniShop2 (товары / опции / связи / категории / заказы)';
 $_lang['modxmcp_group_migx'] = 'MIGX (конфигурации)';
 $_lang['modxmcp_group_access'] = 'Контроль доступа (пользователи, группы, роли, политики)';

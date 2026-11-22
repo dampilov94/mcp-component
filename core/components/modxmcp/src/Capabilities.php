@@ -6,7 +6,7 @@ final class Capabilities {
     /** Groups an administrator can switch off for the whole site (modxmcp.disabled_groups). */
     const TOGGLEABLE = array(
         'virtualpage', 'minishop2', 'migx', 'access', 'property_sets', 'contexts',
-        'package_management', 'namespaces', 'lexicon',
+        'package_management', 'namespaces', 'lexicon', 'clientconfig',
     );
 
     /** Add-ons with dedicated support: group => [core-path setting, probe file, package name]. */
@@ -14,6 +14,7 @@ final class Capabilities {
         'minishop2'   => array('minishop2.core_path', 'model/minishop2/minishop2.class.php', 'miniShop2'),
         'migx'        => array('migx.core_path', 'model/migx/migxconfig.class.php', 'MIGX'),
         'virtualpage' => array('virtualpage_core_path', 'model/virtualpage/virtualpage.class.php', 'VirtualPage'),
+        'clientconfig' => array('clientconfig.core_path', 'model/clientconfig/clientconfig.class.php', 'ClientConfig'),
     );
 
     private $modx;

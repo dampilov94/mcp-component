@@ -4029,6 +4029,7 @@ foreach (array('SELECT 1; SELECT 2', "SELECT 'a\\'; DELETE FROM t; --'") as $xTe
 $xTables = array(
     'modx_users', 'users', 'MODX_USERS', 'Modx_Users', '`modx_users`', '`MODX_USERS`', '`users`', 'db.modx_users', '`db`.`modx_users`', '`db.modx_users`', ' `modx_users ` ',
     'modx_user_attributes', 'user_attributes', 'modx_system_settings', 'system_settings', 'modx_context_settings', 'context_settings', 'modx_modxmcp_tokens', 'modxmcp_tokens', '`modx_modxmcp_tokens`',
+    'modx_clientconfig_setting', 'clientconfig_context_value',
     '"modx_users"', '"MODX_USERS"', '"db"."modx_users"', '"modx_modxmcp_tokens"',
     'modx_session', 'modx_user_settings', 'modx_transport_providers', 'transport_providers', 'modx_media_sources', 'information_schema.tables', 'INFORMATION_SCHEMA.PROCESSLIST', '`information_schema`.`tables`', 'mysql.user', '`mysql`.`user`',
     'performance_schema.threads', 'sys.session',
@@ -7603,6 +7604,233 @@ $e = throws('product draft: forcing approval cannot recreate missing product dat
 });
 check('product draft: missing original data still leaves the shadow intact', $e && $e->errorCode === 'validation_failed'
     && $sSite->getCount('modResource', array('id' => $pdPriceOnly)) === 1);
+
+// ClientConfig values use native processor contracts for global changes and per-context overrides.
+$ccDir = $siteDir . '/clientconfig46';
+$ccCore = $ccDir . '/core/components/clientconfig/';
+mkdir($ccCore . 'model/clientconfig', 0700, true);
+touch($ccCore . 'model/clientconfig/clientconfig.class.php');
+$ccSite = fakeSite($ccDir, array('clientconfig.context_aware' => true));
+$ccSite->store('modNamespace', array('name' => 'clientconfig', 'path' => '{core_path}components/clientconfig/', 'assets_path' => ''));
+foreach (array('web', 'shop', 'mgr') as $ccContext) { $ccSite->store('modContext', array('key' => $ccContext, 'name' => $ccContext)); }
+$ccDefinition = array('id' => 1, 'key' => 'shop_notice', 'label' => 'Уведомление', 'xtype' => 'textarea', 'is_required' => 1,
+    'value' => 'Global original', 'group' => 2, 'options' => 'small==1||large==2', 'process_options' => 0, 'description' => 'Keep metadata',
+    'sortorder' => 7, 'default' => 'Fallback', 'source' => 1);
+$ccSite->store('cgSetting', $ccDefinition);
+foreach (array(
+    2 => array('key' => 'show_banner', 'xtype' => 'xcheckbox', 'value' => '1'),
+    3 => array('key' => 'shipping_amount', 'xtype' => 'numberfield', 'value' => '4'),
+    4 => array('key' => 'email_token', 'xtype' => 'textfield', 'value' => 'fixture-credential-a'),
+    5 => array('key' => 'shop_password_input', 'xtype' => 'passwordfield', 'value' => 'fixture-credential-b'),
+    6 => array('key' => 'country_select', 'xtype' => 'combo', 'value' => 'RU', 'process_options' => 1, 'options' => 'fixture-dynamic-source'),
+    7 => array('key' => 'modxmcp.enabled', 'xtype' => 'textfield', 'value' => 'fixture-owned'),
+    8 => array('key' => 'site_name', 'xtype' => 'textfield', 'value' => 'Global collision'),
+    9 => array('key' => 'native_context_option', 'xtype' => 'textfield', 'value' => 'Context collision'),
+) as $ccId => $ccSetting) {
+    $ccSite->store('cgSetting', array('id' => $ccId) + $ccSetting + array('is_required' => 0) + $ccDefinition);
+}
+$ccSite->store('modSystemSetting', array('key' => 'site_name', 'value' => 'MODX'));
+$ccSite->store('modContextSetting', array('context_key' => 'web', 'key' => 'native_context_option', 'value' => 'MODX'));
+$ccSite->store('cgContextValue', array('id' => 11, 'setting' => 1, 'context' => 'web', 'value' => 'Web original'));
+$ccSite->store('cgContextValue', array('id' => 12, 'setting' => 1, 'context' => 'shop', 'value' => 'Keep this override'));
+$ccSite->store('cgContextValue', array('id' => 13, 'setting' => 4, 'context' => 'web', 'value' => 'fixture-context-credential'));
+$ccSite->store('cgContextValue', array('id' => 14, 'setting' => 5, 'context' => 'shop', 'value' => 'fixture-password-override'));
+$ccActor = function ($scope, array $token = array()) use ($ccSite, $dev) {
+    return new Context($ccSite, $token + array('scope' => $scope) + $dev->token, $dev->corePath, function () {});
+};
+$ccAdmin = $ccActor('admin');
+$ccGet = function ($id, array $extra = array()) use ($call, $ccAdmin) { return $call($ccAdmin, 'get', array('kind' => 'clientconfig_setting', 'id' => $id) + $extra); };
+$ccUpdate = function ($id, array $extra = array()) use ($call, $ccAdmin) { return $call($ccAdmin, 'update', array('kind' => 'clientconfig_setting', 'id' => $id) + $extra); };
+$ccEvents = function () use ($ccSite) {
+    $ccSite->invokeEvent('ClientConfig_ConfigChange');
+    \ModxMCP\Integration\ClientConfig::clearCache($ccSite);
+};
+$ccSite->stubProcessors['mgr/settings/update'] = function (array $data, array $options) use ($ccSite, $ccEvents) {
+    $before = $ccSite->row('cgSetting', (int) $data['id']);
+    if (!$before || $options['processors_path'] !== $ccSite->getOption('core_path') . 'components/clientconfig/processors/') {
+        return new FakeResponse('Missing ClientConfig setting or processor.');
+    }
+    // Mirrors the native global processor: unchecked metadata flags are reset when absent.
+    $flags = array('is_required' => (int) !empty($data['is_required']), 'process_options' => (int) !empty($data['process_options']));
+    $ccSite->store('cgSetting', $flags + $data + $before);
+    $ccEvents();
+    return new FakeResponse(null);
+};
+$ccFailContext = null;
+$ccSite->stubProcessors['mgr/settings/save'] = function () use ($ccSite, $ccEvents, &$ccFailContext) {
+    $input = json_decode($_POST['values'], true);
+    $context = $input['context'];
+    foreach ($input as $key => $value) {
+        $target = $ccSite->getObject('cgSetting', array('key' => $key));
+        if (!$target || $context === $ccFailContext) { continue; }
+        $where = array('setting' => $target->get('id'), 'context' => $context);
+        $row = $ccSite->getObject('cgContextValue', $where) ?: $ccSite->newObject('cgContextValue');
+        if ($target->get('xtype') === 'xcheckbox') { $value = (string) !empty($value); }
+        $row->fromArray($where + array('value' => $value));
+        $row->save();
+    }
+    $ccEvents();
+    return new FakeResponse(null); // Like ClientConfig, a failed context-row save can still return success.
+};
+
+$ccCaps = $call($ccAdmin, 'capabilities');
+$ccReport = array_column($ccCaps['integrations'], null, 'key');
+check('ClientConfig: optional kind and group become available to admin on installation', in_array('clientconfig_setting', $ccCaps['kinds'], true)
+    && $ccReport['clientconfig']['available'] && in_array('clientconfig', $ccCaps['groups']['toggleable'], true));
+check('ClientConfig: the same kind is absent with no integration or admin scope', !in_array('clientconfig_setting', $call($dev, 'capabilities')['kinds'], true)
+    && !in_array('clientconfig_setting', $call($ccActor('develop'), 'capabilities')['kinds'], true)
+    && !in_array('clientconfig_setting', $call($ccActor('admin', array('denied_groups' => array('clientconfig'))), 'capabilities')['kinds'], true));
+$ccOriginal = $ccGet(1);
+$ccByName = $call($ccAdmin, 'get', array('kind' => 'clientconfig_setting', 'name' => 'shop_notice'));
+check('ClientConfig: ID and exact key read the same metadata and context values', $ccByName['revision'] === $ccOriginal['revision']
+    && $ccOriginal['fields']['required'] && $ccOriginal['fields']['group'] === 2 && $ccOriginal['fields']['options'] === 'small==1||large==2'
+    && (array) $ccOriginal['relations']['context_values'] === array('shop' => 'Keep this override', 'web' => 'Web original'));
+throws('ClientConfig: resource lookup rejects a case-mismatched name', ApiException::class, function () use ($call, $ccAdmin) {
+    $call($ccAdmin, 'get', array('kind' => 'clientconfig_setting', 'name' => 'SHOP_NOTICE'));
+});
+check('ClientConfig: dynamic options are not exposed', $ccGet(6)['fields']['options'] === '');
+foreach (array(4, 5) as $ccId) {
+    $ccMasked = $ccGet($ccId);
+    check('ClientConfig: credentials and context overrides stay masked for admin', $ccMasked['fields']['value'] === '[hidden]'
+        && array_values((array) $ccMasked['relations']['context_values']) === array('[hidden]'));
+}
+
+$ccOldPost = $_POST;
+$_POST = array('unchanged' => 'original form');
+$ccPublic = $call($ccActor('content'), 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Public journal control')));
+$ccBeforeCalls = count($ccSite->processorCalls);
+$ccDry = $ccUpdate(1, array('fields' => array('value' => 'Planned'), 'relations' => array('context_values' => array('web' => 'Plan')), 'dry_run' => true));
+check('ClientConfig: a valid dry run leaves the revision and native processors untouched', $ccDry['dry_run']
+    && $ccGet(1)['revision'] === $ccOriginal['revision'] && count($ccSite->processorCalls) === $ccBeforeCalls);
+$ccMixed = $ccUpdate(1, array('fields' => array('value' => "Новый текст\nЕщё строка"),
+    'relations' => array('context_values' => array('web' => 'Web override')), 'expected_revision' => $ccOriginal['revision']));
+$ccAfter = $ccGet(1);
+$ccInput = $ccSite->processorCalls[$ccBeforeCalls][1];
+check('ClientConfig: global and context values share one revision and leave another override alone', $ccMixed['revision'] === $ccAfter['revision']
+    && $ccMixed['revision'] !== $ccOriginal['revision'] && $ccAfter['fields']['value'] === "Новый текст\nЕщё строка"
+    && (array) $ccAfter['relations']['context_values'] === array('shop' => 'Keep this override', 'web' => 'Web override'));
+check('ClientConfig: native global call receives complete existing metadata and explicit checkbox flags', $ccInput['key'] === 'shop_notice'
+    && (int) $ccInput['group'] === 2 && (int) $ccInput['sortorder'] === 7 && $ccInput['is_required'] === '1' && $ccInput['process_options'] === '0'
+    && $_POST === array('unchanged' => 'original form'));
+check('ClientConfig: changed global value and context overrides appear in history', array_keys((array) $call($ccAdmin, 'history_diff',
+    array('changeset_id' => $ccMixed['changeset_id']))['objects'][0]['changed']) === array('value', 'context_values'));
+check('ClientConfig: a non-admin token cannot read setting keys in history',
+    $call($ccActor('develop'), 'history', array('kind' => 'clientconfig_setting'))['changesets'] === array());
+check('ClientConfig: private rows do not displace visible records under a history limit',
+    $call($ccActor('develop'), 'history', array('limit' => 1))['changesets'][0]['changeset_id'] === $ccPublic['changeset_id']);
+throws('ClientConfig: a non-admin token cannot read the setting diff by changeset ID', ApiException::class, function () use ($call, $ccActor, $ccMixed) {
+    $call($ccActor('develop'), 'history_diff', array('changeset_id' => $ccMixed['changeset_id']));
+});
+
+$ccCallCount = count($ccSite->processorCalls);
+foreach (array(
+    array('bad-context' => 'Invalid'), array('mgr' => 'Private context'), array('WEB' => 'Wrong case'), array('web' => ''), array('web' => array('bad')),
+) as $ccBadContext) {
+    throws('ClientConfig: invalid mixed request is refused before global write', ApiException::class, function () use ($ccUpdate, $ccBadContext) {
+        $ccUpdate(1, array('fields' => array('value' => 'Should not save'), 'relations' => array('context_values' => $ccBadContext)));
+    });
+}
+$ccSite->options['clientconfig.context_aware'] = false;
+throws('ClientConfig: disabled context mode rejects override', ApiException::class, function () use ($ccUpdate) {
+    $ccUpdate(1, array('relations' => array('context_values' => array('web' => 'Should not save'))));
+});
+$ccSite->options['clientconfig.context_aware'] = true;
+$ccSite->store('cgSetting', array('id' => 100, 'key' => 'context') + $ccDefinition);
+throws('ClientConfig: native context envelope key cannot collide with a setting', ApiException::class, function () use ($ccUpdate) {
+    $ccUpdate(1, array('fields' => array('value' => 'Should not save'), 'relations' => array('context_values' => array('web' => 'Should not save'))));
+});
+$ccSite->removeCollection('cgSetting', array('id' => 100));
+$ccSite->store('cgSetting', array('id' => 101) + $ccDefinition);
+throws('ClientConfig: ambiguous setting key blocks the native context save', ApiException::class, function () use ($ccUpdate) {
+    $ccUpdate(1, array('fields' => array('value' => 'Should not save'), 'relations' => array('context_values' => array('web' => 'Should not save'))));
+});
+$ccSite->removeCollection('cgSetting', array('id' => 101));
+check('ClientConfig: prevalidation prevented every attempted write', count($ccSite->processorCalls) === $ccCallCount && $ccGet(1)['revision'] === $ccAfter['revision']);
+
+$ccFailContext = 'shop';
+throws('ClientConfig: a native success without the expected second override rolls back everything', RuntimeException::class, function () use ($ccUpdate) {
+    $ccUpdate(1, array('fields' => array('value' => 'Transient global'), 'relations' => array('context_values' => array('web' => 'Transient web', 'shop' => 'Ignored by processor'))));
+});
+$ccFailContext = null;
+check('ClientConfig: existing settings, context overrides and the caller post are restored', $ccGet(1)['revision'] === $ccAfter['revision']
+    && $_POST === array('unchanged' => 'original form') && $ccGet(2)['fields']['value'] === '1');
+$_POST = $ccOldPost;
+
+$ccCheckbox = $ccUpdate(2, array('fields' => array('value' => false), 'relations' => array('context_values' => array('web' => true, 'shop' => false))));
+check('ClientConfig: global and context checkboxes store native strings including an empty override', $ccCheckbox['revision'] === $ccGet(2)['revision']
+    && $ccGet(2)['fields']['value'] === '' && (array) $ccGet(2)['relations']['context_values'] === array('shop' => '', 'web' => '1'));
+$ccCache = $ccSite->getCacheManager();
+$ccCacheBefore = count($ccCache->deleted);
+$ccRefreshesBefore = $ccCache->refreshes;
+$ccSite->options['clientconfig.clear_cache'] = false;
+$ccUpdate(3, array('fields' => array('value' => 12.5), 'relations' => array('context_values' => array('web' => 0))));
+check('ClientConfig: finite number fields store strings including zero', $ccGet(3)['fields']['value'] === '12.5'
+    && (array) $ccGet(3)['relations']['context_values'] === array('web' => '0'));
+check('ClientConfig: context writes honor the native resource-cache switch', $ccCache->refreshes === $ccRefreshesBefore
+    && array_unique(array_column(array_slice($ccCache->deleted, $ccCacheBefore), 0)) === array('clientconfig'));
+unset($ccSite->options['clientconfig.clear_cache']);
+throws('ClientConfig: a number outside the finite range is rejected', ApiException::class, function () use ($ccUpdate) {
+    $ccUpdate(3, array('fields' => array('value' => '2e999')));
+});
+foreach (array(4, 5, 6, 7, 8, 9) as $ccId) {
+    throws('ClientConfig: unsupported or protected value is read-only', ApiException::class, function () use ($ccUpdate, $ccId) {
+        $ccUpdate($ccId, array('fields' => array('value' => 'Unapproved')));
+    });
+}
+foreach (array('create', 'duplicate', 'delete') as $ccOp) {
+    throws('ClientConfig: existing definitions cannot be created, cloned or removed here', ApiException::class, function () use ($call, $ccAdmin, $ccOp) {
+        $call($ccAdmin, $ccOp, array('kind' => 'clientconfig_setting') + ($ccOp === 'create' ? array('fields' => array('value' => 'Fail')) : array('id' => 1)));
+    });
+}
+throws('ClientConfig: setting metadata is read-only', ApiException::class, function () use ($ccUpdate) {
+    $ccUpdate(1, array('fields' => array('label' => 'New metadata')));
+});
+
+$ccProtectedKind = $ccAdmin->kinds->get('clientconfig_setting');
+list(, $ccSecretChange) = \ModxMCP\Write\Writer::run($ccAdmin, 'fixture_secret_change', function ($ccTransaction) use ($ccProtectedKind, $ccSite) {
+    $ccTransaction->touch($ccProtectedKind, 4);
+    $ccSite->store('cgSetting', array('value' => 'fixture-history-credential') + $ccSite->row('cgSetting', 4));
+    $ccSite->store('cgContextValue', array('value' => 'fixture-history-context') + $ccSite->row('cgContextValue', 13));
+    return array('result' => array());
+});
+$ccSecretDiff = $call($ccAdmin, 'history_diff', array('changeset_id' => $ccSecretChange['changeset_id']))['objects'][0]['changed'];
+check('ClientConfig: secret global and context snapshots mask history on both sides', $ccSecretDiff['value'] === array('old' => '[hidden]', 'new' => '[hidden]')
+    && $ccSecretDiff['context_values'] === array('old' => '[hidden]', 'new' => '[hidden]'));
+$ccResourceKind = $ccAdmin->kinds->get('resource');
+list(, $ccMixedHistory) = \ModxMCP\Write\Writer::run($ccAdmin, 'fixture_mixed', function ($tx) use ($ccSite, $ccPublic, $ccResourceKind, $ccProtectedKind) {
+    $tx->touch($ccProtectedKind, 4);
+    $tx->touch($ccResourceKind, $ccPublic['id']);
+    $ccSite->store('cgSetting', array('value' => 'fixture-mixed-credential') + $ccSite->row('cgSetting', 4));
+    $ccSite->store('modResource', array('content' => 'Visible edit') + $ccSite->row('modResource', $ccPublic['id']));
+    return array('result' => array(), 'summary' => 'Fixture summary for email_token');
+});
+$ccScopedHistory = $ccActor('develop');
+$ccVisibleList = $call($ccScopedHistory, 'history', array('limit' => 1))['changesets'][0];
+$ccVisibleDiff = $call($ccScopedHistory, 'history_diff', array('changeset_id' => $ccMixedHistory['changeset_id']));
+check('ClientConfig: mixed changesets hide summaries and ClientConfig rows for non-admin reads',
+    $ccVisibleList['changeset_id'] === $ccMixedHistory['changeset_id'] && array_column($ccVisibleList['objects'], 'kind') === array('resource')
+    && array_column($ccVisibleDiff['objects'], 'kind') === array('resource') && strpos($ccVisibleList['summary'] . $ccVisibleDiff['summary'], 'email_token') === false);
+check('ClientConfig: private object keys cannot match a mixed changeset in history queries', !$ccAdmin->journal()->changesets(array(
+    'hidden_kind' => 'clientconfig_setting', 'object_key' => '4', 'ids' => array($ccMixedHistory['changeset_id']))));
+
+$ccRestoreCache = count($ccSite->getCacheManager()->deleted);
+$call($ccAdmin, 'undo', array('changeset_id' => $ccMixed['changeset_id'], 'confirm' => true));
+check('ClientConfig: undo restores the original revision and invalidates the ClientConfig cache', $ccGet(1)['revision'] === $ccOriginal['revision']
+    && count($ccSite->getCacheManager()->deleted) > $ccRestoreCache && $ccGet(2)['fields']['value'] === '');
+$ccDefinitionChange = $ccUpdate(1, array('fields' => array('value' => 'Another value')));
+$ccCurrent = $ccSite->row('cgSetting', 1);
+$ccSite->store('cgSetting', array('xtype' => 'textfield') + $ccCurrent);
+$ccUndo = function () use ($call, $ccAdmin, $ccDefinitionChange) {
+    $call($ccAdmin, 'undo', array('changeset_id' => $ccDefinitionChange['changeset_id'], 'confirm' => true, 'force' => true));
+};
+throws('ClientConfig: force does not roll a setting definition back', ApiException::class, $ccUndo);
+$ccSite->store('cgSetting', $ccCurrent);
+$ccSite->store('modSystemSetting', array('key' => 'shop_notice', 'value' => 'Protected by MODX'));
+throws('ClientConfig: undo cannot touch a newly protected key', ApiException::class, $ccUndo);
+$ccSite->removeCollection('modSystemSetting', array('key' => 'shop_notice'));
+$ccSite->options['modxmcp.disabled_groups'] = 'clientconfig';
+throws('ClientConfig: undo requires the optional integration group', ApiException::class, $ccUndo);
+unset($ccSite->options['modxmcp.disabled_groups']);
 
 // --- Fenom (pdoTools): references, syntax check ---
 use ModxMCP\Code\Fenom;

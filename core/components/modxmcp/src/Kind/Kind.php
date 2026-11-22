@@ -331,6 +331,11 @@ abstract class Kind {
         return null;
     }
 
+    /** Relation names whose values must never appear in a diff for this state. */
+    public function secretRelations(array $state) {
+        return array();
+    }
+
     /** Rows of a relation as shown in a diff; kinds hide what must not be shown. */
     public function maskRelationRows($name, array $rows) {
         return $rows;
@@ -362,6 +367,11 @@ abstract class Kind {
      * Refuse an update that must not go through, from the normalised columns sent. Runs before anything is touched.
      */
     public function assertUpdatable(\modX $modx, $object, array $columns) {
+    }
+
+    /** Validate a complete update and return normalized columns and relations before any processor writes. */
+    public function prepareUpdate(Context $context, array $state, array $columns, array $relations) {
+        return array($columns, $relations);
     }
 
     /**
@@ -746,6 +756,7 @@ abstract class Kind {
             if (isset($definition['description'])) { $field['description'] = $definition['description']; }
             if (!empty($definition['derived'])) { $definition['read_only'] = true; }
             if (isset($definition['format'])) { $field['format'] = $definition['format']; }
+            if (isset($definition['input_types'])) { $field['input_types'] = $definition['input_types']; }
             foreach (array('list', 'code', 'read_only', 'required', 'immutable', 'write_only') as $flag) {
                 if (!empty($definition[$flag])) { $field[$flag] = true; }
             }

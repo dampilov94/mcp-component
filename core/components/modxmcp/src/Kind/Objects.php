@@ -7,6 +7,7 @@ use ModxMCP\Context;
 use ModxMCP\Journal\Snapshot;
 use ModxMCP\Code\FenomCheck;
 use ModxMCP\Lint\PhpLint;
+use ModxMCP\Schema;
 use ModxMCP\Write\Transaction;
 
 /** Generic object operations shared by the object and code tools. */
@@ -86,6 +87,12 @@ final class Objects {
                 throw new ApiException('validation_failed', "Field '{$name}' is read-only.");
             }
             $type = $fields[$name]['type'];
+            if (isset($fields[$name]['input_types'])) {
+                $error = Schema::validate(array('type' => $fields[$name]['input_types']), $value, "Field '{$name}'");
+                if ($error !== null) { throw new ApiException('validation_failed', $error); }
+                $out[$kind->column($name)] = $value;
+                continue;
+            }
             if ($type === 'json') {
                 $out[$kind->column($name)] = self::normalizeJsonValue($name, $value);
                 continue;
@@ -369,9 +376,16 @@ final class Objects {
                     if ($otherKind) { $tx->touch($otherKind, $other[1]); }
                 }
             }
-            foreach ($relations as $name => $value) { $kind->writeRelation($modx, $object, $name, $value); }
-            $cache = $modx->getCacheManager();
-            if ($cache) { $cache->refresh(); }
+            $specs = $kind->relationSpecs();
+            $refresh = false;
+            foreach ($relations as $name => $value) {
+                $kind->writeRelation($modx, $object, $name, $value);
+                $refresh = $refresh || ($specs[$name]['refresh_cache'] ?? true);
+            }
+            if ($refresh) {
+                $cache = $modx->getCacheManager();
+                if ($cache) { $cache->refresh(); }
+            }
         }
         if ($creating && isset($kind->operations()['make_static']) && !array_key_exists('static', $columns)
             && $modx->getOption('modxmcp.auto_static', null, true)) {

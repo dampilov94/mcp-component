@@ -199,6 +199,24 @@ Rules that keep a live site safe:
   `modx_request_status` with the reported `request_id`, or retry the identical call with
   that ID as `_request_id`.
 
+## ClientConfig values
+
+An `admin` token can read existing `clientconfig_setting` objects when the `clientconfig`
+group is available. Use the numeric setting `id` or an exact ClientConfig key in `name`.
+`modx_get` includes stored `context_values`. The `options` field shows static option text.
+Named credentials and password input types have their values masked, including in history.
+
+Use `modx_update` with `fields: {value: "New text"}` for the global value or
+`relations: {context_values: {web: "New override"}}` for named contexts. Both can be sent
+together. Supported inputs are strings for text fields, finite numbers for number fields,
+and booleans or `0`/`1` for checkboxes. Clear an optional value with an empty string. Context
+writes require ClientConfig's context mode and an existing non-manager context. ClientConfig
+2.5.0 falls back to the global value at runtime for stored empty and `'0'` context overrides.
+
+The setting and its overrides share a revision. Use `expected_revision` to catch concurrent
+edits. `modx_undo` restores earlier values and their cache; a changed setting definition or a
+newly protected key can prevent restoration. Create and manage definitions in ClientConfig.
+
 ## Property sets, default properties, lexicon, media source settings
 
 - Kind `property_set` (`properties`: `{name: {type, value, desc?, options?, lexicon?, area?}}`,
