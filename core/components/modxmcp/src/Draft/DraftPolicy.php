@@ -16,6 +16,10 @@ final class DraftPolicy {
         return $context->token['scope'] === self::SCOPE;
     }
 
+    public static function isPlainText($value) {
+        return is_string($value) && strpbrk($value, '<>[]{}&') === false;
+    }
+
     public static function assertUpdateArguments(array $args) {
         if (!empty($args['relations']) || !empty($args['force']) || !empty($args['skip_lint'])) {
             throw new ApiException('forbidden_scope', 'A draft-only token can edit text fields only and cannot bypass write checks.');
@@ -24,7 +28,7 @@ final class DraftPolicy {
             if (!in_array($name, self::FIELDS, true)) {
                 throw new ApiException('forbidden_scope', "A draft-only token cannot change '{$name}'.");
             }
-            if (!is_string($value) || strpbrk($value, '<>[]{}&') !== false) {
+            if (!self::isPlainText($value)) {
                 throw new ApiException('validation_failed', "Field '{$name}' must contain plain text without markup or template delimiters.");
             }
         }

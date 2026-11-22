@@ -3,6 +3,7 @@ namespace ModxMCP\Manager;
 
 use ModxMCP\Action\InvokeAction;
 use ModxMCP\ApiException;
+use ModxMCP\Draft\DraftPreview;
 use ModxMCP\Schema;
 
 /**
@@ -39,6 +40,30 @@ final class DraftService {
     /** The plan (without $confirm) or the result of throwing a draft away. */
     public function discard($resourceId, $confirm = false) {
         return $this->run('discard_draft', array('id' => (int) $resourceId), $confirm, false);
+    }
+
+    public function share($draftId, array $server) {
+        if (!DraftPreview::isDraftId($draftId)) { throw new ApiException('validation_failed', 'A draft ID is required.'); }
+        $url = self::shareEndpoint($this->modx, $server);
+        if ($url === null) { throw new ApiException('https_required', 'Sharing requires an enabled component and an HTTPS preview endpoint on this site.'); }
+        return array('url' => $url . '#' . (new DraftPreview($this->modx))->issue((int) $draftId));
+    }
+
+    public static function shareEndpoint(\modX $modx, array $server) {
+        if (!$modx->getOption('modxmcp.enabled', null, true) || !DraftPreview::isHttps($modx, $server)) { return null; }
+        $endpoint = (new TokenService($modx, null))->endpoint();
+        $siteOrigin = self::httpsOrigin((string) $modx->getOption('site_url'));
+        if ($siteOrigin === null || $siteOrigin !== self::httpsOrigin($endpoint)) { return null; }
+        return substr($endpoint, 0, -strlen('api.php')) . DraftPreview::ENDPOINT;
+    }
+
+    private static function httpsOrigin($url) {
+        if (!filter_var($url, FILTER_VALIDATE_URL) || strpos($url, '\\') !== false) { return null; }
+        $parts = parse_url($url);
+        if (strtolower($parts['scheme'] ?? '') !== 'https' || !isset($parts['host']) || array_intersect_key($parts, array_flip(array('user', 'pass', 'query', 'fragment')))) {
+            return null;
+        }
+        return array(strtolower($parts['host']), $parts['port'] ?? 443);
     }
 
     private function run($op, array $target, $confirm = false, $force = false) {

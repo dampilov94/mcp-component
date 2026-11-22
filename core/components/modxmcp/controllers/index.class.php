@@ -12,6 +12,7 @@ class ModxmcpIndexManagerController extends modExtraManagerController {
 
     /** @var array the open drafts of resources, read in process() for the page's script block */
     private $drafts = array();
+    private $sharePreview = false;
 
     /** The component exposes administrative tools and the API token. */
     public function checkPermissions() {
@@ -36,6 +37,7 @@ class ModxmcpIndexManagerController extends modExtraManagerController {
         $cfg = json_encode(array(
             'connector_url' => $assetsUrl . 'connector.php',
             'drafts'        => $this->drafts,
+            'share_preview' => $this->sharePreview,
             'dl'            => $this->modx->lexicon->fetch('modxmcp_drafts_', true),
             'l'             => array(
                 'copied'          => $this->modx->lexicon('modxmcp_cmp_copied'),
@@ -66,6 +68,7 @@ class ModxmcpIndexManagerController extends modExtraManagerController {
         $integrations = array();
         try {
             $this->drafts = (new \ModxMCP\Manager\DraftService($this->modx, $this->modx->user))->drafts();
+            $this->sharePreview = \ModxMCP\Manager\DraftService::shareEndpoint($this->modx, $_SERVER) !== null;
         } catch (Throwable $e) {
             $this->modx->log(modX::LOG_LEVEL_ERROR, '[modxmcp] Manager page, drafts: ' . $e->getMessage());
         }

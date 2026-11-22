@@ -16,9 +16,11 @@ use ModxMCP\Context;
  */
 final class DraftStore {
     private $modx;
+    private $installIfMissing;
 
-    public function __construct(\xPDO $modx) {
+    public function __construct(\xPDO $modx, $installIfMissing = true) {
         $this->modx = $modx;
+        $this->installIfMissing = $installIfMissing;
     }
 
     private function t($name) {
@@ -61,7 +63,7 @@ final class DraftStore {
         try {
             return Db::run($this->modx, $sql, $params);
         } catch (DbException $e) {
-            if (!$e->tableMissing) { throw $e; }
+            if (!$e->tableMissing || !$this->installIfMissing) { throw $e; }
             $this->install();
             return Db::run($this->modx, $sql, $params);
         }
@@ -73,6 +75,7 @@ final class DraftStore {
 
     private static function row(array $row) {
         return array(
+            'id' => (int) $row['id'],
             'original_id' => (int) $row['original_id'], 'draft_id' => (int) $row['draft_id'], 'created_at' => (int) $row['created_at'],
             'token_id' => $row['token_id'] === null ? null : (int) $row['token_id'],
             'user_id' => $row['user_id'] === null ? null : (int) $row['user_id'],
