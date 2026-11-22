@@ -36,7 +36,8 @@ class ModxmcpGraphManagerController extends modExtraManagerController {
         $cfg = json_encode(array(
             'connector_url' => $assetsUrl . 'connector.php',
             'manager_url'   => $this->modx->getOption('manager_url'),
-        ), JSON_UNESCAPED_UNICODE);
+            'l'             => $this->modx->lexicon->fetch('modxmcp_graph_', true),
+        ), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP);
         $this->addHtml('<script type="text/javascript">var ModxmcpGraph = ' . $cfg . ';</script>');
         // Cache-bust by mtime so the browser always gets the current build.
         $jsFile = $this->modx->getOption('assets_path') . 'components/modxmcp/js/graph.js';
@@ -48,6 +49,7 @@ class ModxmcpGraphManagerController extends modExtraManagerController {
         $this->modx->lexicon->load('modxmcp:default');
         $this->setPlaceholders(array(
             'settings_url' => '?a=index&namespace=modxmcp',
+            'graph_labels' => $this->modx->lexicon->fetch('modxmcp_graph_', true),
         ));
     }
 

@@ -2,6 +2,7 @@
 namespace ModxMCP\Code;
 
 use ModxMCP\Context;
+use ModxMCP\Graph\IntegrationReferences;
 use ModxMCP\Kind\Kind;
 
 /** Shared, read-only textual and structural usage lookup. */
@@ -97,6 +98,23 @@ final class Usages {
         $patterns = self::patterns($targetKind->name(), $name, $id);
         $usages = array();
         $truncated = false;
+        $structural = array();
+        if (in_array($targetKind->name(), array('resource', 'snippet', 'chunk', 'template', 'tv'), true)) {
+            foreach (IntegrationReferences::scan($context->modx) as $ref) {
+                if ($ref['kind'] !== $targetKind->name() || (isset($ref['id']) ? $ref['id'] !== $id : $ref['name'] !== $name)) { continue; }
+                $label = $ref['source'] . ' #' . $ref['source_id'];
+                if (!isset($structural[$label])) {
+                    if (count($structural) === $limit) { $truncated = true; break; }
+                    $structural[$label] = array('kind' => $ref['source'], 'id' => $ref['source_id'], 'name' => $label,
+                        'static' => false, 'match_count' => 0, 'matches' => array());
+                }
+                ++$structural[$label]['match_count'];
+                if (count($structural[$label]['matches']) < 5) {
+                    $structural[$label]['matches'][] = array('text' => $ref['field'], 'via' => $ref['source']);
+                }
+            }
+            $usages = array_values($structural);
+        }
         if ($patterns) {
             $kinds = CodeSearch::kinds($context, array('chunk', 'snippet', 'template', 'plugin', 'resource'));
             foreach ($kinds as $kind) {

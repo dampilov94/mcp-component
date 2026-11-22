@@ -16,7 +16,7 @@ final class GraphBuilder {
         $this->kinds = new KindRegistry();
     }
     private function getMiniShop2CorePath() {
-        return $this->modx->getOption('minishop2.core_path', null, $this->modx->getOption('core_path') . 'components/minishop2/');
+        return (new \ModxMCP\Capabilities($this->modx))->integrationPath('minishop2');
     }
     private function readCode($object, $type, $column) {
         if (!$object->get('static')) { return (string) $object->get($column); }
@@ -28,7 +28,7 @@ final class GraphBuilder {
             } else {
                 // TV defaults are not a generic code field, but the legacy graph also reads static TVs.
                 $path = $object->getSourceFile();
-                if ($path && strpos($path, '://') === false && is_file($path)) {
+                if ($path && \ModxMCP\Kind\StaticPath::allowed($this->modx, $path) && is_file($path)) {
                     $bytes = @file_get_contents($path);
                     if ($bytes !== false) { $raw = $bytes; }
                 }
@@ -243,6 +243,11 @@ final class GraphBuilder {
             }
         }
 
+        foreach (IntegrationReferences::scan($this->modx) as $ref) {
+            $i = isset($ref['id']) ? ($nodeByTypeId[$ref['kind']][$ref['id']] ?? null) : ($index[$ref['kind']][$ref['name']] ?? null);
+            if ($i !== null && !isset($nodes[$i]['used_by'])) { $nodes[$i]['used_by'] = $ref['source'] . ' #' . $ref['source_id']; }
+        }
+
         // --- Template resource counts (O(#templates) COUNTs — never a resource listing). ---
         foreach ($tplById as $tid => $i) {
             $nodes[$i]['resources'] = (int) $this->modx->getCount('modResource', array('template' => $tid, 'deleted' => 0));
@@ -303,7 +308,7 @@ final class GraphBuilder {
             if ($n['in'] === 0 && ($n['type'] === 'chunk' || $n['type'] === 'snippet' || $n['type'] === 'tv')) {
                 if (isset($n['used_by'])) { continue; }   // wired via a system setting
                 $candidates[] = $n;
-            } elseif ($n['type'] === 'template' && isset($n['resources']) && $n['resources'] === 0) {
+            } elseif ($n['type'] === 'template' && !isset($n['used_by']) && isset($n['resources']) && $n['resources'] === 0) {
                 $orphans[] = array('type' => 'template', 'id' => $n['id'], 'name' => $n['name'], 'reason' => 'no resources use it');
             }
         }
@@ -360,9 +365,9 @@ final class GraphBuilder {
         // tables. Say so, so nothing deletes on this list alone.
         $orphanNote = 'Orphans are CANDIDATES, not proof. Checked: element content, element default'
             . ' properties, named property sets, system settings, miniShop2 order-status e-mails,'
-            . ' template↔TV attachment' . ($verified ? ', resource content' : '') . ', Fenom calls in chunks and templates (when pdoTools is installed)'
+            . ' template↔TV attachment' . ($verified ? ', resource content' : '') . ', MIGX configuration and VirtualPage entry references, Fenom calls in chunks and templates (when pdoTools is installed)'
             . '. An add-on can still reference an element from its own tables, and dynamic names'
-            . ' ($modx->getChunk($var)) are invisible. Confirm with delete_element {dry_run:true}.';
+            . ' ($modx->getChunk($var)) are invisible. Confirm with modx_delete {dry_run:true}.';
 
         if ($format === 'summary') {
             return array('stats' => $stats, 'missing' => $missing, 'orphans' => $orphans,
@@ -666,7 +671,7 @@ final class GraphBuilder {
         }
         foreach (array('elements', 'default_text') as $f) {
             $v = (string) $tv->get($f);
-            if ($v !== '' && preg_match('/@CHUNK\s+([A-Za-z0-9_\-\.\/]+)/i', $v, $m)) {
+            if ($v !== '' && preg_match('/@CHUNK\s+([\p{L}\p{M}\p{N}_\-\.\/]+)/iu', $v, $m)) {
                 $refs[] = array('kind' => 'chunk', 'name' => $m[1], 'via' => 'binding');
             }
         }

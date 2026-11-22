@@ -3,7 +3,7 @@ namespace ModxMCP\Kind;
 
 use ModxMCP\ApiException;
 
-/** Faithful TV input recommendations from 1.x, including its legacy skeleton values. */
+/** TV input recommendations and a skeleton for the current API. */
 final class TvInputTypes {
     /**
      * Available TV input (widget) types. Core types are listed statically; any custom
@@ -11,8 +11,8 @@ final class TvInputTypes {
      * exactly as the manager builds the TV 'Input Type' dropdown.
      */
     public static function listTvInputTypes(\modX $modx) {
-        // Each core type carries `use` (when to pick it) + `requires` (extra create_element keys)
-        // so a model can choose the right field_type without reading the docs. See help topic
+        // Each core type carries `use` (when to pick it) + `requires` (extra setup)
+        // so a model can choose the right fields.type without reading the docs. See help topic
         // tv_input_types for full examples.
         $g = function ($label, $use, $requires) { return array('label' => $label, 'use' => $use, 'requires' => $requires); };
         $core = array(
@@ -31,8 +31,8 @@ final class TvInputTypes {
             'listbox'          => $g('Listbox (Single-Select)', 'pick ONE value from a fixed list', array('elements (Label==value||...)', 'default_text?')),
             'listbox-multiple' => $g('Listbox (Multi-Select)', 'pick SEVERAL values from a list', array('elements (Label==value||...)')),
             'radio'            => $g('Radio Options', 'pick ONE value shown as radio buttons', array('elements (Label==value||...)', 'default_text?')),
-            'image'            => $g('Image', 'pick/upload an image', array('media_source (id)')),
-            'file'             => $g('File', 'pick/upload a file', array('media_source (id)')),
+            'image'            => $g('Image', 'pick/upload an image', array('Set the media source in the MODX manager.')),
+            'file'             => $g('File', 'pick/upload a file', array('Set the media source in the MODX manager.')),
             'resourcelist'     => $g('Resource List', 'pick a MODX resource (page) by id', array('input_properties.parents? to limit the tree')),
             'tag'              => $g('Tag', 'comma-separated tags', array()),
             'autotag'          => $g('Auto-Tag', 'tags with auto-complete', array()),
@@ -81,7 +81,7 @@ final class TvInputTypes {
 
     /**
      * Suggest the right TV input type for a described need. Deterministic keyword rules
-     * (English + Russian), ranked, with a ready-to-edit create_element skeleton for the top
+     * (English + Russian), ranked, with a ready-to-edit modx_create skeleton for the top
      * pick. Complements the tv_input_types doc — helps a model that's unsure choose correctly.
      * data: description (required).
      */
@@ -144,8 +144,6 @@ final class TvInputTypes {
         // Skeleton for the top pick.
         $top = $scored[0]['type'];
         $reqMap = array(
-            'image' => array('media_source' => '<media source id — see modx_list_media_sources>'),
-            'file'  => array('media_source' => '<media source id — see modx_list_media_sources>'),
             'listbox' => array('elements' => 'Label==value||Label2==value2'),
             'listbox-multiple' => array('elements' => 'Label==value||Label2==value2'),
             'radio' => array('elements' => 'Label==value||Label2==value2'),
@@ -154,14 +152,15 @@ final class TvInputTypes {
             'colorpicker' => array('input_properties' => array('format' => 'hex')),
             'migx' => array('input_properties' => array('configs' => '', 'formtabs' => '<see the migx help topic>', 'columns' => '<see the migx help topic>')),
         );
-        $skel = array('name' => '<tv_name>', 'caption' => '<Caption>', 'field_type' => $top, 'templates' => array('<template id>'));
+        $skel = array('name' => '<tv_name>', 'caption' => '<Caption>', 'type' => $top);
         if (isset($reqMap[$top])) { $skel = array_merge($skel, $reqMap[$top]); }
 
         return array(
             'description' => (string) $data['description'],
             'candidates'  => array_slice($scored, 0, 3),
             'recommended' => $top,
-            'create_skeleton' => array('action' => 'create_element', 'type' => 'tv', 'data' => $skel),
+            'create_skeleton' => array('tool' => 'modx_create', 'arguments' => array('kind' => 'tv', 'fields' => $skel,
+                'relations' => array('templates' => array('<template id>')))),
             'note' => $note,
             'docs' => 'See the tv_input_types help topic (and migx for repeating rows).',
         );

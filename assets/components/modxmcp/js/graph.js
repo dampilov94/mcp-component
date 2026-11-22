@@ -17,17 +17,21 @@ Ext.onReady(function () {
 
     var cfg = (typeof ModxmcpGraph !== 'undefined') ? ModxmcpGraph : {};
 
+    var labels = cfg.l || {};
+    function t(key) { return labels[key] || key; }
+    function h(key) { return esc(t(key)); }
+
     var COLORS = {
         template: '#2563eb', chunk: '#16a34a', snippet: '#d97706',
         tv: '#9333ea', plugin: '#dc2626', resource: '#64748b', missing: '#ef4444'
     };
     var LABEL = {
-        template: 'Шаблоны', chunk: 'Чанки', snippet: 'Сниппеты', tv: 'TV',
-        plugin: 'Плагины', resource: 'Ресурсы', missing: 'Битые ссылки'
+        template: t('templates'), chunk: t('chunks'), snippet: t('snippets'), tv: 'TV',
+        plugin: t('plugins'), resource: t('resources'), missing: t('broken_links')
     };
     var ONE = {
-        template: 'шаблон', chunk: 'чанк', snippet: 'сниппет', tv: 'TV',
-        plugin: 'плагин', resource: 'ресурс', missing: 'не существует'
+        template: t('template'), chunk: t('chunk'), snippet: t('snippet'), tv: 'TV',
+        plugin: t('plugin'), resource: t('resource'), missing: t('missing')
     };
     var EDIT = {
         template: 'element/template/update', chunk: 'element/chunk/update',
@@ -35,8 +39,8 @@ Ext.onReady(function () {
         plugin: 'element/plugin/update', resource: 'resource/update'
     };
     var KIND = {
-        tag: 'тег', attached: 'привязан', property: 'свойство', php: 'PHP',
-        migx: 'MIGX', binding: 'биндинг', link: 'ссылка', template: 'шаблон', missing: 'битая'
+        tag: t('tag'), attached: t('attached'), property: t('property'), php: 'PHP',
+        migx: 'MIGX', binding: t('binding'), link: t('link'), template: t('template'), missing: t('broken')
     };
 
     var $ = function (id) { return document.getElementById(id); };
@@ -86,8 +90,8 @@ Ext.onReady(function () {
     // ---- load -------------------------------------------------------------------------
     function load() {
         overlay.style.display = 'flex';
-        overlay.textContent = 'Загружаю граф…';
-        stat.textContent = 'Загружаю…';
+        overlay.textContent = t('loading_graph');
+        stat.textContent = t('loading');
         MODx.Ajax.request({
             url: cfg.connector_url,
             params: {
@@ -97,11 +101,11 @@ Ext.onReady(function () {
             listeners: {
                 success: { fn: function (r) {
                     raw = (r && r.object) ? r.object : null;
-                    if (!raw || !raw.nodes) { fail('Сервер вернул пустой ответ.'); return; }
+                    if (!raw || !raw.nodes) { fail(t('empty_response')); return; }
                     ingest();
                 } },
                 failure: { fn: function (r) {
-                    fail((r && r.message) ? r.message : 'Не удалось построить граф.');
+                    fail((r && r.message) ? r.message : t('load_failed'));
                 } }
             }
         });
@@ -109,7 +113,7 @@ Ext.onReady(function () {
     function fail(msg) {
         overlay.style.display = 'flex';
         overlay.textContent = msg;
-        stat.textContent = 'Ошибка';
+        stat.textContent = t('error');
     }
 
     // Turn the payload into simulation nodes. "missing" targets become hollow ghost nodes so a
@@ -309,10 +313,10 @@ Ext.onReady(function () {
         if (!raw) { return; }
         var s = raw.stats || {};
         var shown = visN.length, total = N.length;
-        stat.textContent = (shown === total ? (total + ' узлов') : (shown + ' из ' + total + ' узлов'))
-            + ' · ' + visL.length + ' связей'
-            + (s.missing ? ' · ' + s.missing + ' битых' : '')
-            + (s.orphans ? ' · ' + s.orphans + ' без ссылок' : '');
+        stat.textContent = (shown === total ? (total + t('nodes')) : (shown + t('of_total') + total + t('nodes')))
+            + ' · ' + visL.length + t('edges')
+            + (s.missing ? ' · ' + s.missing + t('broken_count') : '')
+            + (s.orphans ? ' · ' + s.orphans + t('unused_count') : '');
     }
 
     // ---- sidebar ----------------------------------------------------------------------
@@ -352,9 +356,9 @@ Ext.onReady(function () {
         miss.forEach(function (m) {
             var idx = byKey[m.kind + ':' + m.name];
             mh += '<li data-go="' + (idx === undefined ? '' : idx) + '">' + dot('missing')
-               + '<span><b>' + esc(m.name) + '</b><br><span class="t">из ' + esc(m.from) + '</span></span></li>';
+               + '<span><b>' + esc(m.name) + ('</b><br><span class="t">' + h('from')) + esc(m.from) + '</span></span></li>';
         });
-        $('g-miss').innerHTML = mh || '<li class="g-empty-note">Битых ссылок нет.</li>';
+        $('g-miss').innerHTML = mh || ('<li class="g-empty-note">' + h('no_broken') + '</li>');
 
         var oh = '';
         orph.forEach(function (o) {
@@ -362,14 +366,14 @@ Ext.onReady(function () {
             oh += '<li data-go="' + (idx === undefined ? '' : idx) + '">' + dot(o.type)
                + '<span>' + esc(o.name) + '<br><span class="t">' + esc(o.reason) + '</span></span></li>';
         });
-        $('g-orph').innerHTML = oh || '<li class="g-empty-note">Все элементы используются.</li>';
+        $('g-orph').innerHTML = oh || ('<li class="g-empty-note">' + h('all_used') + '</li>');
 
         $('g-nvendor').textContent = vendorUnusedCount;
         $('g-norph2').textContent = orph.length;
 
         $('g-orph-note').textContent = (raw.stats && raw.stats.orphans_verified === false)
-            ? 'Не сверялось с контентом ресурсов (сайт большой) — проверьте перед удалением.'
-            : 'Кандидаты, не доказательство: аддон может ссылаться из своих таблиц.';
+            ? t('orphan_unverified')
+            : t('orphan_note');
 
         [['g-miss'], ['g-orph']].forEach(function (p) {
             Array.prototype.forEach.call($(p[0]).querySelectorAll('li[data-go]'), function (li) {
@@ -413,8 +417,8 @@ Ext.onReady(function () {
         var dbtn = function (v) { return '<button class="g-btn' + (depth === v ? ' on' : '') + '" data-d="' + v + '">' + v + '</button>'; };
         var rbtn = function (v, t) { return '<button class="g-btn' + (dir === v ? ' on' : '') + '" data-r="' + v + '">' + t + '</button>'; };
         crumb.innerHTML = dot(n.type) + '<b>' + esc(n.name) + '</b>'
-            + '<span style="color:#7b8794;">шагов</span>' + dbtn(1) + dbtn(2) + dbtn(3)
-            + rbtn('both', 'всё') + rbtn('out', 'использует') + rbtn('in', 'используется')
+            + ('<span style="color:#7b8794;">' + h('hops') + '</span>') + dbtn(1) + dbtn(2) + dbtn(3)
+            + rbtn('both', h('both')) + rbtn('out', h('uses')) + rbtn('in', h('used'))
             + '<button class="g-btn" data-x="1">✕</button>';
         crumb.style.display = 'flex';
         Array.prototype.forEach.call(crumb.querySelectorAll('button'), function (b) {
@@ -738,27 +742,27 @@ Ext.onReady(function () {
         if (src.category) { html += ' · ' + esc(src.category); }
         if (src.tv_type) { html += ' · ' + esc(src.tv_type); }
         if (src.static) { html += ' · static'; }
-        if (src.disabled) { html += ' · выключен'; }
+        if (src.disabled) { html += (' · ' + h('disabled')); }
         html += '</div>';
 
         if (n.type === 'missing') {
-            html += '<div class="warn"><b>Битая ссылка.</b> ' + esc(src.missing_kind === 'snippet' ? 'Сниппет' : 'Чанк')
-                 + ' с таким именем не существует — тег отрендерится пустотой.</div>';
+            html += ('<div class="warn"><b>' + h('broken_link') + '</b> ') + esc(src.missing_kind === 'snippet' ? t('snippet_title') : t('chunk_title'))
+                 + (h('missing_note') + '</div>');
         }
         if (n.orphan) {
-            html += '<div class="note"><b>Никто не ссылается.</b> ' + esc(n.orphanReason || '')
-                 + '. Кандидат на удаление — но сначала проверьте dry-run.</div>';
+            html += ('<div class="note"><b>' + h('no_references') + '</b> ') + esc(n.orphanReason || '')
+                 + (h('dry_run') + '</div>');
         }
-        if (src.used_by) { html += '<div class="note">Используется вне элементов: ' + esc(src.used_by) + '</div>'; }
+        if (src.used_by) { html += ('<div class="note">' + h('used_elsewhere')) + esc(src.used_by) + '</div>'; }
 
         html += '<div class="acts">';
         var u = mgrUrl(n.type, n.id);
-        if (u) { html += '<a class="g-btn" href="' + esc(u) + '" target="_blank">Редактировать</a>'; }
-        if (n.type !== 'missing') { html += '<button class="g-btn" data-iso="1">Изолировать</button>'; }
+        if (u) { html += '<a class="g-btn" href="' + esc(u) + ('" target="_blank">' + h('edit') + '</a>'); }
+        if (n.type !== 'missing') { html += ('<button class="g-btn" data-iso="1">' + h('isolate') + '</button>'); }
         html += '</div>';
 
-        if (typeof src.resources === 'number') { html += '<div>Ресурсов на шаблоне: <b>' + src.resources + '</b></div>'; }
-        if (src.events && src.events.length) { html += '<div>События: ' + esc(src.events.join(', ')) + '</div>'; }
+        if (typeof src.resources === 'number') { html += ('<div>' + h('template_resources') + '<b>') + src.resources + '</b></div>'; }
+        if (src.events && src.events.length) { html += ('<div>' + h('events')) + esc(src.events.join(', ')) + '</div>'; }
 
         function list(title, arr) {
             if (!arr.length) { return ''; }
@@ -767,11 +771,11 @@ Ext.onReady(function () {
                 s += '<li data-go="' + x.i + '">' + dot(N[x.i].type) + '<span>' + esc(N[x.i].name)
                    + ' <span class="t">' + esc(KIND[x.kind] || x.kind) + '</span></span></li>';
             });
-            if (arr.length > 60) { s += '<li class="t">…ещё ' + (arr.length - 60) + '</li>'; }
+            if (arr.length > 60) { s += ('<li class="t">' + h('more')) + (arr.length - 60) + '</li>'; }
             return s + '</ul>';
         }
-        html += list('Использует', out) + list('Используется в', inc);
-        if (!out.length && !inc.length) { html += '<p class="g-empty-note">Связей не найдено.</p>'; }
+        html += list(h('uses_heading'), out) + list(h('used_heading'), inc);
+        if (!out.length && !inc.length) { html += ('<p class="g-empty-note">' + h('no_edges') + '</p>'); }
 
         info.innerHTML = html;
         info.className = 'g-info open';
@@ -854,7 +858,7 @@ Ext.onReady(function () {
                         var ai = a.name.toLowerCase().indexOf(s), bi = b.name.toLowerCase().indexOf(s);
                         return ai !== bi ? ai - bi : b.deg - a.deg;
                     }).slice(0, 40);
-        if (!hits.length) { res.innerHTML = '<div style="color:#7b8794;">Ничего не найдено</div>'; res.style.display = 'block'; return; }
+        if (!hits.length) { res.innerHTML = ('<div style="color:#7b8794;">' + h('no_search') + '</div>'); res.style.display = 'block'; return; }
         res.innerHTML = hits.map(function (n) {
             return '<div data-go="' + n.i + '">' + dot(n.type) + '<span>' + esc(n.name)
                  + ' <span style="color:#7b8794;font-size:11px;">' + esc(ONE[n.type]) + '</span></span></div>';
@@ -933,7 +937,7 @@ Ext.onReady(function () {
 
     // Lane/anchor positions live in WORLD coordinates and are deliberately not recomputed here:
     // re-centring them every time the details panel opens would make the whole graph lurch.
-    // "Вписать" re-frames on demand.
+    // Fit to view re-frames on demand.
     window.addEventListener('resize', function () { fitShell(); ensureSize(); kick(); });
     if (window.ResizeObserver) {
         new window.ResizeObserver(function () { ensureSize(); kick(); }).observe(canvas);

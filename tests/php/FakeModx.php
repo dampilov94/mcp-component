@@ -1160,6 +1160,10 @@ class modX extends xPDO {
         }
         return new FakeObject($this, $class, $row, false);
     }
+    public function getIterator($class, $criteria = null) {
+        yield from $this->getCollection($class, $criteria);
+    }
+
     public function getCollection($class, $criteria = null) {
         if ($criteria instanceof FakeQuery && $criteria->broken) { return array(); }
         $rows = $this->match($class, $criteria);
