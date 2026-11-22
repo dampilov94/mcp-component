@@ -76,6 +76,12 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
     }
     const bearer = await site.post(null, { v: 2, action: "site_info", args: {} }, { Authorization: `Bearer ${read}` });
     assert.equal(bearer.status, 200);
+    const unauthenticated = await site.post(null, "x".repeat(5000), { "MCP-Protocol-Version": "2025-11-25" });
+    assert.equal(unauthenticated.status, 401);
+    assert.equal(unauthenticated.body.error.data.code, "unauthorized");
+    const forbidden = await site.post(read, "{invalid", { "MCP-Protocol-Version": "2025-11-25", Origin: "https://other.example" });
+    assert.equal(forbidden.status, 403);
+    assert.equal(forbidden.body.error.data.code, "origin_not_allowed");
   });
 
   await t.test("request validation", async () => {

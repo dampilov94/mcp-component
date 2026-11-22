@@ -85,17 +85,25 @@ final class Kernel {
         $method = isset($server['REQUEST_METHOD']) ? $server['REQUEST_METHOD'] : '';
         if ($method === 'GET' && HttpServer::wantsStream($server)) { return HttpServer::methodNotAllowed(); }
         if ($method === 'DELETE') { return HttpServer::methodNotAllowed(); }
-        if ($method === 'POST') {
-            $maxPayload = (int) $this->modx->getOption('modxmcp.max_payload_bytes', null, 1048576);
-            if ($maxPayload < 0) { $maxPayload = 1048576; }
-            $declared = isset($server['CONTENT_LENGTH']) ? (string) $server['CONTENT_LENGTH'] : '';
-            $raw = $maxPayload > 0 ? file_get_contents('php://input', false, null, 0, $maxPayload + 1) : file_get_contents('php://input');
-            if ($raw !== false) {
-                $oversize = $maxPayload > 0 && (strlen($raw) > $maxPayload || (ctype_digit($declared) && (float) $declared > $maxPayload));
-                if (HttpServer::isJsonRpc($raw, $oversize)) { return $this->mcpFrame($server, $raw, $oversize); }
-            }
+        if ($method !== 'POST') { return $this->methodFrame($method); }
+
+        $mcpHint = HttpServer::wantsStream($server);
+        try {
+            $this->guard($server);
+            if ($mcpHint) { HttpServer::checkOrigin($server, $this->modx); }
+            $presented = self::presentedToken($server);
+            $token = $this->authenticate($presented);
+            $raw = $this->readBody($server);
+        } catch (ApiException $e) {
+            if ($mcpHint) { return HttpServer::refusal($e); }
+            throw $e;
         }
-        return $this->process($server, $requestId);
+        $shape = json_decode($raw);
+        if (HttpServer::isJsonRpc($shape) || ($mcpHint && json_last_error() !== JSON_ERROR_NONE)) {
+            return $this->serveMcp($server, $raw, false, $token, $presented, $mcpHint);
+        }
+        if (json_last_error() !== JSON_ERROR_NONE) { throw new ApiException('invalid_json', 'Invalid JSON or UTF-8.'); }
+        return $this->process($shape, json_decode($raw, true), $token, $requestId);
     }
 
     /**
@@ -107,13 +115,30 @@ final class Kernel {
             $this->guard($server);
             HttpServer::checkOrigin($server, $this->modx);
             $presented = self::presentedToken($server);
-            $token = (new TokenStore($this->modx))->authenticate($presented);
-            if ($token === null) { throw new ApiException('unauthorized', 'Unauthorized'); }
-            return (new HttpServer($this, $this->modx))->handle($server, $raw, (bool) $oversize, $token, $presented);
+            $token = $this->authenticate($presented);
+            return $this->serveMcp($server, $raw, $oversize, $token, $presented, true);
         } catch (ApiException $e) {
             return HttpServer::refusal($e);
         } catch (\Throwable $e) {
             list($status, $body) = $this->errorBody($e, 'mcp');
+            return HttpServer::internalFrame($body['error'], $this->maxResponse);
+        }
+    }
+
+    private function authenticate($presented) {
+        $token = (new TokenStore($this->modx))->authenticate($presented);
+        if ($token === null) { throw new ApiException('unauthorized', 'Unauthorized'); }
+        return $token;
+    }
+
+    private function serveMcp(array $server, $raw, $oversize, array $token, $presented, $originChecked) {
+        try {
+            if (!$originChecked) { HttpServer::checkOrigin($server, $this->modx); }
+            return (new HttpServer($this, $this->modx))->handle($server, $raw, (bool) $oversize, $token, $presented);
+        } catch (ApiException $e) {
+            return HttpServer::refusal($e);
+        } catch (\Throwable $e) {
+            list(, $body) = $this->errorBody($e, 'mcp');
             return HttpServer::internalFrame($body['error'], $this->maxResponse);
         }
     }
@@ -141,35 +166,23 @@ final class Kernel {
         }
     }
 
-    private function process(array $server, &$requestId) {
-        $modx = $this->modx;
-        $method = isset($server['REQUEST_METHOD']) ? $server['REQUEST_METHOD'] : '';
-
+    private function methodFrame($method) {
         // Unauthenticated probe: only the component name, build version and enabled flag.
         if ($method === 'GET') {
             return $this->buildFrame(200, array(
                 'component' => 'modxMCP',
                 'version'   => self::VERSION,
                 'protocol'  => self::PROTOCOL,
-                'enabled'   => (bool) $modx->getOption('modxmcp.enabled', null, false),
+                'enabled'   => (bool) $this->modx->getOption('modxmcp.enabled', null, false),
             ));
         }
-        if ($method !== 'POST') {
-            $frame = $this->buildFrame(405, array('ok' => false, 'error' => array('code' => 'method_not_allowed', 'message' => 'Method Not Allowed')));
-            $frame['headers'] = array('Allow: GET, POST');
-            return $frame;
-        }
-        $this->guard($server);
+        $frame = $this->buildFrame(405, array('ok' => false, 'error' => array('code' => 'method_not_allowed', 'message' => 'Method Not Allowed')));
+        $frame['headers'] = array('Allow: GET, POST');
+        return $frame;
+    }
 
-        $token = (new TokenStore($modx))->authenticate(self::presentedToken($server));
-        if ($token === null) {
-            throw new ApiException('unauthorized', 'Unauthorized');
-        }
-
-        $input = $this->readBody($server);
-        $shape = $input[0];
-        $request = $input[1];
-
+    private function process($shape, $request, array $token, &$requestId) {
+        if (!($shape instanceof \stdClass)) { throw new ApiException('validation_failed', 'Request body must be a JSON object.'); }
         if (array_diff(array_keys($request), array('v', 'action', 'args', 'request_id', 'session_id'))) {
             throw new ApiException('validation_failed', 'Unknown top-level request fields. Put action arguments inside args.');
         }
@@ -289,7 +302,7 @@ final class Kernel {
         return '';
     }
 
-    /** @return array [stdClass shape, associative request] */
+    /** Read an authenticated body once, enforcing its declared and actual length. */
     private function readBody(array $server) {
         $contentType = isset($server['CONTENT_TYPE']) ? (string) $server['CONTENT_TYPE'] : '';
         if (!preg_match('~^application/(?:json|[a-z0-9.+-]+\+json)(?:\s*;|\s*$)~i', $contentType)) {
@@ -308,16 +321,7 @@ final class Kernel {
         if ($maxPayload > 0 && strlen($raw) > $maxPayload) {
             throw new ApiException('request_too_large', 'Payload Too Large');
         }
-        try {
-            $shape = json_decode($raw, false, 512, JSON_THROW_ON_ERROR);
-            $request = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
-        } catch (\JsonException $e) {
-            throw new ApiException('invalid_json', 'Invalid JSON or UTF-8.');
-        }
-        if (!($shape instanceof \stdClass)) {
-            throw new ApiException('validation_failed', 'Request body must be a JSON object.');
-        }
-        return array($shape, $request);
+        return $raw;
     }
 
     /** Actions run as the configured service user; what a token may do is decided by its scope. */
