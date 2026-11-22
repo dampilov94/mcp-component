@@ -79,6 +79,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 40 | [Replace 1.x with a fresh 2.0 installation](40-clean-install-guide.md) | `task/40-clean-install-guide` | merged |
 | 41 | [Token labels and credential reads](41-token-and-credential-guards.md) | `task/41-token-and-credential-guards` | merged |
 | 42 | [Alpha2 review follow-ups](42-review-followups.md) | `task/42-review-followups` | merged |
+| 43 | [Draft-only token](43-draft-only.md) | `task/43-draft-only` | in progress |
 
 ## Doing several briefs in a row
 
