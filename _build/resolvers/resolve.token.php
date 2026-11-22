@@ -44,6 +44,12 @@ if ($action === xPDOTransport::ACTION_INSTALL || $action === xPDOTransport::ACTI
                 $modx->log(modX::LOG_LEVEL_INFO, '[modxMCP] ' . $line);
             }
         }
+        try {
+            (new \ModxMCP\Request\RequestStore($modx->getOption('core_path') . 'modxmcp-data/requests',
+                $modx->getOption('modxmcp.request_retention_seconds', null, 86400)))->indexLegacyResponses();
+        } catch (\Throwable $e) {
+            $modx->log(modX::LOG_LEVEL_WARN, '[modxMCP] Could not index older request responses. They still expire when checked.');
+        }
         // The plugin that records manager edits; an upgrade that adds kinds also adds their events.
         \ModxMCP\Manager\Recorder::syncPlugin($modx);
         if (!$store->all()) {

@@ -101,6 +101,30 @@ final class RequestStore {
         throw new RequestStoreException('Cannot index the retained response.');
     }
 
+    /** One-time install/upgrade pass for responses that predate the index. */
+    public function indexLegacyResponses() {
+        if (!is_dir($this->dir)) { return; }
+        $marker = $this->dir . '/legacy-index.stamp';
+        if (is_file($marker)) { return; }
+        $complete = true;
+        foreach (new DirectoryIterator($this->dir) as $file) {
+            if (!preg_match('/^([a-f0-9]{64})\.response\.php$/D', $file->getFilename(), $match)) { continue; }
+            $key = $match[1];
+            $lock = $this->lock($key);
+            if (!$lock) { $complete = false; continue; }
+            try {
+                $record = $this->readRecord($key);
+                if ($record === null || $record['state'] === 'pending') { continue; }
+                $record = $this->expire($key, $record);
+                if ($record['state'] === 'completed') { $this->indexResponse($key, $record['completed_at']); }
+            } catch (RequestStoreException $e) {
+                // An unreadable record remains in place and still blocks replay.
+                $complete = false;
+            } finally { flock($lock, LOCK_UN); fclose($lock); }
+        }
+        if ($complete) { @touch($marker); }
+    }
+
     /** Expire a bounded batch from the index, staying off the path of tombstones and legacy IDs. */
     private function cleanup() {
         $gc = $this->lock('cleanup');
@@ -134,6 +158,10 @@ final class RequestStore {
         try {
             $record = $this->readRecord($key);
             if ($record !== null && $this->expire($key, $record)['state'] === 'completed') { return; }
+            if ($record !== null && $record['state'] !== 'pending' && is_file($this->dir . '/' . $key . '.response.php')) { return; }
+            @unlink($marker);
+        } catch (RequestStoreException $e) {
+            // Leave the response and state untouched; a corrupt item must not stall the queue.
             @unlink($marker);
         } finally { flock($lock, LOCK_UN); fclose($lock); }
     }
