@@ -208,7 +208,7 @@ Changes in the `2.0.0-alpha2` transport:
 - Preserve TV ranks when editing template relations, ignore comment tags in the dependency
   graph, and run both parser passes in `modx_run` text mode.
 
-After alpha2 — tasks 37–41:
+After alpha2 — tasks 37–42:
 
 - Protect modxMCP, MODX core and server configuration files from file-tool and static-element
   writes. Check moves, deletions and undo. Preserve the previous file when changing a static path.
@@ -219,6 +219,12 @@ After alpha2 — tasks 37–41:
   a string key. Correct prompt access and unpublished-page preview guidance.
 - Preserve full UTF-8 token labels up to 190 characters. Refuse raw queries of user attributes at
   every token scope. Document the verified uninstall-and-install path from 1.x.
+- Authenticate POST requests before reading the body. Expire retained responses in bounded
+  batches while keeping used request IDs reserved. Apply the `modx_query_db` row limit in SQL.
+- Remember file revisions by media source and path. Limit memory use when clipping log and search
+  excerpts. Apply native MODX path resolution checks to static elements.
+- Use the manager language on the dependency graph. Include MIGX configuration and VirtualPage
+  handler references in dependency and usage checks, and recognize Unicode TV chunk bindings.
 
 Stage 7 — manager:
 

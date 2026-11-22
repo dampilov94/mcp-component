@@ -39,4 +39,8 @@ Based on: main at `6273a6e`. Branch `task/42-review-followups`.
 - On disposable MODX 2.8.8 with MariaDB 10.6, verified the SQL cap for plain SELECT, a literal
   LIMIT with OFFSET, a parameterized LIMIT with an offset, and a smaller existing limit. The
   graph template also rendered with native Smarty in English and Russian with all labels present.
-- Review on fordev should cover real add-on references and graph interactions in the manager.
+- Chrome on disposable MODX 2.8.8 verified graph search, TV binding details, filtering, isolate,
+  reset, free layout and fit to view.
+- On disposable MODX 2.8.8 with MIGX 3.0.2-beta1 and the fordev copy of VirtualPage 1.0.9-beta,
+  the graph, `modx_find_usages` and deletion previews found the chunk referenced by each add-on.
+  A Cyrillic TV `@CHUNK` binding also appeared in the graph. The fixture session was undone.
