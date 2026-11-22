@@ -9,7 +9,7 @@ final class DraftPolicy {
     const SCOPE = 'draft_only';
     const ACTIONS = array('manifest', 'capabilities', 'site_info', 'help', 'describe', 'list', 'get', 'resource_tree', 'update', 'invoke');
     const KIND = 'resource';
-    const OPERATIONS = array('create_draft', 'list_drafts');
+    const OPERATIONS = array('create_draft', ProductDraft::STAGE_OP, 'list_drafts');
     const FIELDS = array('pagetitle', 'longtitle', 'description', 'introtext', 'content', 'menutitle');
 
     public static function applies(Context $context) {
@@ -59,12 +59,14 @@ final class DraftPolicy {
             return in_array($operation['op'], self::OPERATIONS, true);
         }));
         foreach ($description['operations'] as &$operation) {
-            $operation['description'] = $operation['op'] === 'create_draft'
-                ? 'Create an unpublished copy of this modDocument page. Edit its plain-text fields with modx_update and give its preview link to a manager.'
-                : 'List open drafts created with this token. Takes no id.';
+            if ($operation['op'] === 'create_draft') {
+                $operation['description'] = 'Create an unpublished draft of a page or miniShop2 product. Edit plain-text fields with modx_update, and stage product prices with stage_product_prices.';
+            } elseif ($operation['op'] === 'list_drafts') {
+                $operation['description'] = 'List open drafts created with this token. Takes no id.';
+            }
         }
         unset($operation);
-        $description['note'] = 'Use modx_update on your own draft only. A manager reviews and applies or discards drafts.';
+        $description['note'] = 'Edit your own drafts with modx_update and stage prices on your own product drafts. A manager reviews and applies or discards drafts.';
         return $description;
     }
 }

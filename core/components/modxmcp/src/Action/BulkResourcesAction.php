@@ -95,6 +95,7 @@ final class BulkResourcesAction extends WriteAction {
                     case 'move':         $columns = array('parent' => $args['parent']); break;
                     case 'reorder':      $columns = array('menuindex' => $position); break;
                 }
+                if ($dry && $columns) { $kind->assertUpdatable($modx, Objects::resolveKey($context, $kind, $id), $columns); }
                 $would = array();
                 foreach ($columns as $column => $value) {
                     if ((string) $fields[$column] !== (string) $value) { $would[] = $column; }

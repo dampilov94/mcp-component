@@ -75,9 +75,9 @@ New chunks, snippets, templates and plugins are static by default, with files un
 ## Drafts
 
 Use a draft when a change of a live page is visible to visitors and should be looked at first.
-A draft is an unpublished copy of a `modDocument` page (other classes, such as miniShop2
-products, are refused); a page has at most one open draft, and the live page stays as it is
-until the draft is applied.
+A page draft is an unpublished copy of a `modDocument` page. A page has at most one open
+draft, and the live page stays as it is until the draft is applied. miniShop2 products have
+their own draft workflow below.
 
 1. `modx_invoke {kind: "resource", id, op: "create_draft"}` — returns `draft_id` and
    `preview_url`. MODX shows the unpublished draft only to a person logged in to the manager,
@@ -114,6 +114,17 @@ On an HTTPS site, a manager with the `settings` permission can choose **Share pr
 component's **Drafts** block. Anyone with the link can view changed plain-text fields for
 30 minutes. Copy a fresh link after editing the draft. Applying or discarding it closes the
 preview. Use the regular manager preview to see the page with its MODX template and TV values.
+
+### miniShop2 product drafts
+
+With miniShop2 available to the token, call `resource.create_draft` on the live product.
+Use the returned `draft_id` to edit the draft's text or to stage prices with
+`modx_invoke {kind: "resource", id: draft_id, op: "stage_product_prices", args: {price: 375, old_price: 0}}`.
+Give one or both prices as non-negative numbers with at most two decimal places. The stage
+result and resource reads show `staged_prices`. A draft-only token stages prices on its own
+drafts. The manager plan shows the proposed price changes. Applying saves the edited text and
+explicitly staged prices, and undo restores both the product and the draft. Use Share preview
+to review edited text on an HTTPS site.
 
 ## Scenarios
 

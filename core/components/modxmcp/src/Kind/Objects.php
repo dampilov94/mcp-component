@@ -310,7 +310,9 @@ final class Objects {
     public static function save(Context $context, Transaction $tx, Kind $kind, $id, array $columns, array $relations) {
         $modx = $context->modx;
         $creating = $id === null;
-        self::assertStaticWrite($context, $kind, $creating ? null : $kind->findByKey($modx, $id), $columns);
+        $object = $creating ? null : $kind->findByKey($modx, $id);
+        if ($object && $kind instanceof ResourceKind) { $kind->assertUpdatable($modx, $object, $columns); }
+        self::assertStaticWrite($context, $kind, $object, $columns);
         foreach ($kind->alsoAffected($modx, $id, $columns, $id === null ? 'create' : 'update') as $other) {
             $tx->touch($kind, $other);
         }
@@ -327,7 +329,6 @@ final class Objects {
         } elseif ($columns && !$kind->usesProcessors()) {
             $kind->writeObject($context, $id, $columns);
         } elseif ($columns) {
-            $object = $kind->findByKey($modx, $id);
             // The update processors expect the complete record; omitted fields would be reset.
             $data = $kind->processorKey($id);
             foreach ($kind->fields() as $name => $definition) {

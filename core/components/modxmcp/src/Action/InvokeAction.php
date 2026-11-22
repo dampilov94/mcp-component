@@ -30,7 +30,7 @@ final class InvokeAction extends WriteAction {
     }
     public function run(array $args, Context $context) {
         if (DraftPolicy::applies($context) && ($args['kind'] !== DraftPolicy::KIND || !in_array($args['op'], DraftPolicy::OPERATIONS, true))) {
-            throw new ApiException('forbidden_scope', 'A draft-only token can only create or list page drafts.');
+            throw new ApiException('forbidden_scope', 'A draft-only token can only create drafts, list its drafts, or stage product prices.');
         }
         $kind = Objects::kind($context, $args['kind']);
         $ops = $kind->operations();
@@ -56,7 +56,10 @@ final class InvokeAction extends WriteAction {
         if (!empty($spec['plan']) && ($this->isDryRun($args, $context) || empty($values['confirm']))) {
             return $this->plan($context, $meta + $kind->{$spec['plan']}($context, $object, $values) + ($key !== null ? Objects::openPlan($context, $kind, $key) : array()));
         }
-        if ($this->isDryRun($args, $context)) { return $this->plan($context, $meta + array('validated' => true) + ($key !== null ? Objects::openPlan($context, $kind, $key) : array())); }
+        $preview = isset($spec['preflight']) ? $kind->{$spec['preflight']}($context, $object, $values) : array();
+        if ($this->isDryRun($args, $context)) {
+            return $this->plan($context, $meta + $preview + array('validated' => true) + ($key !== null ? Objects::openPlan($context, $kind, $key) : array()));
+        }
         // An irreversible operation that does not change an object the journal could restore (an order's status, which sends
         // e-mails): the object is only locked, and a changeset without changes records that it happened.
         if (!empty($spec['informational'])) {
