@@ -82,7 +82,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 43 | [Draft-only token](43-draft-only.md) | `task/43-draft-only` | merged |
 | 44 | [Shareable draft preview](44-draft-preview.md) | `task/44-draft-preview` | merged |
 | 45 | [miniShop2 product drafts](45-product-drafts.md) | `task/45-product-drafts` | merged |
-| 46 | [ClientConfig values](46-clientconfig.md) | `task/46-clientconfig` | in progress |
+| 46 | [ClientConfig values](46-clientconfig.md) | `task/46-clientconfig` | merged |
 
 ## Doing several briefs in a row
 
@@ -147,7 +147,12 @@ Lessons from briefs 33–34:
 
 ## Handoff (2026-11-22)
 
-- Task 45 is merged into local `main`. fordev has the component source from `ac5b1bc`.
+- Task 46 is merged into local `main`. fordev has the component source from `8937458`.
+  Verified the 16 deployed files and saved backups in `.local/fordev-before-8937458/`.
+  Confirmed optional absence and existing tools on fordev. Native ClientConfig 2.5.0 on
+  local MODX 2.8.8 covered saving and restoring global and context values, permissions and
+  cache behavior. The PHP 7.4 suite passed 5685 PHP checks and 41 Node tests.
+- Task 45 was deployed to fordev from `ac5b1bc` and merged into local `main`.
   Verified all 11 files, saved backups in `.local/fordev-before-ac5b1bc/`, and updated the
   deployment journal. Product staging and approval passed against native miniShop2 3.0.7 on
   fordev and the fixture objects were removed. Separate native MODX and Chrome verified undo

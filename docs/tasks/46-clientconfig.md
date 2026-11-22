@@ -2,6 +2,7 @@
 
 Branch `task/46-clientconfig` from local `main` after task 45. Read native ClientConfig 2.5.0
 from the official transport in `.local/upgrade-check/clientconfig-2.5.0-pl.transport.zip`.
+The transport is available from [MODX Extras](https://extras.modx.com/package/clientconfig).
 Inspect `cgSetting`, `cgContextValue`, `ClientConfig::getSettings`, and the manager processors
 `mgr/settings/update` and `mgr/settings/save`. Read the project setting kinds, `Writer`,
 `Snapshot` and the optional integration registry. Keep the package version.
@@ -65,3 +66,12 @@ Based on `main` at `9b5ed27`. Implementation `8937458`.
   rollback and permissions. Run the usual absence smoke on fordev during review.
 - `npm run check` and `npm test` passed in WSL on PHP 7.4.33. All 5685 PHP checks and 41 Node
   tests passed with no failures or skips.
+
+## Review
+
+- Verified the committed runtime on MODX 2.8.8 with ClientConfig 2.5.0. The vendor service
+  returned updated settings from its cache and the original values after undo. The test
+  confirmed exact lookup, masked credentials, administrator-only history, preservation of
+  metadata and other contexts, all-or-nothing validation and the native fallback for zero.
+- Verified all 16 deployed files on fordev. Its existing resource tools worked, help included
+  the new kind, and the ClientConfig kind reported unavailable because the add-on is absent.
