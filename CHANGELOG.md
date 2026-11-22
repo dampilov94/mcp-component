@@ -232,6 +232,8 @@ After alpha3:
   drafts it owns. A manager applies or discards the drafts through the existing workflow.
 - Managers can share changed draft text via an HTTPS preview link valid for up to 30 minutes.
   The recipient can open it without signing in to MODX.
+- Stage miniShop2 product descriptions and prices in drafts. Manager approval applies the
+  selected product fields, and undo restores the product and the draft with its staged values.
 
 Stage 7 — manager:
 

@@ -63,3 +63,14 @@ Based on `main` at `d22a906`.
 - `npm run check` and `npm test` passed in WSL on PHP 7.4.33, with 5599 PHP fixture checks
   and 41 Node tests. The architect also verified MODX 2.8.8 with miniShop2 3.0.7 and pdoTools
   2.13.3, including property preservation, product apply and undo, and the manager price plan.
+
+## Review
+
+- On a disposable MODX 2.8.8 install with miniShop2 3.0.7, a restricted token staged a price
+  and cleared the old price. Editing text retained that state. Manager approval changed the
+  selected fields and undo restored the product and shadow with its staged values. Chrome
+  showed both current and proposed prices in the approval panel.
+- Applied and verified all 11 component files on fordev. A temporary native miniShop2 item
+  verified staging, no extra catalog product, approval with a fractional price and a zero old
+  price, and an unchanged live revision before approval. Undid and verified removal of all
+  fixture objects and refreshed the MODX cache.

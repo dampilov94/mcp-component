@@ -81,7 +81,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 42 | [Alpha2 review follow-ups](42-review-followups.md) | `task/42-review-followups` | merged |
 | 43 | [Draft-only token](43-draft-only.md) | `task/43-draft-only` | merged |
 | 44 | [Shareable draft preview](44-draft-preview.md) | `task/44-draft-preview` | merged |
-| 45 | [miniShop2 product drafts](45-product-drafts.md) | `task/45-product-drafts` | in progress |
+| 45 | [miniShop2 product drafts](45-product-drafts.md) | `task/45-product-drafts` | merged |
 
 ## Doing several briefs in a row
 
@@ -146,7 +146,12 @@ Lessons from briefs 33–34:
 
 ## Handoff (2026-11-22)
 
-- Task 44 is merged into local `main`. fordev has the component source from `5a96106`.
+- Task 45 is merged into local `main`. fordev has the component source from `ac5b1bc`.
+  Verified all 11 files, saved backups in `.local/fordev-before-ac5b1bc/`, and updated the
+  deployment journal. Product staging and approval passed against native miniShop2 3.0.7 on
+  fordev and the fixture objects were removed. Separate native MODX and Chrome verified undo
+  and the manager price plan. The PHP 7.4 suite passed 5599 PHP checks and 41 Node tests.
+- Task 44 was deployed to fordev from `5a96106` and merged into local `main`.
   Verified all 13 files and updated `.local/deploy-fordev.json`. Backups are in
   `.local/fordev-before-5a96106/`. fordev confirmed refusal over plain HTTP and the existing MCP
   workflow. A disposable MODX 2.8.8 instance confirmed issuance and anonymous redemption over TLS.
