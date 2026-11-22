@@ -81,6 +81,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 42 | [Alpha2 review follow-ups](42-review-followups.md) | `task/42-review-followups` | merged |
 | 43 | [Draft-only token](43-draft-only.md) | `task/43-draft-only` | merged |
 | 44 | [Shareable draft preview](44-draft-preview.md) | `task/44-draft-preview` | merged |
+| 45 | [miniShop2 product drafts](45-product-drafts.md) | `task/45-product-drafts` | in progress |
 
 ## Doing several briefs in a row
 
