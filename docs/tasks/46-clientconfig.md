@@ -2,6 +2,7 @@
 
 Branch `task/46-clientconfig` from local `main` after task 45. Read native ClientConfig 2.5.0
 from the official transport in `.local/upgrade-check/clientconfig-2.5.0-pl.transport.zip`.
+The transport is available from [MODX Extras](https://extras.modx.com/package/clientconfig).
 Inspect `cgSetting`, `cgContextValue`, `ClientConfig::getSettings`, and the manager processors
 `mgr/settings/update` and `mgr/settings/save`. Read the project setting kinds, `Writer`,
 `Snapshot` and the optional integration registry. Keep the package version.
@@ -43,3 +44,34 @@ native processor input, typed value changes, mixed global/context revisions, pro
 dry runs, unchanged definitions and other overrides, context mode off, invalid context/code,
 and rollback and undo. Architect will exercise native ClientConfig 2.5.0 with MODX 2.8.8 on a
 disposable local installation. fordev has no ClientConfig and verifies the optional absence path.
+
+## Report
+
+Based on `main` at `9b5ed27`. Implementation `8937458`.
+
+- `ClientConfig` registers the optional model and calls the vendor processors. The new
+  admin-only kind uses the native numeric ID and resolves `name` as the exact key. It
+  preserves the definition and uses one snapshot for each global value and its context rows.
+- `UpdateAction` prepares the entire change before writing and rechecks it under the writer
+  lock. The kind scopes the native `$_POST` envelope to each context call and verifies each
+  saved value. A stored empty string or `'0'` can fall back to the global value in ClientConfig
+  2.5.0's effective settings, as documented in both guides.
+- Protected keys, dynamic option expressions, credential values and their history are gated
+  or masked. Restricted ClientConfig changesets are filtered before journal limits. Mixed
+  changesets retain their visible entries. Undo checks the current definition and protection
+  rules and invalidates the ClientConfig cache on restoration.
+- The architect verified native ClientConfig 2.5.0 on disposable MODX 2.8.8, including typed
+  global and context saves, exact lookup, context fallback, the reserved context key, a cache
+  refresh and undo. The offline fixture exercises the native payload shapes, failure checks,
+  rollback and permissions. Run the usual absence smoke on fordev during review.
+- `npm run check` and `npm test` passed in WSL on PHP 7.4.33. All 5685 PHP checks and 41 Node
+  tests passed with no failures or skips.
+
+## Review
+
+- Verified the committed runtime on MODX 2.8.8 with ClientConfig 2.5.0. The vendor service
+  returned updated settings from its cache and the original values after undo. The test
+  confirmed exact lookup, masked credentials, administrator-only history, preservation of
+  metadata and other contexts, all-or-nothing validation and the native fallback for zero.
+- Verified all 16 deployed files on fordev. Its existing resource tools worked, help included
+  the new kind, and the ClientConfig kind reported unavailable because the add-on is absent.

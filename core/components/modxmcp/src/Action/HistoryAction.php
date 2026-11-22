@@ -5,9 +5,11 @@ use ModxMCP\ApiException;
 use ModxMCP\Context;
 use ModxMCP\Journal\Authors;
 use ModxMCP\Journal\Subjects;
+use ModxMCP\Kind\ClientConfigSettingKind;
 use ModxMCP\Schema;
 
 final class HistoryAction extends Action {
+    const RESTRICTED_SUMMARY = 'Changeset includes restricted entries.';
     public function name() { return 'history'; }
 
     public function group() { return 'history'; }
@@ -42,6 +44,9 @@ final class HistoryAction extends Action {
         foreach (array('source', 'kind', 'since') as $key) {
             if (isset($args[$key])) { $filter[$key] = $args[$key]; }
         }
+        if (!self::changeVisible($context, array('kind' => ClientConfigSettingKind::NAME))) {
+            $filter['hidden_kind'] = ClientConfigSettingKind::NAME;
+        }
         if (isset($args['key'])) { $filter['object_key'] = $args['key']; }
         elseif (isset($args['kind'], $args['id'])) { $filter['object_key'] = (string) $args['id']; }
         $changesets = $context->journal()->changesets($filter, isset($args['limit']) ? $args['limit'] : 20);
@@ -51,7 +56,12 @@ final class HistoryAction extends Action {
     /** Journal changesets in the shape this tool returns them (also used by the manager's history page). */
     public static function entries(Context $context, array $changesets) {
         $byChangeset = array();
+        $private = array();
         foreach ($context->journal()->changes(array_column($changesets, 'id')) as $change) {
+            if (!self::changeVisible($context, $change)) {
+                $private[$change['changeset_id']] = true;
+                continue;
+            }
             $byChangeset[$change['changeset_id']][] = array(
                 'kind' => $change['kind'], Subjects::keyField($context, $change['kind']) => Subjects::publicKey($context, $change['kind'], $change['object_key']),
                 'name' => $change['label'], 'op' => $change['op'],
@@ -60,6 +70,7 @@ final class HistoryAction extends Action {
         $authors = new Authors($context->modx);
         $out = array();
         foreach ($changesets as $changeset) {
+            if (isset($private[$changeset['id']]) && empty($byChangeset[$changeset['id']])) { continue; }
             $out[] = array(
                 'changeset_id' => $changeset['id'],
                 'at'           => $changeset['created_at'],
@@ -67,7 +78,7 @@ final class HistoryAction extends Action {
                 'source'       => $changeset['source'],
                 'author'       => $authors->name($changeset),
                 'tool'         => $changeset['tool'],
-                'summary'      => $changeset['summary'],
+                'summary'      => isset($private[$changeset['id']]) ? self::RESTRICTED_SUMMARY : $changeset['summary'],
                 'status'       => $changeset['status'],
                 'reversible'   => $changeset['reversible'],
                 'this_session' => $context->sessionId !== null && $changeset['session_id'] === $context->sessionId,
@@ -76,5 +87,12 @@ final class HistoryAction extends Action {
               + ($changeset['undone_by'] !== null ? array('undone_by' => $changeset['undone_by']) : array());
         }
         return $out;
+    }
+
+    /** ClientConfig metadata shares the setting kind's admin-only visibility. */
+    public static function changeVisible(Context $context, array $change) {
+        if ($change['kind'] !== ClientConfigSettingKind::NAME) { return true; }
+        $kind = $context->kinds->get(ClientConfigSettingKind::NAME);
+        return $context->kinds->blockReason($kind, $context) === null;
     }
 }

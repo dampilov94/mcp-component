@@ -49,9 +49,11 @@ final class ObjectSubject implements Subject {
         $out = array();
         // A kind that answers decides which columns are secret; otherwise the column name does.
         $secretColumns = null;
+        $secretRelations = array();
         foreach (array($before, $after) as $state) {
             $answer = $state === null ? null : $kind->secretColumns($state);
             if ($answer !== null) { $secretColumns = array_merge($secretColumns === null ? array() : $secretColumns, $answer); }
+            if ($state !== null) { $secretRelations = array_merge($secretRelations, $kind->secretRelations($state)); }
         }
         foreach (Snapshot::changed($kind, $before, $after) as $name) {
             $column = isset($definitions[$name]) ? $kind->column($name) : $name;
@@ -62,7 +64,9 @@ final class ObjectSubject implements Subject {
                 $old = $before !== null && array_key_exists($column, $before['fields']) ? $before['fields'][$column] : null;
                 $new = $after !== null && array_key_exists($column, $after['fields']) ? $after['fields'][$column] : null;
             }
-            if (($before !== null && isset($before['relations'][$name])) || ($after !== null && isset($after['relations'][$name]))) {
+            if (in_array($name, $secretRelations, true)) {
+                $out[$name] = array('old' => '[hidden]', 'new' => '[hidden]');
+            } elseif (($before !== null && isset($before['relations'][$name])) || ($after !== null && isset($after['relations'][$name]))) {
                 $out[$name] = array(
                     'old' => $kind->maskRelationRows($name, $before !== null && isset($before['relations'][$name]) ? $before['relations'][$name] : array()),
                     'new' => $kind->maskRelationRows($name, $after !== null && isset($after['relations'][$name]) ? $after['relations'][$name] : array()),

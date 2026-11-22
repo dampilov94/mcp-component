@@ -216,6 +216,7 @@ $_lang['modxmcp_cmp_danger_lint_php'] = 'Check snippet and plugin code (and Feno
 $_lang['modxmcp_cmp_danger_require_https'] = 'Accept API requests over HTTPS only. When off, a token can cross the network in plain text.';
 $_lang['modxmcp_cmp_danger_allowed_ips'] = 'The addresses API requests are accepted from. Empty means any address.';
 $_lang['modxmcp_group_virtualpage'] = 'VirtualPage (routes / events)';
+$_lang['modxmcp_group_clientconfig'] = 'ClientConfig (global and context values)';
 $_lang['modxmcp_group_minishop2'] = 'miniShop2 (products / options / links / categories / orders)';
 $_lang['modxmcp_group_migx'] = 'MIGX (configurations)';
 $_lang['modxmcp_group_access'] = 'Access control (users, groups, roles, policies)';

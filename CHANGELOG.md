@@ -234,6 +234,8 @@ After alpha3:
   The recipient can open it without signing in to MODX.
 - Stage miniShop2 product descriptions and prices in drafts. Manager approval applies the
   selected product fields, and undo restores the product and the draft with its staged values.
+- Add the administrator-only `clientconfig_setting` kind for reading and editing existing
+  global and context values with ClientConfig's native processors and journal undo.
 
 Stage 7 — manager:
 

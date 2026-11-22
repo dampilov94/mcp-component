@@ -244,6 +244,8 @@ class FakeCache {
     /** Folders cleaned with clean(['cache_key' => …]) (VirtualPage cleans `default/virtualpage`). */
     public $cleaned = array();
     public function clean($options = array()) { $this->cleaned[] = isset($options['cache_key']) ? $options['cache_key'] : ''; return true; }
+    public $deleted = array();
+    public function delete($key, $options = array()) { $this->deleted[] = array($key, $options); return true; }
 }
 
 /** Stand-in for VirtualPage's service: clearAllCache() cleans its cache folder and builds the route lists again (counted). */
@@ -298,6 +300,7 @@ class FakeLexicon {
 
 class xPDO {
     const OPT_SETUP = 'setup';
+    const OPT_CACHE_KEY = 'cache_key';
     public $pdo;
     public $options = array();
     public function getOption($key, $options = null, $default = null) {

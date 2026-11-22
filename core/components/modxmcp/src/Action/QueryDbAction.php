@@ -29,6 +29,7 @@ final class QueryDbAction extends Action {
     /** Tables with credentials or sessions (names without the prefix): refused for every token below admin. */
     const CREDENTIAL_TABLES = array(
         'user_settings', 'system_settings', 'context_settings', 'transport_providers', 'media_sources',
+        'clientconfig_setting', 'clientconfig_context_value',
     );
     /**
      * Refused for every token: API token hashes, password hashes and live sessions. No tool
