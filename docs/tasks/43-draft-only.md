@@ -52,3 +52,22 @@ or dedicated stand.
 
 Out of scope are public preview links, storefront domains, quotas, new page workflows, product
 drafts, permissions by section, and the external cabinet or billing.
+
+## Report
+
+Based on `main` at `a3725b4`. Implementation commit `3a22cf5`.
+
+- `Scope`, the action and kind registries, and `DraftPolicy` use the existing token column and
+  enforce the restricted tool, kind, operation and field lists. Existing token records require
+  no migration. `DescribeAction` presents the restricted contract and the prompt registry omits
+  scenarios for this scope.
+- `UpdateAction` checks the draft link and resource state before starting a write and again
+  after acquiring the resource lock. `DraftStore` selects open drafts by token ID for the
+  restricted listing. Manager review uses the existing service and workflow.
+- The token screen labels and both guides describe the scope. Generic resource reads retain
+  the usual visibility. The executor found no deviations from the brief.
+- Offline checks passed on PHP 7.4.33 in WSL. `npm run check` validated 31 JavaScript and
+  194 PHP files. `npm test` passed 5511 PHP checks and 41 Node tests, including agreement
+  between legacy v2 and direct MCP HTTP. These suites use the MODX stand-in. The architect's
+  separate disposable MODX check covered manager issuance, editing, publication refusal and
+  approval, with the scope selector verified in Chrome.
