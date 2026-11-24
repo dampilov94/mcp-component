@@ -59,3 +59,51 @@ unpublished page with the key must be verified on the stand.
 
 `npm run check`, `npm test`. Commit in small steps. Report as usual: which event and which MODX
 mechanism you used to serve the unpublished page, quoting the MODX source lines.
+
+## Report
+
+Based on: main at d976a71
+
+Checks: `npm run check` passes; `npm test` 5956 PHP checks (5908 before) and 43 Node tests (43 before).
+
+### Which event and mechanism
+
+`OnWebPageInit`, from the component's plugin `modxMCP`. In `modRequest::handleRequest` (MODX 2.8.8) it is the last event before the page lookup, and the alias is already resolved to an id there:
+
+```
+$this->modx->beforeRequest();
+$this->modx->invokeEvent("OnWebPageInit");
+
+if (!is_object($this->modx->resource)) {
+    if (!$this->modx->resource = $this->getResource($this->modx->resourceMethod, $this->modx->resourceIdentifier)) {
+        $this->modx->sendErrorPage();
+```
+
+`getResource()` is where the page is hidden (`if (!$this->modx->hasPermission('view_unpublished') || $this->modx->getSessionState() !== modX::SESSION_STATE_INITIALIZED) { $criteria->where(array('published' => 1)); }`). An anonymous visitor cannot pass that and I found no in-request permission switch that does not touch the user or session. But `getResource()` is skipped when a plugin has already put an object into `$modx->resource`. So the gate (`src/Render/RenderGate.php`) loads the resource itself, the way `getResource()` does (deleted = 0, context check via `modContextResource`, `checkPolicy('view')`, TV values set as fields), sets `$modx->resource` and `$modx->resourceGenerated = true`, and calls `set('cacheable', 0)` on the in-memory object only. `modX::_postProcess` then skips `generateResource` (`... && $this->resource->get('cacheable')`), so nothing reaches the page cache, and nothing is written to the database, user or session. Earlier events were rejected: before `OnWebPageInit` the id is not yet known (alias resolution in `handleRequest` happens after `OnHandleRequest`, and `resourceMethod` is overwritten after it). Aliases of unpublished pages do resolve (the context alias map and `findResource` filter only `deleted`), so no 404 happens before `OnWebPageInit`. Binding: the gate compares the key's resource id to `$modx->resourceIdentifier` (only when `resourceMethod === 'id'`), i.e. to the page MODX is really about to serve.
+
+### Implemented
+
+- `src/Render/RenderKeys.php` (new): key store in `core/modxmcp-data/render/`; 32 random bytes shown as 64 hex; the file is named by the SHA-256 and holds the guard, hash, resource id, token id and expiry (60 s); written with `xb`, mode 0600, directory 0700, symlinked directory refused; `consume()` claims the file with an atomic rename, so a key works once; stale files (older than 5 minutes) are cleaned when issuing; `grant()` is the pure decision (header value, requested id) and consumes any well-formed key whatever the outcome.
+- `src/Render/RenderGate.php` (new): the plugin handler described above; never throws; leaves published, deleted, other-context, unresolved-alias and "another plugin already chose a resource" cases to MODX; sends `X-Robots-Tag: noindex, nofollow` and `Cache-Control: no-store`.
+- `src/Verify/HeaderPageFetcher.php` (new) and `CurlPageFetcher.php`: `fetchWithHeaders()` (the original `PageFetcher::fetch` signature is untouched, so existing fetchers keep working); header names/values with control characters or colons are refused.
+- `src/Action/CheckPageAction.php`: for `id` of an unpublished, not deleted resource it issues a key, fetches with `X-MCP-Render` and adds `rendered_as: "draft"|"unpublished"` ("draft" when a `DraftStore` link exists). Refused with `validation_failed` when the URL host differs from the host of the `site_url` system setting, before any key is made or request sent; also refused if the fetcher cannot send headers. Published pages and `url_path` are unchanged. Description mentions the 60-second, single-resource key and plain HTTP.
+- `src/Draft/DraftPolicy.php`: `check_page` added to `ACTIONS`; in the action a `draft_only` token may use `id` only, and only for an unpublished draft created by its own token (else `forbidden_scope`).
+- `elements/plugins/recorder.php`, `src/Manager/Recorder.php` (`pluginEvents()` = `events()` + `OnWebPageInit`, used by `syncPlugin()`), `_build/build.transport.php` (packages `pluginEvents()`). The plugin returns before loading any component code when the event is `OnWebPageInit` and the header is absent, so ordinary web requests only pay for a plugin call. `Recorder::events()` itself is unchanged.
+- Help `getting_started.md` (drafts section, draft-only section, "Checking the result"), prompts `change_page` and `new_page_type` now say to check with `modx_check_page` and then give the manager preview.
+- Tests in `tests/php/run.php` (key store, plugin decision on the fake, action with a header-capable fetcher, draft-only token, help text), `tests/php/FakeModx.php` (`FakeObject::getMany()` returns none, `checkPolicy()` allows).
+
+### Deviations and changed existing tests
+
+- Existing assertions changed: (1) `syncPlugin` tests now expect `OnWebPageInit` among the plugin's events (`$rWantedPlugin`); the third one used `OnWebPageInit` as the "foreign event that must be removed", it now uses `OnWebPagePrerender`; (2) the draft-only exact tool list gains `modx_check_page`; (3) the prompt assertion for `new_page_type` expected `modx_check_page` to be absent and now expects `` `modx_check_page {id}` `` present.
+- Existing fixture changed: resource 1 of the page-check fixture got `'published' => 1` (real resources always have the field; the fake one had none and would count as unpublished).
+- The plugin file is now 7 lines (the existing "a few lines" test allows up to 7).
+- A plugin event cannot be added by only deploying files: the plugin body and its event rows live in the database. On the stand the new `OnWebPageInit` event and the new plugin code appear after `Recorder::syncPlugin()` (package install/upgrade resolver) or by hand. Until then `check_page` on an unpublished page returns the normal 404.
+
+### Verified only against the fake
+
+Everything about real MODX: that `OnWebPageInit` is fired with `resourceMethod === 'id'` and a numeric `resourceIdentifier` for both friendly-URL and `?id=` requests, that `$modx->resource` set there is rendered (template, TVs, snippets), that `cacheable = 0` keeps the page out of the cache and that the headers are sent, `checkPolicy('view')` for pages in resource groups (such a page gives the normal 404 instead of an unauthorized page), derived classes (static, weblink, miniShop2 products), and the actual HTTP loopback with the curl fetcher (headers sent, plain HTTP). The fake only shows the decision logic, the stored files and the action with an injected fetcher.
+
+### Open questions
+
+- If the site's web server strips unknown request headers (some FastCGI/proxy setups), `X-MCP-Render` will not arrive and the result is a 404; no fallback was added.
+- `Cache-Control: no-store` is sent by the gate; MODX's later output may add its own cache headers for `content_dispo` resources.
