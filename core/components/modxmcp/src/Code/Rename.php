@@ -49,7 +49,7 @@ final class Rename {
         $revisions = array();
         $total = 0;
         foreach ($found['targets'] as $key => $target) {
-            $count = count($target['changes']);
+            $count = self::countOf($target['changes']);
             $total += $count;
             $references[] = array('kind' => $target['kind']->name(), 'id' => $target['id'], 'name' => $target['name'], 'static' => $target['static'],
                 'fields' => array_keys($target['fields']), 'change_count' => $count, 'changes' => array_slice($target['changes'], 0, self::SHOWN),
@@ -112,14 +112,14 @@ final class Rename {
             if ($key === $selfKey) { continue; }
             Objects::save($context, $tx, $target['kind'], $target['id'], Objects::normalize($target['kind'], $target['fields'], false), array());
             ++$written;
-            $references += count($target['changes']);
+            $references += self::countOf($target['changes']);
         }
         // The element itself: its name and the references inside its own code, in one save.
         $fields = array($kind->nameField() => $newName);
         if (isset($found['targets'][$selfKey])) {
             $fields = $found['targets'][$selfKey]['fields'] + $fields;
             ++$written;
-            $references += count($found['targets'][$selfKey]['changes']);
+            $references += self::countOf($found['targets'][$selfKey]['changes']);
         }
         Objects::save($context, $tx, $kind, $id, Objects::normalize($kind, $fields, false), array());
         return array('renamed' => array('kind' => $kind->name(), 'id' => (int) $id, 'from' => $old, 'to' => $newName),
@@ -127,6 +127,13 @@ final class Rename {
             'manual' => array_slice($found['manual'], 0, self::MANUAL_LIMIT),
             'next' => $found['manual'] ? 'The manual list holds references that were not rewritten; check them by hand.' : 'Nothing is left to check by hand.',
             'summary' => "rename {$kind->name()} {$id} from '{$old}' to '{$newName}', {$references} references in {$written} objects");
+    }
+
+    /** References in a list of changes: a line change counts every reference in the line. */
+    private static function countOf(array $changes) {
+        $count = 0;
+        foreach ($changes as $change) { $count += isset($change['count']) ? (int) $change['count'] : 1; }
+        return $count;
     }
 
     // ---- what refers to the element ----

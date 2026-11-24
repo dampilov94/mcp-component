@@ -170,7 +170,7 @@ final class ReferenceRewriter {
             $changed = $original;
             foreach (array_reverse($spans) as $span) { $changed = substr_replace($changed, $new, $span[0] - $start, $span[1]); }
             $changes[] = array('line' => $line, 'old' => CodeSearch::excerpt(rtrim($original, "\r"), $spans[0][0] - $start),
-                'new' => CodeSearch::excerpt(rtrim($changed, "\r"), $spans[0][0] - $start), 'via' => $spans[0][2]);
+                'new' => CodeSearch::excerpt(rtrim($changed, "\r"), $spans[0][0] - $start), 'via' => $spans[0][2], 'count' => count($spans));
         }
         return $changes;
     }
