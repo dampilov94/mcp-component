@@ -61,3 +61,13 @@ Based on `main` at `3e557c3`.
 - `npm run check` and `npm test` passed in WSL on PHP 7.4.33. All 5726 fixture checks and
   41 Node tests passed. The fixture includes a gallery-free subtree with over a thousand
   descendants and a nested product gallery protected from category removal.
+
+## Review
+
+- On MODX 2.8.8 with miniShop2 3.0.7, gallery pages returned the requested product's top-level
+  images and their stored thumbnails. Ordinary and forced
+  undo left the gallery rows and physical file hashes intact. Forced undo of a product and of
+  its parent category was refused with the original rows and files still present.
+- Deployed and verified 3 files on fordev. Its resource description exposes `list_gallery` as
+  read-only. The stand has no sample products, so gallery rows and undo were tested on the
+  disposable MODX instance.

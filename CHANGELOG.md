@@ -236,6 +236,9 @@ After alpha3:
   selected product fields, and undo restores the product and the draft with its staged values.
 - Add the administrator-only `clientconfig_setting` kind for reading and editing existing
   global and context values with ClientConfig's native processors and journal undo.
+- Read miniShop2 galleries through `resource.list_gallery`. Restore product data in place
+  during undo to preserve gallery files and the current cover. Reject undo when it would
+  remove a product with gallery files, including through a parent resource.
 
 Stage 7 — manager:
 
