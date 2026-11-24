@@ -4474,7 +4474,8 @@ $ms2Core = $ms2Dir . '/core/components/minishop2/';
 mkdir($ms2Core . 'model/minishop2', 0700, true);
 touch($ms2Core . 'model/minishop2/minishop2.class.php');
 foreach (array('mgr/settings/option/create', 'mgr/settings/option/update', 'mgr/settings/option/remove', 'mgr/settings/option/assign', 'mgr/category/option/delete',
-    'mgr/settings/link/create', 'mgr/settings/link/update', 'mgr/settings/link/remove', 'mgr/product/productlink/create', 'mgr/product/productlink/remove') as $ms2Processor) {
+    'mgr/settings/link/create', 'mgr/settings/link/update', 'mgr/settings/link/remove', 'mgr/product/productlink/create', 'mgr/product/productlink/remove',
+    'mgr/settings/vendor/create', 'mgr/settings/vendor/update', 'mgr/settings/vendor/remove') as $ms2Processor) {
     if (!is_dir(dirname($ms2Core . 'processors/' . $ms2Processor))) { mkdir(dirname($ms2Core . 'processors/' . $ms2Processor), 0700, true); }
     touch($ms2Core . 'processors/' . $ms2Processor . '.class.php');
 }
@@ -4519,7 +4520,7 @@ $sRelNames = function ($id, $ctx = null) use ($call, $sAdmin) { return array_key
 // ---- availability ----
 $sKinds = array_column($call($sAdmin, 'describe')['kinds'], 'kind');
 check('ms2: kind list with miniShop2 installed', $sKinds === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source', 'user_group', 'role', 'resource_group', 'system_setting', 'context', 'context_setting', 'namespace', 'user',
-    'access_policy', 'policy_template', 'context_access', 'resourcegroup_access', 'package', 'provider', 'property_set', 'lexicon_entry', 'ms2_option', 'ms2_link', 'ms2_product_link', 'ms2_order', 'ms2_order_status'));
+    'access_policy', 'policy_template', 'context_access', 'resourcegroup_access', 'package', 'provider', 'property_set', 'lexicon_entry', 'ms2_option', 'ms2_link', 'ms2_product_link', 'ms2_order', 'ms2_order_status', 'ms2_vendor', 'ms2_delivery', 'ms2_payment'));
 check('ms2: kind list without miniShop2 is unchanged', !in_array('ms2_option', array_column($call($sPlain, 'describe')['kinds'], 'kind'), true));
 $e = throws('ms2: ms2_option is unavailable where miniShop2 is not installed', ApiException::class, function () use ($call, $sPlain) { $call($sPlain, 'describe', array('kind' => 'ms2_option')); });
 check('ms2: not installed is reported as unavailable', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'not_installed');
@@ -4627,7 +4628,7 @@ $bareGot = $call($sRead, 'get', array('kind' => 'resource', 'id' => $pBare['id']
 check('ms2: get shows the three relations of a product', array_keys((array) $bareGot['relations']) === array('tvs', 'resource_groups', 'ms2_data', 'ms2_options', 'ms2_categories')
     && $bareGot['relations']['ms2_data']['price'] === 0.0 && $bareGot['relations']['ms2_data']['tags'] === array() && $bareGot['relations']['ms2_data']['new'] === false && $bareGot['relations']['ms2_data']['source'] === 1
     && $bareGot['relations']['ms2_data']['image'] === '' && json_encode($bareGot['relations']['ms2_options']) === '{}' && $bareGot['relations']['ms2_categories'] === array()
-    && array_keys($bareGot['relations']['ms2_data']) === array('article', 'price', 'old_price', 'weight', 'image', 'thumb', 'vendor', 'made_in', 'new', 'popular', 'favorite', 'tags', 'color', 'size', 'source'));
+    && array_keys($bareGot['relations']['ms2_data']) === array('article', 'price', 'old_price', 'weight', 'image', 'thumb', 'vendor', 'vendor_name', 'made_in', 'new', 'popular', 'favorite', 'tags', 'color', 'size', 'source'));
 check('ms2: a product is a container never', $sSite->row('modResource', $pBare['id'])['isfolder'] === '0' && $sSite->row('modResource', $pBare['id'])['class_key'] === 'msProduct');
 $sSite->options['fake_ms2_no_data'] = true;
 $pLoose = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Без строки данных', 'class_key' => 'msProduct', 'parent' => $catAccessories)));
@@ -5237,8 +5238,8 @@ $orderTables = function () use ($sSite) { return array($sSite->tableDump('msOrde
 // ---- orders: describe, read ----
 $oDesc = $call($sAdmin, 'describe', array('kind' => 'ms2_order'));
 check('ms2_order: describe', $oDesc['group'] === 'minishop2' && $oDesc['read_scope'] === 'admin' && $oDesc['write_scope'] === 'admin' && $oDesc['name_field'] === 'num' && $oDesc['generic_writes'] === false && $oDesc['key_type'] === 'integer'
-    && array_column($oDesc['fields'], 'name') === array('id', 'num', 'user_id', 'createdon', 'updatedon', 'cost', 'cart_cost', 'delivery_cost', 'weight', 'status', 'status_name', 'delivery', 'payment', 'context', 'comment')
-    && count(array_filter(array_column($oDesc['fields'], 'read_only'))) === 15 && array_column($oDesc['relations'], 'writable', 'name') === array('products' => false, 'address' => false, 'log' => false)
+    && array_column($oDesc['fields'], 'name') === array('id', 'num', 'user_id', 'createdon', 'updatedon', 'cost', 'cart_cost', 'delivery_cost', 'weight', 'status', 'status_name', 'delivery', 'delivery_name', 'payment', 'payment_name', 'context', 'comment')
+    && count(array_filter(array_column($oDesc['fields'], 'read_only'))) === 17 && array_column($oDesc['relations'], 'writable', 'name') === array('products' => false, 'address' => false, 'log' => false)
     && array_column($oDesc['operations'], 'op') === array('change_status') && $oDesc['operations'][0]['read_only'] === false && $oDesc['operations'][0]['needs_object'] === true);
 $oGot = $call($sAdmin, 'get', array('kind' => 'ms2_order', 'id' => 101));
 check('ms2_order: get shows the order, the status name and the computed numbers', $oGot['fields']['num'] === '2026/11-1' && $oGot['fields']['status'] === 1 && $oGot['fields']['status_name'] === 'Новый' && $oGot['fields']['cost'] === 2500.5
@@ -5257,7 +5258,7 @@ check('ms2_order: the session id, the properties and the IP addresses are never 
 check('ms2_order: get by number, and an order without an address', $call($sAdmin, 'get', array('kind' => 'ms2_order', 'name' => '2026/11-2'))['id'] === 102 && $call($sAdmin, 'get', array('kind' => 'ms2_order', 'id' => 103))['relations']['address'] === array()
     && $call($sAdmin, 'get', array('kind' => 'ms2_order', 'id' => 103))['relations']['products'] === array());
 $oList = $call($sAdmin, 'list', array('kind' => 'ms2_order'));
-check('ms2_order: list, newest first, with the listed fields', array_column($oList['items'], 'id') === array(104, 103, 102, 101) && $oList['total'] === 4 && array_keys($oList['items'][0]) === array('id', 'num', 'user_id', 'createdon', 'cost', 'status', 'status_name')
+check('ms2_order: list, newest first, with the listed fields', array_column($oList['items'], 'id') === array(104, 103, 102, 101) && $oList['total'] === 4 && array_keys($oList['items'][0]) === array('id', 'num', 'user_id', 'createdon', 'cost', 'status', 'status_name', 'delivery_name', 'payment_name')
     && $oList['items'][3]['status_name'] === 'Новый' && !isset($oList['items'][0]['comment']));
 check('ms2_order: list with where and query', array_column($call($sAdmin, 'list', array('kind' => 'ms2_order', 'where' => array('status' => 2)))['items'], 'id') === array(102) && array_column($call($sAdmin, 'list', array('kind' => 'ms2_order', 'where' => array('user_id' => 31)))['items'], 'id') === array(104, 101)
     && array_column($call($sAdmin, 'list', array('kind' => 'ms2_order', 'query' => '11-3'))['items'], 'id') === array(103));
@@ -5442,6 +5443,141 @@ check('ms2_order: the minishop2 group switched off for the site makes the kinds 
 $sSite->options['modxmcp.disabled_groups'] = $sSiteOff;
 
 check('list: items of a string-key kind always carry their key', array_key_exists('key', $call($sAdmin, 'list', array('kind' => 'ms2_product_link', 'fields' => array('link')))['items'][0] ?? array('key' => null)));
+
+// ---- vendors, deliveries and payments (task 53) ----
+$vBefore = $lkChangesets();
+$vNoName = throws('ms2_vendor: create without a name', ApiException::class, function () use ($call, $sEditor) { $call($sEditor, 'create', array('kind' => 'ms2_vendor', 'fields' => array('country' => 'Россия'))); });
+check('ms2_vendor: a name is required and nothing is left behind', $vNoName && $vNoName->errorCode === 'validation_failed' && $lkChangesets() === $vBefore);
+$vNew = $call($sEditor, 'create', array('kind' => 'ms2_vendor', 'fields' => array('name' => 'Бурятские промыслы', 'country' => 'Россия', 'email' => 'info@promysly.example', 'description' => 'Ручная работа «Сагаан»',
+    'properties' => array('site' => 'https://promysly.example'))));
+$vId = $vNew['id'];
+check('ms2_vendor: a content token creates a vendor through the miniShop2 processor, journaled', $vNew['changeset_id'] > 0 && $sSite->row('msVendor', $vId)['name'] === 'Бурятские промыслы'
+    && end($sSite->ms2Calls)[0] === 'mgr/settings/vendor/create' && strpos(end($sSite->ms2Calls)[2]['processors_path'], 'components/minishop2/processors/') !== false);
+$vGot = $call($sRead, 'get', array('kind' => 'ms2_vendor', 'id' => $vId));
+check('ms2_vendor: get shows every field of the map', array_keys($vGot['fields']) === array('id', 'name', 'resource', 'country', 'logo', 'address', 'phone', 'fax', 'email', 'description', 'properties')
+    && $vGot['fields']['name'] === 'Бурятские промыслы' && $vGot['fields']['description'] === 'Ручная работа «Сагаан»' && (array) $vGot['fields']['properties'] === array('site' => 'https://promysly.example'));
+$vList = $call($sRead, 'list', array('kind' => 'ms2_vendor', 'query' => 'промыс'));
+check('ms2_vendor: list finds a vendor by a part of the name (Cyrillic) and shows the listed fields only', array_column($vList['items'], 'name') === array('Бурятские промыслы') && array_keys($vList['items'][0]) === array('id', 'name', 'country'));
+$e = throws('ms2_vendor: duplicate name', ApiException::class, function () use ($call, $sEditor) { $call($sEditor, 'create', array('kind' => 'ms2_vendor', 'fields' => array('name' => 'Бурятские промыслы'))); });
+check('ms2_vendor: the processor refuses a duplicate name', $e && $e->errorCode === 'validation_failed' && stripos($e->getMessage(), 'already exists') !== false);
+$e = throws('ms2_vendor: a read token cannot write', ApiException::class, function () use ($call, $sRead, $vId) { $call($sRead, 'update', array('kind' => 'ms2_vendor', 'id' => $vId, 'fields' => array('country' => 'Монголия'))); });
+check('ms2_vendor: a read token is forbidden to change a vendor', $e && $e->errorCode === 'forbidden_scope');
+$vUpdated = $call($sEditor, 'update', array('kind' => 'ms2_vendor', 'id' => $vId, 'fields' => array('country' => 'Монголия', 'phone' => '+7 3012 00-00-00')));
+check('ms2_vendor: update changes the given columns and keeps the rest', $vUpdated['changed'] === array('country', 'phone') && $sSite->row('msVendor', $vId)['country'] === 'Монголия'
+    && $sSite->row('msVendor', $vId)['email'] === 'info@promysly.example' && $sSite->row('msVendor', $vId)['name'] === 'Бурятские промыслы' && end($sSite->ms2Calls)[0] === 'mgr/settings/vendor/update');
+$call($sEditor, 'undo', array('changeset_id' => $vUpdated['changeset_id'], 'confirm' => true));
+check('ms2_vendor: undo of an update restores the columns', $sSite->row('msVendor', $vId)['country'] === 'Россия' && ($sSite->row('msVendor', $vId)['phone'] ?? null) === null);
+$vOther = $call($sEditor, 'create', array('kind' => 'ms2_vendor', 'fields' => array('name' => 'Ёлка')))['id'];
+$sSite->store('msProductData', array('id' => 7001, 'vendor' => $vId, 'price' => 100));
+$sSite->store('msProductData', array('id' => 7002, 'vendor' => $vId, 'price' => 200));
+$sSite->store('msProductData', array('id' => 7003, 'vendor' => 4040, 'price' => 300));
+$vTables = $sSite->tableDump('msVendor');
+$vCount = $lkChangesets();
+$e = throws('ms2_vendor: delete while products use it', ApiException::class, function () use ($call, $sEditor, $vId) { $call($sEditor, 'delete', array('kind' => 'ms2_vendor', 'id' => $vId)); });
+check('ms2_vendor: a vendor used by products is not deleted and the message counts them', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'used by 2 product(s)') !== false
+    && $sSite->tableDump('msVendor') == $vTables && $lkChangesets() === $vCount);
+$e = throws('ms2_vendor: delete dry run while products use it', ApiException::class, function () use ($call, $sEditor, $vId) { $call($sEditor, 'delete', array('kind' => 'ms2_vendor', 'id' => $vId, 'dry_run' => true)); });
+check('ms2_vendor: the dry run refuses it as well', $e && $e->errorCode === 'validation_failed');
+$vDel = $call($sEditor, 'delete', array('kind' => 'ms2_vendor', 'id' => $vOther));
+check('ms2_vendor: an unused vendor is deleted with the processor', $sSite->row('msVendor', $vOther) === null && end($sSite->ms2Calls)[0] === 'mgr/settings/vendor/remove');
+$call($sEditor, 'undo', array('changeset_id' => $vDel['changeset_id'], 'confirm' => true));
+check('ms2_vendor: undo of a delete brings the vendor back', $sSite->row('msVendor', $vOther)['name'] === 'Ёлка');
+$vDup = $call($sEditor, 'duplicate', array('kind' => 'ms2_vendor', 'id' => $vId, 'new_name' => 'Бурятские промыслы 2'));
+check('ms2_vendor: duplicate copies the fields under a new name', $sSite->row('msVendor', $vDup['id'])['email'] === 'info@promysly.example' && $sSite->row('msVendor', $vDup['id'])['name'] === 'Бурятские промыслы 2');
+
+// the names next to the ids of products
+$vProduct = $call($sRead, 'get', array('kind' => 'resource', 'id' => 7001))['relations']['ms2_data'];
+check('ms2 product data: vendor_name stands next to vendor', $vProduct['vendor'] === $vId && $vProduct['vendor_name'] === 'Бурятские промыслы'
+    && array_search('vendor_name', array_keys($vProduct)) === array_search('vendor', array_keys($vProduct)) + 1);
+check('ms2 product data: vendor_name is null for an id that names nothing', $call($sRead, 'get', array('kind' => 'resource', 'id' => 7003))['relations']['ms2_data']['vendor_name'] === null
+    && $call($sRead, 'get', array('kind' => 'resource', 'id' => 7003))['relations']['ms2_data']['vendor'] === 4040);
+$vRevision = $call($sRead, 'get', array('kind' => 'resource', 'id' => 7001))['revision'];
+$vSavedName = $sSite->getObject('msVendor', array('id' => $vId));
+$vSavedName->set('name', 'Бурятские промыслы (новое имя)');
+$vSavedName->save();
+$vRenamed = $call($sRead, 'get', array('kind' => 'resource', 'id' => 7001));
+check('ms2 product data: the name follows the vendor, and the product revision does not carry it', $vRenamed['relations']['ms2_data']['vendor_name'] === 'Бурятские промыслы (новое имя)' && $vRenamed['revision'] === $vRevision);
+$vSavedName->set('name', 'Бурятские промыслы');
+$vSavedName->save();
+$e = throws('ms2 product data: writing vendor_name', ApiException::class, function () use ($call, $sEditor) { $call($sEditor, 'update', array('kind' => 'resource', 'id' => 7001, 'relations' => array('ms2_data' => array('vendor_name' => 'x')))); });
+check('ms2 product data: vendor_name cannot be written and the message points to vendor', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), "'vendor'") !== false && strpos($e->getMessage(), 'read-only') !== false);
+check('ms2 product data: describe of resource mentions vendor_name', strpos(json_encode($call($sRead, 'describe', array('kind' => 'resource')), JSON_UNESCAPED_UNICODE), 'vendor_name') !== false);
+
+// deliveries and payments
+$sSite->store('msDelivery', array('id' => 1, 'name' => 'Самовывоз', 'description' => 'Из магазина', 'price' => '0', 'weight_price' => 0, 'distance_price' => 0, 'logo' => null, 'rank' => 0, 'active' => 1,
+    'class' => null, 'properties' => null, 'requires' => 'email,receiver', 'free_delivery_amount' => 0));
+$sSite->store('msDelivery', array('id' => 2, 'name' => 'Курьер по Улан-Удэ', 'description' => 'До двери', 'price' => '5%', 'weight_price' => 12.5, 'distance_price' => 3, 'logo' => '/assets/courier.png', 'rank' => 1, 'active' => 1,
+    'class' => 'CourierHandler', 'properties' => '{"api_token":"tok-secret-777","city":"Улан-Удэ"}', 'requires' => 'email,receiver,phone,street', 'free_delivery_amount' => 5000));
+$sSite->store('msDelivery', array('id' => 3, 'name' => 'Почта (отключена)', 'price' => '300', 'rank' => 2, 'active' => 0, 'properties' => '{}'));
+$sSite->store('msPayment', array('id' => 1, 'name' => 'Наличными', 'description' => '', 'price' => '0', 'logo' => null, 'rank' => 0, 'active' => 1, 'class' => null, 'properties' => null));
+$sSite->store('msPayment', array('id' => 2, 'name' => 'Картой онлайн', 'description' => 'Эквайринг', 'price' => '2%', 'logo' => null, 'rank' => 1, 'active' => 1, 'class' => 'Acquiring',
+    'properties' => '{"merchant_password":"pw-secret-999","mode":"live"}'));
+$sSite->store('msDeliveryMember', array('delivery_id' => 1, 'payment_id' => 1));
+$sSite->store('msDeliveryMember', array('delivery_id' => 2, 'payment_id' => 1));
+$sSite->store('msDeliveryMember', array('delivery_id' => 2, 'payment_id' => 2));
+$dList = $call($sRead, 'list', array('kind' => 'ms2_delivery'));
+check('ms2_delivery: a read token lists deliveries by rank with the listed fields', array_column($dList['items'], 'name') === array('Самовывоз', 'Курьер по Улан-Удэ', 'Почта (отключена)') && $dList['total'] === 3
+    && array_keys($dList['items'][0]) === array('id', 'name', 'price', 'rank', 'active') && $dList['items'][1]['price'] === '5%' && $dList['items'][2]['active'] === false);
+$dGot = $call($sAdmin, 'get', array('kind' => 'ms2_delivery', 'id' => 2));
+check('ms2_delivery: get shows all fields of the map and the allowed payments', array_keys($dGot['fields']) === array('id', 'name', 'description', 'price', 'weight_price', 'distance_price', 'logo', 'rank', 'active', 'class', 'properties', 'requires', 'free_delivery_amount')
+    && $dGot['fields']['weight_price'] === 12.5 && $dGot['fields']['free_delivery_amount'] === 5000.0 && $dGot['fields']['class'] === 'CourierHandler' && $dGot['fields']['requires'] === 'email,receiver,phone,street'
+    && $dGot['relations']['payments'] === array(1, 2) && $call($sAdmin, 'get', array('kind' => 'ms2_delivery', 'id' => 1))['relations']['payments'] === array(1)
+    && $call($sAdmin, 'get', array('kind' => 'ms2_delivery', 'id' => 3))['relations']['payments'] === array());
+check('ms2_delivery: an admin sees the handler properties, a read token only that there are some', (array) $dGot['fields']['properties'] === array('api_token' => 'tok-secret-777', 'city' => 'Улан-Удэ')
+    && $call($sRead, 'get', array('kind' => 'ms2_delivery', 'id' => 2))['fields']['properties'] === '[hidden]' && $call($sRead, 'get', array('kind' => 'ms2_delivery', 'id' => 2))['secret'] === true
+    && strpos(json_encode($call($sRead, 'get', array('kind' => 'ms2_delivery', 'id' => 2))), 'tok-secret-777') === false && strpos(json_encode($call($sRead, 'list', array('kind' => 'ms2_delivery'))), 'tok-secret-777') === false
+    && (array) $call($sRead, 'get', array('kind' => 'ms2_delivery', 'id' => 3))['fields']['properties'] === array());
+$e = throws('ms2_delivery: filtering by properties', ApiException::class, function () use ($call, $sRead) { $call($sRead, 'list', array('kind' => 'ms2_delivery', 'where' => array('properties' => 'x'))); });
+check('ms2_delivery: properties cannot be used to probe the list', $e && $e->errorCode === 'validation_failed');
+$pGot = $call($sRead, 'get', array('kind' => 'ms2_payment', 'name' => 'Картой онлайн'));
+check('ms2_payment: get by name shows the map fields, the credentials stay hidden for a read token', array_keys($pGot['fields']) === array('id', 'name', 'description', 'price', 'logo', 'rank', 'active', 'class', 'properties')
+    && $pGot['fields']['price'] === '2%' && $pGot['fields']['properties'] === '[hidden]' && strpos(json_encode($pGot), 'pw-secret-999') === false
+    && (array) $call($sAdmin, 'get', array('kind' => 'ms2_payment', 'id' => 2))['fields']['properties'] === array('merchant_password' => 'pw-secret-999', 'mode' => 'live')
+    && array_column($call($sRead, 'list', array('kind' => 'ms2_payment'))['items'], 'name') === array('Наличными', 'Картой онлайн'));
+$dpTables = array($sSite->tableDump('msDelivery'), $sSite->tableDump('msPayment'), $sSite->tableDump('msDeliveryMember'));
+$dpBefore = $lkChangesets();
+foreach (array('ms2_delivery', 'ms2_payment') as $dpKind) {
+    foreach (array('create' => array('fields' => array('name' => 'Новая')), 'update' => array('id' => 1, 'fields' => array('name' => 'Другая')), 'delete' => array('id' => 1), 'duplicate' => array('id' => 1, 'new_name' => 'Копия')) as $action => $extra) {
+        foreach (array('admin' => $sAdmin, 'develop' => $sDev) as $who => $actor) {
+            $e = throws("{$dpKind}: {$action} by {$who}", ApiException::class, function () use ($call, $actor, $action, $extra, $dpKind) { $call($actor, $action, array('kind' => $dpKind) + $extra); });
+            check("{$dpKind}: {$action} by {$who} is refused with a pointer to the settings", $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'miniShop2 settings') !== false);
+        }
+    }
+}
+check('ms2_delivery, ms2_payment: refusals change nothing and journal nothing', $dpTables == array($sSite->tableDump('msDelivery'), $sSite->tableDump('msPayment'), $sSite->tableDump('msDeliveryMember')) && $lkChangesets() === $dpBefore);
+$dDesc = $call($sRead, 'describe', array('kind' => 'ms2_delivery'));
+check('ms2_delivery: describe says read only, names the relation and the group', $dDesc['generic_writes'] === false && $dDesc['read_scope'] === 'read' && $dDesc['group'] === 'minishop2'
+    && array_column($dDesc['relations'], 'writable', 'name') === array('payments' => false) && count(array_filter(array_column($dDesc['fields'], 'read_only'))) === 13
+    && $call($sRead, 'describe', array('kind' => 'ms2_payment'))['generic_writes'] === false);
+check('ms2_vendor: describe gives the scopes and the required name', $call($sRead, 'describe', array('kind' => 'ms2_vendor'))['write_scope'] === 'content' && $call($sRead, 'describe', array('kind' => 'ms2_vendor'))['read_scope'] === 'read'
+    && array_column(array_filter($call($sRead, 'describe', array('kind' => 'ms2_vendor'))['fields'], function ($f) { return !empty($f['required']); }), 'name') === array('name'));
+
+// the names next to the ids of orders
+$oNames = $call($sAdmin, 'get', array('kind' => 'ms2_order', 'id' => 101))['fields'];
+check('ms2_order: delivery_name and payment_name stand next to the ids', $oNames['delivery'] === 1 && $oNames['delivery_name'] === 'Самовывоз' && $oNames['payment'] === 2 && $oNames['payment_name'] === 'Картой онлайн');
+$sSite->store('msOrder', array('id' => 199, 'user_id' => 31, 'num' => '2026/11-99', 'status' => 1, 'delivery' => 99, 'payment' => 98, 'context' => 'web', 'createdon' => '2026-11-09 10:00:00', 'cost' => '1', 'cart_cost' => '1', 'delivery_cost' => '0', 'weight' => '0'));
+$oGone = $call($sAdmin, 'get', array('kind' => 'ms2_order', 'id' => 199))['fields'];
+$oGoneList = array_values(array_filter($call($sAdmin, 'list', array('kind' => 'ms2_order'))['items'], function ($item) { return $item['id'] === 199; }));
+check('ms2_order: a delivery or payment that no longer exists gives null names', $oGone['delivery'] === 99 && $oGone['delivery_name'] === null && $oGone['payment'] === 98 && $oGone['payment_name'] === null
+    && $oGoneList && $oGoneList[0]['delivery_name'] === null && $oGoneList[0]['payment_name'] === null);
+$sSite->getObject('msOrder', array('id' => 199))->remove();
+check('ms2_order: the list carries the names of the existing methods', array_column(array_filter($call($sAdmin, 'list', array('kind' => 'ms2_order'))['items'], function ($i) { return $i['id'] === 101; }), 'payment_name') === array('Картой онлайн'));
+
+$v53Help = file_get_contents($dev->corePath . 'docs/getting_started.md');
+check('help: vendors, deliveries and payments are explained', strpos($v53Help, 'ms2_data.vendor_name') !== false && strpos($v53Help, '`ms2_delivery` and') !== false && strpos($v53Help, 'delivery_name') !== false);
+// availability
+$e = throws('ms2_vendor: not installed', ApiException::class, function () use ($call, $sPlain) { $call($sPlain, 'get', array('kind' => 'ms2_vendor', 'id' => 1)); });
+check('ms2 references: the kinds are unknown without miniShop2', $e && $e->errorCode !== null && !in_array('ms2_vendor', array_column($call($sPlain, 'describe')['kinds'], 'kind'), true)
+    && !in_array('ms2_delivery', array_column($call($sPlain, 'describe')['kinds'], 'kind'), true) && !in_array('ms2_payment', array_column($call($sPlain, 'describe')['kinds'], 'kind'), true));
+$sSite->options['modxmcp.disabled_groups'] = 'minishop2';
+foreach (array('ms2_vendor', 'ms2_delivery', 'ms2_payment') as $offKind) {
+    $e = throws("{$offKind}: group switched off", ApiException::class, function () use ($call, $sAdmin, $offKind) { $call($sAdmin, 'get', array('kind' => $offKind, 'id' => 1)); });
+    check("{$offKind}: the minishop2 group switched off makes it unavailable", $e && $e->errorCode === 'unavailable');
+}
+check('ms2 references: the group switched off hides the kinds from describe', !array_intersect(array('ms2_vendor', 'ms2_delivery', 'ms2_payment'), array_column($call($sAdmin, 'describe')['kinds'], 'kind')));
+$sSite->options['modxmcp.disabled_groups'] = $sSiteOff;
+$sDenied = $sActor('admin', array('denied_groups' => array('minishop2')));
+check('ms2 references: a token with the group denied does not see the kinds', !array_intersect(array('ms2_vendor', 'ms2_delivery', 'ms2_payment'), array_column($call($sDenied, 'describe')['kinds'], 'kind')));
 
 // --- MIGX: kind migx_config, MIGX TV values, help topic (task 23) ---
 $mgDir = $siteDir . '/migx23';

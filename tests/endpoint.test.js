@@ -475,13 +475,13 @@ test("miniShop2: the option kind and the product relations appear when it is ins
   t.after(site.stop);
   const { admin, read } = site.info.tokens;
   const call = (token, action, args = {}) => site.post(token, { v: 2, action, args });
-  // 24 kinds without miniShop2 (see "kernel: wire protocol"), five more with it; a read token reads all of them but the orders.
+  // 24 kinds without miniShop2 (see "kernel: wire protocol"), eight more with it; a read token reads all of them but the orders.
   const adminKinds = (await call(admin, "describe")).body.result.kinds.map((kind) => kind.kind);
-  assert.equal(adminKinds.length, 29);
-  assert.deepEqual(adminKinds.slice(-5), ["ms2_option", "ms2_link", "ms2_product_link", "ms2_order", "ms2_order_status"]);
+  assert.equal(adminKinds.length, 32);
+  assert.deepEqual(adminKinds.slice(-8), ["ms2_option", "ms2_link", "ms2_product_link", "ms2_order", "ms2_order_status", "ms2_vendor", "ms2_delivery", "ms2_payment"]);
   const readKinds = (await call(read, "describe")).body.result.kinds.map((kind) => kind.kind);
-  assert.equal(readKinds.length, 23);
-  assert.deepEqual(readKinds.slice(-4), ["ms2_option", "ms2_link", "ms2_product_link", "ms2_order_status"]);
+  assert.equal(readKinds.length, 26);
+  assert.deepEqual(readKinds.slice(-7), ["ms2_option", "ms2_link", "ms2_product_link", "ms2_order_status", "ms2_vendor", "ms2_delivery", "ms2_payment"]);
   assert.ok(!readKinds.includes("ms2_order"));
   assert.equal((await call(read, "get", { kind: "ms2_order", id: 1 })).body.error.code, "forbidden_scope");
   assert.equal((await call(read, "list", { kind: "ms2_order" })).body.error.code, "forbidden_scope");

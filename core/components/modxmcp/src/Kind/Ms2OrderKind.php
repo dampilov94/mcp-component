@@ -51,14 +51,20 @@ final class Ms2OrderKind extends AbstractMs2Kind {
             'weight'        => array('type' => 'number') + $readOnly,
             'status'        => array('type' => 'integer', 'list' => true, 'description' => 'Id of the order status (kind ms2_order_status).') + $readOnly,
             'status_name'   => array('type' => 'string', 'list' => true, 'computed' => true, 'derived' => true, 'description' => 'Name of the status.') + $readOnly,
-            'delivery'      => array('type' => 'integer', 'description' => 'Id of the delivery method.') + $readOnly,
-            'payment'       => array('type' => 'integer', 'description' => 'Id of the payment method.') + $readOnly,
+            'delivery'      => array('type' => 'integer', 'description' => 'Id of the delivery method (kind ms2_delivery).') + $readOnly,
+            'delivery_name' => array('type' => 'string', 'list' => true, 'computed' => true, 'derived' => true, 'description' => 'Name of the delivery method; null when it no longer exists.') + $readOnly,
+            'payment'       => array('type' => 'integer', 'description' => 'Id of the payment method (kind ms2_payment).') + $readOnly,
+            'payment_name'  => array('type' => 'string', 'list' => true, 'computed' => true, 'derived' => true, 'description' => 'Name of the payment method; null when it no longer exists.') + $readOnly,
             'context'       => array('type' => 'string') + $readOnly,
             'comment'       => array('type' => 'string', 'column' => 'order_comment', 'description' => 'Comment of the customer.') + $readOnly,
         );
     }
 
     public function value($object, $field) {
+        if ($field === 'delivery_name' || $field === 'payment_name') {
+            $row = $object->xpdo->getObject($field === 'delivery_name' ? 'msDelivery' : 'msPayment', array('id' => (int) $object->get($field === 'delivery_name' ? 'delivery' : 'payment')), false);
+            return $row ? (string) $row->get('name') : null;
+        }
         if ($field !== 'status_name') { return parent::value($object, $field); }
         $status = $object->xpdo->getObject('msOrderStatus', array('id' => (int) $object->get('status')), false);
         return $status ? (string) $status->get('name') : '';

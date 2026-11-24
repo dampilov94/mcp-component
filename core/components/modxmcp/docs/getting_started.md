@@ -128,6 +128,17 @@ drafts. The manager plan shows the proposed price changes. Applying saves the ed
 explicitly staged prices, and undo restores both the product and the draft. Use Share preview
 to review edited text on an HTTPS site.
 
+### miniShop2 vendors, deliveries and payments
+
+Products keep their vendor, and orders their delivery and payment, as ids. The read results name them:
+`ms2_data.vendor_name` of a product and `delivery_name` / `payment_name` of an order (`null` when the row
+no longer exists; these names are read-only and are not part of a product's revision). Kind `ms2_vendor` is a
+normal kind (list, get, create, update, delete with the `content` scope, journaled and undoable); a vendor
+that products still use is not deleted, the message counts the products. Kinds `ms2_delivery` and
+`ms2_payment` are read-only (change them in the miniShop2 settings of the manager); `ms2_delivery` has the
+relation `payments` (ids of the allowed payment methods). Their `properties` often hold the keys of a courier
+or payment service, so only a token with the `admin` scope sees them.
+
 ### miniShop2 product galleries
 
 Use `modx_describe {kind: "resource"}` to find `list_gallery`. With the miniShop2 group
