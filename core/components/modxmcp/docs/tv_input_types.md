@@ -52,7 +52,11 @@ To attach an existing TV, call
 This replaces the template links; a TV appears only on resources using an attached template.
 
 For an image picker, create with `fields.type: "image"`. Discover available sources with
-`modx_list {kind: "media_source"}` and choose the TV's source in the manager.
+`modx_list {kind: "media_source"}` and set the TV's source per context with
+`modx_update {kind: "tv", id: 12, relations: {media_sources: {web: 2}}}` (only the contexts given
+change; `null` removes a context's row, so the default source applies).
+Options of the output type (`display`) go into the `output_properties` field, like
+`input_properties` (`{"w": 200}`); writing it replaces the map.
 A `resourcelist` picker stores a resource id; configure its parent restriction in the manager.
 
 ## Custom types and verification

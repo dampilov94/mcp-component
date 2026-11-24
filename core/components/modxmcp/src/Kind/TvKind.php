@@ -37,19 +37,23 @@ final class TvKind extends Kind {
             'properties'   => self::propertiesField('Default properties of the TV.'),
             'input_properties' => array('type' => 'object', 'json' => true,
                 'description' => 'Options of the input type as {name: value}, e.g. {"configs": "gallery"} binds a MIGX TV to its configuration. Writing replaces the map.'),
+            'output_properties' => array('type' => 'object', 'json' => true,
+                'description' => 'Options of the output type (display) as {name: value}, e.g. {"w": 200} for an image output. Writing replaces the map.'),
         );
     }
 
-    /** The TV processors read input options only from properties named inopt_<name>. */
+    /** The TV processors read input options only from properties named inopt_<name>, output options from prop_<name>. */
     public function processorData($op, array $data) {
         $data = $this->propertiesData($data);
-        if (!array_key_exists('input_properties', $data)) { return $data; }
-        $options = $data['input_properties'];
-        unset($data['input_properties']);
-        if (is_string($options)) { $decoded = json_decode($options, true); $options = is_array($decoded) ? $decoded : array(); }
-        if ($options instanceof \stdClass) { $options = (array) $options; }
-        foreach ((array) $options as $name => $value) {
-            $data['inopt_' . $name] = is_bool($value) ? ($value ? 'true' : 'false') : $value;
+        foreach (array('input_properties' => 'inopt_', 'output_properties' => 'prop_') as $field => $prefix) {
+            if (!array_key_exists($field, $data)) { continue; }
+            $options = $data[$field];
+            unset($data[$field]);
+            if (is_string($options)) { $decoded = json_decode($options, true); $options = is_array($decoded) ? $decoded : array(); }
+            if ($options instanceof \stdClass) { $options = (array) $options; }
+            foreach ((array) $options as $name => $value) {
+                $data[$prefix . $name] = is_bool($value) ? ($value ? 'true' : 'false') : $value;
+            }
         }
         return $data;
     }
@@ -69,12 +73,47 @@ final class TvKind extends Kind {
             'values' => array('class' => 'modTemplateVarResource', 'fk' => 'tmplvarid', 'delete_only' => true),
             'media_sources' => array(
                 'class' => 'sources.modMediaSourceElement', 'fk' => 'object', 'where' => array('object_class' => 'modTemplateVar'),
-                'delete_only' => true,
+                'present' => array('context_key', 'source'), 'writable' => true, 'map' => true,
+                'description' => 'Media source per context as {context_key: source_id}, e.g. {"web": 2}. Only the contexts you give are changed; null removes the context\'s row (the default source applies).',
             ),
         );
     }
 
+    public function presentRelation(\modX $modx, $object, $name) {
+        if ($name !== 'media_sources') { return parent::presentRelation($modx, $object, $name); }
+        $out = array();
+        foreach ($modx->getCollection('sources.modMediaSourceElement', array('object' => (int) $object->get('id'), 'object_class' => 'modTemplateVar')) as $row) {
+            $out[(string) $row->get('context_key')] = (int) $row->get('source');
+        }
+        ksort($out, SORT_STRING);
+        return $out ? (object) $out : new \stdClass();
+    }
+
+    /** Like modElementTvUpdateProcessor::setMediaSources(), but only for the given contexts: the row of a context is replaced. */
+    private function writeMediaSources(\modX $modx, $object, array $sources) {
+        $id = (int) $object->get('id');
+        $plan = array();
+        foreach ($sources as $context => $source) {
+            $context = (string) $context;
+            if (!$modx->getCount('modContext', array('key' => $context))) { throw new ApiException('validation_failed', "Context '{$context}' does not exist."); }
+            if ($source !== null) {
+                if (!is_int($source) || $source < 1) { throw new ApiException('validation_failed', "media_sources.{$context} must be a media source id or null."); }
+                if (!$modx->getCount('sources.modMediaSource', array('id' => $source))) { throw new ApiException('validation_failed', "Media source {$source} does not exist."); }
+            }
+            $plan[$context] = $source;
+        }
+        foreach ($plan as $context => $source) {
+            // The source is part of the key of a row, so a row cannot be updated in place: remove it and add the new one.
+            $modx->removeCollection('sources.modMediaSourceElement', array('object' => $id, 'object_class' => 'modTemplateVar', 'context_key' => $context));
+            if ($source === null) { continue; }
+            $row = $modx->newObject('sources.modMediaSourceElement');
+            $row->fromArray(array('object' => $id, 'object_class' => 'modTemplateVar', 'context_key' => $context, 'source' => $source), '', true, true);
+            if (!$row->save()) { throw new \RuntimeException("Cannot set the media source of context {$context}."); }
+        }
+    }
+
     public function writeRelation(\modX $modx, $object, $name, $value) {
+        if ($name === 'media_sources') { $this->writeMediaSources($modx, $object, (array) $value); return; }
         if ($name !== 'templates') { return parent::writeRelation($modx, $object, $name, $value); }
         $ids = array();
         foreach ($value as $item) {
