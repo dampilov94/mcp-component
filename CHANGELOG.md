@@ -252,6 +252,15 @@ After alpha3:
 - TVs: media sources per context (`relations.media_sources`, e.g. `{"web": 2}`) and
   `output_properties` are writable.
 - Manager: "pause the API" on the main page; the changeset count of a token links to its history.
+- `modx_check_page` renders a draft or an unpublished page: the site issues itself a one-time key
+  (60 s, bound to the page, hashed on disk) sent in `X-MCP-Render`; the component's plugin serves
+  that page once on `OnWebPageInit`, uncached and `noindex`. Anyone else still gets 404.
+- miniShop2: kind `ms2_vendor` (journaled, delete refused while products use it), read-only kinds
+  `ms2_delivery` and `ms2_payment` (their `properties` shown to admin tokens only); products and
+  orders show `vendor_name`, `delivery_name`, `payment_name`.
+- `rename` of a chunk, snippet or TV rewrites its references (tags, Fenom, PHP calls, template
+  parameters, `@CHUNK`, default properties, MIGX fields, TV placeholders in linked elements) in one
+  changeset, after a plan; references that cannot be rewritten safely are listed for manual work.
 
 Stage 7 — manager:
 
