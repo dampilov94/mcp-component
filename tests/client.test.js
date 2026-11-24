@@ -28,6 +28,8 @@ function mockSite() {
     tool("read_file", { inputSchema: object({ source: { type: "integer" }, path: { type: "string" } }) }),
     tool("write_file", { inputSchema: object({ source: { type: "integer" }, path: { type: "string" }, content: { type: "string" }, expected_revision: { type: "string" } }),
       effect: { read_only: false, destructive: true, reversible: true, open_world: false } }),
+    tool("edit_file", { inputSchema: object({ source: { type: "integer" }, root: { type: "string" }, path: { type: "string" }, expected_revision: { type: "string" } }),
+      effect: { read_only: false, destructive: true, reversible: true, open_world: false } }),
     tool("undo", { inputSchema: object({ confirm: { type: "boolean" } }), effect: { read_only: false, destructive: true, reversible: true, open_world: false } }),
     tool("update", {
       inputSchema: object({ kind: { type: "string" }, id: { type: "integer" }, key: { type: "string" }, expected_revision: { type: "string" } }, ["kind"]),
@@ -73,6 +75,8 @@ function mockSite() {
           return ok({ path: "css/site.css", revision: "file-before" });
         case "write_file":
           return ok({ files: [{ path: "css/site.css", revision: "file-after", op: "update" }] });
+        case "edit_file":
+          return ok({ root: "s3", path: "css/site.css", revision: "file-edited" });
         case "undo":
           return ok({ performed: true });
         case "update":
@@ -115,7 +119,7 @@ test("bridge serves the site's manifest and proxies calls", async (t) => {
 
   await t.test("tools are built from the manifest", async () => {
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map((item) => item.name), ["modx_site_info", "modx_help", "modx_describe", "modx_get", "modx_read_file", "modx_write_file", "modx_undo", "modx_update"]);
+    assert.deepEqual(tools.map((item) => item.name), ["modx_site_info", "modx_help", "modx_describe", "modx_get", "modx_read_file", "modx_write_file", "modx_edit_file", "modx_undo", "modx_update"]);
     const read = tools.find((item) => item.name === "modx_site_info");
     assert.equal(read.annotations.readOnlyHint, true);
     assert.equal(read.inputSchema.properties._request_id, undefined);
@@ -157,6 +161,17 @@ test("bridge serves the site's manifest and proxies calls", async (t) => {
     assert.equal(site.state.requests.at(-1).args.expected_revision, "file-before");
     await write(3, "css/site.css");
     assert.equal(site.state.requests.at(-1).args.expected_revision, "file-after");
+  });
+
+  await t.test("line edits of a file are tracked by root id or source", async () => {
+    await client.callTool({ name: "modx_read_file", arguments: { source: 3, path: "css/site.css" } });
+    const edit = (args) => client.callTool({ name: "modx_edit_file", arguments: { path: "css/site.css", ...args } });
+    await edit({ root: "s9" });
+    assert.equal(site.state.requests.at(-1).args.expected_revision, undefined);
+    await edit({ root: "s3" });
+    assert.equal(site.state.requests.at(-1).args.expected_revision, "file-before");
+    await edit({ source: 3 });
+    assert.equal(site.state.requests.at(-1).args.expected_revision, "file-edited");
   });
 
   await t.test("a write call gets a request ID and never forwards _request_id as an argument", async () => {

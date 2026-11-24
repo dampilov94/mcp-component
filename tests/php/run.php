@@ -137,14 +137,14 @@ $context = function ($scope, array $denied = array(), array $options = array()) 
 $read = $context('read');
 $tools = Manifest::tools($read);
 $names = array_column($tools, 'name');
-check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_invoke', 'modx_resource_tree', 'modx_view_code', 'modx_search', 'modx_find_usages', 'modx_dependency_graph', 'modx_list_files', 'modx_read_file', 'modx_history', 'modx_history_diff', 'modx_check_page', 'modx_audit_site', 'modx_request_status'));
+check('manifest: read token sees the core tools', $names === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_invoke', 'modx_resource_tree', 'modx_view_code', 'modx_search', 'modx_find_usages', 'modx_dependency_graph', 'modx_list_files', 'modx_read_file', 'modx_search_files', 'modx_history', 'modx_history_diff', 'modx_check_page', 'modx_audit_site', 'modx_request_status'));
 check('manifest: protocol action is not a tool', !in_array('modx_manifest', $names, true));
 check('manifest: hash is stable', Manifest::hash($tools) === Manifest::hash(Manifest::tools($context('read'))));
 foreach ($tools as $tool) {
     check("manifest: {$tool['name']} is read-only", $tool['name'] === 'modx_invoke' || ($tool['effect']['read_only'] === true && $tool['effect']['destructive'] === false));
 }
 $all = array_column(Manifest::tools($context('admin')), null, 'name');
-check('manifest: full tool count', count($all) === 35);
+check('manifest: full tool count', count($all) === 37);
 check('manifest: duplicate is a reversible write after delete', $all['modx_duplicate']['effect']['read_only'] === false
     && $all['modx_duplicate']['effect']['reversible'] === true && $all['modx_duplicate']['effect']['destructive'] === false
     && array_search('modx_duplicate', array_keys($all), true) === array_search('modx_delete', array_keys($all), true) + 1);
@@ -1612,6 +1612,176 @@ throws('delete_path: a tree with a symlink is refused', ApiException::class, fun
 check('delete_path: nothing was removed', file_exists($media . '/docs/a.txt') && file_get_contents($siteDir . '/outside.txt') === 'outside the source');
 throws('delete_path: the root cannot be deleted', ApiException::class, function () use ($call, $editor) { $call($editor, 'delete_path', array('source' => 1, 'path' => '.')); });
 throws('files: a read token cannot write', ApiException::class, function () use ($call, $actor) { $call($actor('read'), 'write_file', array('source' => 1, 'path' => 'a.txt', 'content' => 'x')); });
+
+// --- File lines: windows, line edits, search in files ---
+mkdir($media . '/lines', 0755, true);
+$flText = "alpha\nбета\n\ngamma\n";
+file_put_contents($media . '/lines/a.txt', $flText);
+$flRead = $call($actor('read'), 'read_file', array('source' => 1, 'path' => 'lines/a.txt', 'start_line' => 2, 'end_line' => 3));
+check('file lines: window is numbered with total, bounds, root and the whole-file revision', $flRead['numbered'] === "2\tбета\n3\t" && $flRead['total_lines'] === 4
+    && $flRead['start_line'] === 2 && $flRead['end_line'] === 3 && $flRead['root'] === 's1' && $flRead['truncated'] === false && !isset($flRead['content'])
+    && $flRead['revision'] === $call($actor('read'), 'read_file', array('source' => 1, 'path' => 'lines/a.txt'))['revision']);
+$flAll = $call($actor('read'), 'read_file', array('source' => 1, 'path' => 'lines/a.txt', 'numbered' => true));
+check('file lines: numbered without a window covers the file, no phantom last line', $flAll['numbered'] === "1\talpha\n2\tбета\n3\t\n4\tgamma" && $flAll['end_line'] === 4);
+$flPast = $call($actor('read'), 'read_file', array('source' => 1, 'path' => 'lines/a.txt', 'start_line' => 9));
+check('file lines: a window past the end is empty', $flPast['numbered'] === '' && $flPast['total_lines'] === 4);
+check('file lines: plain read has root and is otherwise unchanged', $call($actor('read'), 'read_file', array('source' => 1, 'path' => 'lines/a.txt'))['content'] === $flText && !isset($call($actor('read'), 'read_file', array('source' => 1, 'path' => 'lines/a.txt'))['numbered']));
+$flCut = $call($actor('read'), 'read_file', array('source' => 1, 'path' => 'lines/a.txt', 'numbered' => true, 'max_bytes' => 12));
+check('file lines: numbered text is cut at a line boundary with next_line', $flCut['truncated'] === true && $flCut['numbered'] === "1\talpha" && $flCut['next_line'] === 2);
+throws('file lines: binary refuses a window', ApiException::class, function () use ($call, $actor) { $call($actor('read'), 'read_file', array('source' => 1, 'path' => 'img/logo.png', 'start_line' => 1)); });
+throws('file lines: window and offset together', ApiException::class, function () use ($call, $actor) { $call($actor('read'), 'read_file', array('source' => 1, 'path' => 'lines/a.txt', 'start_line' => 1, 'offset' => 2)); });
+check('file lines: component read names its root', $call($actor('read'), 'read_file', array('component' => 'demo', 'path' => 'model/demo.class.php', 'numbered' => true))['root'] === 'c:demo:core');
+
+// edit_file
+$e1 = $call($editor, 'edit_file', array('source' => 1, 'path' => 'lines/a.txt', 'expected_revision' => $flRead['revision'],
+    'edits' => array(array('start_line' => 2, 'replacement' => 'бета и ещё', 'expect' => 'бета'), array('start_line' => 1, 'end_line' => 0, 'replacement' => 'zero'), array('start_line' => 5, 'end_line' => 4, 'replacement' => 'tail'))));
+check('edit_file: replace, insert and append keep the final newline', file_get_contents($media . '/lines/a.txt') === "zero\nalpha\nбета и ещё\n\ngamma\ntail\n"
+    && $e1['edits_applied'] === 3 && $e1['total_lines_before'] === 4 && $e1['total_lines_after'] === 6 && $e1['root'] === 's1' && $e1['path'] === 'lines/a.txt' && $e1['changeset_id'] !== null && $e1['reversible'] === true);
+check('edit_file: the returned revision is the read revision', $e1['revision'] === $call($actor('read'), 'read_file', array('source' => 1, 'path' => 'lines/a.txt'))['revision']);
+$e2 = $call($editor, 'edit_file', array('root' => 's1', 'path' => 'lines/a.txt', 'edits' => array(array('start_line' => 1, 'end_line' => 2))));
+check('edit_file: delete lines; root id instead of source', file_get_contents($media . '/lines/a.txt') === "бета и ещё\n\ngamma\ntail\n");
+$e3 = $call($editor, 'edit_file', array('source' => 1, 'path' => 'lines/a.txt', 'edits' => array(array('start_line' => 1, 'replacement' => 'x', 'expect' => 'gamma'))));
+check('edit_file: expect relocates a stale line number', file_get_contents($media . '/lines/a.txt') === "x\n\ngamma\ntail\n" ? false : file_get_contents($media . '/lines/a.txt') === "бета и ещё\n\nx\ntail\n");
+$e = throws('edit_file: expect that matches nowhere', ApiException::class, function () use ($call, $editor) { $call($editor, 'edit_file', array('source' => 1, 'path' => 'lines/a.txt', 'edits' => array(array('start_line' => 1, 'replacement' => 'y', 'expect' => 'нет такой')))); });
+check('edit_file: failed expect is a conflict and changes nothing', $e && $e->errorCode === 'revision_conflict' && file_get_contents($media . '/lines/a.txt') === "бета и ещё\n\nx\ntail\n");
+throws('edit_file: lines out of range', ApiException::class, function () use ($call, $editor) { $call($editor, 'edit_file', array('source' => 1, 'path' => 'lines/a.txt', 'edits' => array(array('start_line' => 9, 'replacement' => 'z')))); });
+$e = throws('edit_file: stale revision', ApiException::class, function () use ($call, $editor, $flRead) { $call($editor, 'edit_file', array('source' => 1, 'path' => 'lines/a.txt', 'expected_revision' => $flRead['revision'], 'edits' => array(array('start_line' => 1, 'replacement' => 'q')))); });
+check('edit_file: stale revision is a conflict', $e && $e->errorCode === 'revision_conflict' && isset($e->details['current_revision']));
+throws('edit_file: both source and root', ApiException::class, function () use ($call, $editor) { $call($editor, 'edit_file', array('source' => 1, 'root' => 's1', 'path' => 'lines/a.txt', 'edits' => array(array('start_line' => 1, 'replacement' => 'q')))); });
+throws('edit_file: a component root is read-only', ApiException::class, function () use ($call, $dev) { $call($dev, 'edit_file', array('root' => 'c:demo:core', 'path' => 'model/demo.class.php', 'edits' => array(array('start_line' => 1, 'replacement' => 'q')))); });
+$flDry = $call($editor, 'edit_file', array('source' => 1, 'path' => 'lines/a.txt', 'dry_run' => true, 'edits' => array(array('start_line' => 4, 'replacement' => 'TAIL'))));
+check('edit_file: dry run returns the line diff and writes nothing', $flDry['dry_run'] === true && $flDry['diff'] === "@@ -4,1 +4,1 @@\n-tail\n+TAIL" && $flDry['total_lines_after'] === 4
+    && file_get_contents($media . '/lines/a.txt') === "бета и ещё\n\nx\ntail\n");
+$flJournal = $call($editor, 'history_diff', array('changeset_id' => $e1['changeset_id']));
+check('edit_file: journaled as a file change with a diff', $flJournal['objects'][0]['id'] === 's1:lines/a.txt' && $flJournal['objects'][0]['changed']['content']['diff'] !== '');
+$call($editor, 'undo', array('changeset_id' => $e3['changeset_id'], 'confirm' => true));
+$call($editor, 'undo', array('changeset_id' => $e2['changeset_id'], 'confirm' => true));
+$call($editor, 'undo', array('changeset_id' => $e1['changeset_id'], 'confirm' => true));
+check('edit_file: undo restores the original bytes', file_get_contents($media . '/lines/a.txt') === $flText);
+
+// CRLF and a missing final newline survive
+file_put_contents($media . '/lines/crlf.css', "a {\r\n  color: red;\r\n}");
+$crlf = $call($editor, 'edit_file', array('source' => 1, 'path' => 'lines/crlf.css', 'edits' => array(array('start_line' => 2, 'replacement' => "  color: blue;\n  margin: 0;"))));
+check('edit_file: CRLF endings and a missing final newline are kept', file_get_contents($media . '/lines/crlf.css') === "a {\r\n  color: blue;\r\n  margin: 0;\r\n}" && $crlf['total_lines_after'] === 4);
+$call($editor, 'undo', array('changeset_id' => $crlf['changeset_id'], 'confirm' => true));
+check('edit_file: undo of the CRLF edit restores the bytes', file_get_contents($media . '/lines/crlf.css') === "a {\r\n  color: red;\r\n}");
+file_put_contents($media . '/lines/crlf2.css', "a\r\nb\r\n");
+$call($editor, 'edit_file', array('source' => 1, 'path' => 'lines/crlf2.css', 'edits' => array(array('start_line' => 3, 'end_line' => 2, 'replacement' => 'c'))));
+check('edit_file: appending to a CRLF file with a final break', file_get_contents($media . '/lines/crlf2.css') === "a\r\nb\r\nc\r\n");
+$noop = $call($editor, 'edit_file', array('source' => 1, 'path' => 'lines/a.txt', 'edits' => array(array('start_line' => 1, 'replacement' => 'alpha'))));
+check('edit_file: an edit that changes nothing writes no changeset', $noop['changeset_id'] === null && file_get_contents($media . '/lines/a.txt') === $flText);
+
+// refusals
+throws('edit_file: missing file', ApiException::class, function () use ($call, $editor) { $call($editor, 'edit_file', array('source' => 1, 'path' => 'lines/none.txt', 'edits' => array(array('start_line' => 1, 'replacement' => 'z')))); });
+file_put_contents($media . '/lines/empty.txt', '');
+throws('edit_file: empty file goes through write_file', ApiException::class, function () use ($call, $editor) { $call($editor, 'edit_file', array('source' => 1, 'path' => 'lines/empty.txt', 'edits' => array(array('start_line' => 1, 'end_line' => 0, 'replacement' => 'z')))); });
+$e = throws('edit_file: binary file', ApiException::class, function () use ($call, $editor) { $call($editor, 'edit_file', array('source' => 1, 'path' => 'img/logo.png', 'edits' => array(array('start_line' => 1, 'replacement' => 'z')))); });
+check('edit_file: binary is validation_failed', $e && $e->errorCode === 'validation_failed');
+$site->options['modxmcp.max_read_bytes'] = 10;
+$e = throws('edit_file: file over max_read_bytes', ApiException::class, function () use ($call, $editor) { $call($editor, 'edit_file', array('source' => 1, 'path' => 'lines/a.txt', 'edits' => array(array('start_line' => 1, 'replacement' => 'z')))); });
+check('edit_file: oversize is validation_failed', $e && $e->errorCode === 'validation_failed' && file_get_contents($media . '/lines/a.txt') === $flText);
+unset($site->options['modxmcp.max_read_bytes']);
+throws('edit_file: a read token cannot edit', ApiException::class, function () use ($call, $actor) { $call($actor('read'), 'edit_file', array('source' => 1, 'path' => 'lines/a.txt', 'edits' => array(array('start_line' => 1, 'replacement' => 'z')))); });
+throws('edit_file: traversal', ApiException::class, function () use ($call, $dev) { $call($dev, 'edit_file', array('source' => 1, 'path' => '../outside.txt', 'edits' => array(array('start_line' => 1, 'replacement' => 'z')))); });
+throws('edit_file: symlink out of the root', ApiException::class, function () use ($call, $dev) { $call($dev, 'edit_file', array('source' => 1, 'path' => 'escape.txt', 'edits' => array(array('start_line' => 1, 'replacement' => 'z')))); });
+check('edit_file: the outside file is intact', file_get_contents($siteDir . '/outside.txt') === 'outside the source');
+
+// protected paths and scopes, as write_file
+file_put_contents($media . '/lines/page.php', "<?php\necho 1;\n");
+$e = throws('edit_file: php needs the develop scope', ApiException::class, function () use ($call, $editor) { $call($editor, 'edit_file', array('source' => 1, 'path' => 'lines/page.php', 'edits' => array(array('start_line' => 2, 'replacement' => 'echo 2;')))); });
+check('edit_file: php refusal is forbidden_scope', $e && $e->errorCode === 'forbidden_scope' && file_get_contents($media . '/lines/page.php') === "<?php\necho 1;\n");
+$e = throws('edit_file: broken php is refused', ApiException::class, function () use ($call, $dev) { $call($dev, 'edit_file', array('source' => 1, 'path' => 'lines/page.php', 'edits' => array(array('start_line' => 2, 'replacement' => 'echo (;')))); });
+check('edit_file: lint error names the line, nothing saved', $e && $e->errorCode === 'lint_failed' && $e->details['line'] === 2 && file_get_contents($media . '/lines/page.php') === "<?php\necho 1;\n");
+$call($dev, 'edit_file', array('source' => 1, 'path' => 'lines/page.php', 'skip_lint' => true, 'edits' => array(array('start_line' => 2, 'replacement' => 'echo (;'))));
+check('edit_file: skip_lint saves with a warning', file_get_contents($media . '/lines/page.php') === "<?php\necho (;\n");
+$call($dev, 'edit_file', array('source' => 1, 'path' => 'lines/page.php', 'edits' => array(array('start_line' => 2, 'replacement' => 'echo 2;'))));
+check('edit_file: develop may edit valid php', file_get_contents($media . '/lines/page.php') === "<?php\necho 2;\n");
+file_put_contents($media . '/lines/.htaccess', "Options -Indexes\n");
+throws('edit_file: .htaccess is protected', ApiException::class, function () use ($call, $dev) { $call($dev, 'edit_file', array('source' => 1, 'path' => 'lines/.htaccess', 'edits' => array(array('start_line' => 1, 'replacement' => 'x')))); });
+$site->options['modxmcp.allow_root_filesystem_read'] = true;
+file_put_contents($siteDir . '/assets/components/demo.js', "add-on\n");
+file_put_contents($protectedAssets . '/fixture.js', "own\n");
+$e = throws('edit_file: component assets need the develop scope', ApiException::class, function () use ($call, $editor) { $call($editor, 'edit_file', array('source' => 2, 'path' => 'assets/components/demo.js', 'edits' => array(array('start_line' => 1, 'replacement' => 'x')))); });
+check('edit_file: component scope error', $e && $e->errorCode === 'forbidden_scope');
+throws('edit_file: modxMCP assets are protected even for develop', ApiException::class, function () use ($call, $dev) { $call($dev, 'edit_file', array('source' => 2, 'path' => 'assets/components/modxmcp/fixture.js', 'edits' => array(array('start_line' => 1, 'replacement' => 'x')))); });
+throws('edit_file: core configuration is protected', ApiException::class, function () use ($call, $dev) { $call($dev, 'edit_file', array('source' => 2, 'path' => 'core/config/config.inc.php', 'edits' => array(array('start_line' => 1, 'replacement' => 'x')))); });
+check('edit_file: protected files are intact', file_get_contents($protectedAssets . '/fixture.js') === "own\n" && file_get_contents($siteDir . '/assets/components/demo.js') === "add-on\n");
+unlink($protectedAssets . '/fixture.js');
+$site->options['modxmcp.allow_root_filesystem_read'] = false;
+check('edit_file: plan-only token does not write', $call($actor('content', array('plan_only' => true)), 'edit_file', array('source' => 1, 'path' => 'lines/a.txt', 'edits' => array(array('start_line' => 1, 'replacement' => 'zzz'))))['dry_run'] === true && file_get_contents($media . '/lines/a.txt') === $flText);
+
+// search_files
+mkdir($media . '/find/sub/deeper', 0755, true);
+mkdir($media . '/find/node_modules/pkg', 0755, true);
+mkdir($media . '/find/.git', 0755, true);
+mkdir($media . '/find/vendor', 0755, true);
+file_put_contents($media . '/find/top.css', ".menu { color: red; }\n.Menu-item { color: blue; }\nнет\n");
+file_put_contents($media . '/find/sub/page.tpl', "<nav class=\"menu\">\n{* Меню сайта *}\n</nav>");
+file_put_contents($media . '/find/sub/deeper/deep.js', "var menu = 1;\nvar menu2 = 2;\n");
+file_put_contents($media . '/find/sub/notes.md', "МЕНЮ верхнего уровня\n");
+file_put_contents($media . '/find/sub/skip.log', "menu in a log\n");
+file_put_contents($media . '/find/sub/bin.txt', "menu\x00\xff");
+file_put_contents($media . '/find/node_modules/pkg/a.js', 'menu');
+file_put_contents($media . '/find/.git/config.txt', 'menu');
+file_put_contents($media . '/find/vendor/v.js', 'menu');
+file_put_contents($media . '/find/big.txt', 'menu ' . str_repeat('x', 2000));
+symlink($siteDir . '/outside.txt', $media . '/find/link.txt');
+file_put_contents($siteDir . '/outside.txt', 'outside the source');
+file_put_contents($media . '/find/long.txt', str_repeat('я', 300) . ' menu ' . str_repeat('ж', 100) . "\n");
+$site->options['modxmcp.max_read_bytes'] = 1000;
+$sf = $call($actor('read'), 'search_files', array('source' => 1, 'path' => 'find', 'query' => 'menu'));
+$byPath = array();
+foreach ($sf['results'] as $r) { $byPath[$r['path']] = $r; }
+check('search_files: matches with line numbers, case-insensitive, breadth first', array_keys($byPath) === array('find/long.txt', 'find/top.css', 'find/sub/page.tpl', 'find/sub/deeper/deep.js')
+    && $byPath['find/top.css']['matches'][0]['line'] === 1 && $byPath['find/top.css']['matches'][1]['line'] === 2 && $byPath['find/top.css']['match_count'] === 2
+    && $byPath['find/sub/page.tpl']['matches'][0]['line'] === 1 && $byPath['find/sub/deeper/deep.js']['matches'][1]['line'] === 2 && $sf['root'] === 's1');
+$cyr = $call($actor('read'), 'search_files', array('source' => 1, 'path' => 'find', 'query' => 'меню'));
+check('search_files: Cyrillic case folding', array_column($cyr['results'], 'path') === array('find/sub/notes.md', 'find/sub/page.tpl')
+    && $cyr['results'][0]['matches'][0]['text'] === 'МЕНЮ верхнего уровня' && $cyr['results'][1]['matches'][0] === array('line' => 2, 'text' => '{* Меню сайта *}'));
+check('search_files: skipped binary, link, oversize and the excluded directories', !isset($byPath['find/sub/bin.txt']) && !isset($byPath['find/link.txt']) && !isset($byPath['find/big.txt'])
+    && !isset($byPath['find/node_modules/pkg/a.js']) && !isset($byPath['find/.git/config.txt']) && !isset($byPath['find/vendor/v.js']) && !isset($byPath['find/sub/skip.log']) && $sf['skipped'] === 3);
+check('search_files: counts and no truncation', $sf['truncated'] === false && $sf['files_matched'] === 4 && $sf['files_scanned'] === 7 && !isset($sf['note']));
+$cs = $call($actor('read'), 'search_files', array('source' => 1, 'path' => 'find', 'query' => 'Menu', 'case_sensitive' => true));
+check('search_files: case sensitive', array_column($cs['results'], 'path') === array('find/top.css') && $cs['results'][0]['matches'][0]['line'] === 2);
+$ext = $call($actor('read'), 'search_files', array('source' => 1, 'path' => 'find', 'query' => 'menu', 'extensions' => array('LOG', 'js')));
+check('search_files: extensions filter (case-insensitive, replaces the default list)', array_column($ext['results'], 'path') === array('find/sub/skip.log', 'find/sub/deeper/deep.js'));
+check('search_files: sub-path', array_column($call($actor('read'), 'search_files', array('source' => 1, 'path' => 'find/sub/deeper', 'query' => 'menu'))['results'], 'path') === array('find/sub/deeper/deep.js'));
+$few = $call($actor('read'), 'search_files', array('source' => 1, 'path' => 'find', 'query' => 'menu', 'limit' => 2, 'max_matches' => 1));
+check('search_files: limit truncates with a note; max_matches caps lines but not the count', $few['truncated'] === true && count($few['results']) === 2 && isset($few['note']) && count($call($actor('read'), 'search_files', array('source' => 1, 'path' => 'find/sub/deeper', 'query' => 'menu', 'max_matches' => 1))['results'][0]['matches']) === 1
+    && $call($actor('read'), 'search_files', array('source' => 1, 'path' => 'find/sub/deeper', 'query' => 'menu', 'max_matches' => 1))['results'][0]['match_count'] === 2);
+$long = $byPath['find/long.txt']['matches'][0]['text'];
+check('search_files: a long line is cut around the match', mb_strlen($long, 'UTF-8') <= 301 && mb_strpos($long, 'menu', 0, 'UTF-8') !== false && mb_substr($long, 0, 1, 'UTF-8') === '…');
+$site->options['modxmcp.max_read_bytes'] = 262144;
+check('search_files: a query that spans lines finds nothing', $call($actor('read'), 'search_files', array('source' => 1, 'path' => 'find/sub/deeper', 'query' => "menu = 1;\nvar"))['files_matched'] === 0);
+throws('search_files: missing directory', ApiException::class, function () use ($call, $actor) { $call($actor('read'), 'search_files', array('source' => 1, 'path' => 'nope', 'query' => 'menu')); });
+throws('search_files: traversal', ApiException::class, function () use ($call, $actor) { $call($actor('read'), 'search_files', array('source' => 1, 'path' => '..', 'query' => 'menu')); });
+throws('search_files: query too short', ApiException::class, function () use ($call, $actor) { $call($actor('read'), 'search_files', array('source' => 1, 'query' => 'm')); });
+$comp = $call($actor('read'), 'search_files', array('component' => 'demo', 'query' => 'class demo'));
+check('search_files: component code is searchable, root named', $comp['root'] === 'c:demo:core' && array_column($comp['results'], 'path') === array('model/demo.class.php'));
+// the 2000-file cap
+mkdir($media . '/many', 0755, true);
+for ($i = 0; $i < 2010; $i++) { file_put_contents($media . '/many/f' . sprintf('%04d', $i) . '.txt', $i === 2005 ? 'needle' : 'hay'); }
+$many = $call($actor('read'), 'search_files', array('source' => 1, 'path' => 'many', 'query' => 'needle'));
+check('search_files: stops after 2000 files with a note', $many['truncated'] === true && $many['files_scanned'] === 2000 && $many['files_matched'] === 0 && isset($many['note']));
+$many = $call($actor('read'), 'search_files', array('source' => 1, 'path' => 'many', 'query' => 'hay', 'limit' => 200));
+check('search_files: the limit is reported before the cap when matches are plentiful', $many['truncated'] === true && count($many['results']) === 200);
+array_map('unlink', glob($media . '/many/*'));
+rmdir($media . '/many');
+// the root-filesystem gate and closed directories
+file_put_contents($siteDir . '/core/config/x.txt', 'menu in config');
+mkdir($siteDir . '/core/modxmcp-data/lines-test', 0755, true);
+file_put_contents($siteDir . '/core/modxmcp-data/lines-test/m.txt', 'menu in data');
+$site->options['modxmcp.allow_root_filesystem_read'] = false;
+$e = throws('search_files: a source spanning the site is closed by default', ApiException::class, function () use ($call, $dev) { $call($dev, 'search_files', array('source' => 2, 'query' => 'menu')); });
+check('search_files: gate is unavailable', $e && $e->errorCode === 'unavailable');
+$site->options['modxmcp.allow_root_filesystem_read'] = true;
+$wide = $call($dev, 'search_files', array('source' => 2, 'path' => 'core', 'query' => 'menu in'));
+check('search_files: even when opened, configuration and modxMCP data are not searched', $wide['files_matched'] === 0);
+check('search_files: an opened source works', array_column($call($dev, 'search_files', array('source' => 2, 'path' => 'media/lines', 'query' => 'бета'))['results'], 'path') === array('media/lines/a.txt'));
+unlink($siteDir . '/core/config/x.txt');
+unlink($siteDir . '/core/modxmcp-data/lines-test/m.txt');
+rmdir($siteDir . '/core/modxmcp-data/lines-test');
+$site->options['modxmcp.allow_root_filesystem_read'] = false;
 
 // Concurrent MCP writers
 $lock = new ModxMCP\Write\Lock($dev->dataDir() . '/locks');
@@ -3779,7 +3949,7 @@ foreach (array('run_processor' => array('processor' => 'resource/getlist', 'conf
         && $xAdmin->actions->blockReason($xAdmin->actions->get($xAction), $xAdmin) === 'disabled_by_setting'
         && !in_array('modx_' . $xAction, array_column(Manifest::tools($xAdmin), 'name'), true));
 }
-check('escape: with both off the admin manifest is the old one', count(Manifest::tools($xAdmin)) === 35);
+check('escape: with both off the admin manifest is the old one', count(Manifest::tools($xAdmin)) === 37);
 $xSite->options['modxmcp.allow_run_processor'] = '0';
 check('escape: the setting as the string 0 is off', !in_array('modx_run_processor', array_column(Manifest::tools($xAdmin), 'name'), true));
 $xSite->options['modxmcp.allow_run_processor'] = '1';
@@ -3789,7 +3959,7 @@ $xSite->options['modxmcp.allow_query_db'] = true;
 
 // ---- manifest and scopes ----
 $xTools = array_column(Manifest::tools($xAdmin), null, 'name');
-check('escape: with both on the admin sees 37 tools, the two after uninstall_package', count($xTools) === 37
+check('escape: with both on the admin sees 39 tools, the two after uninstall_package', count($xTools) === 39
     && array_search('modx_run_processor', array_keys($xTools), true) === array_search('modx_uninstall_package', array_keys($xTools), true) + 1
     && array_search('modx_query_db', array_keys($xTools), true) === array_search('modx_run_processor', array_keys($xTools), true) + 1);
 check('escape: run_processor is an admin, destructive, irreversible tool of the maintenance group', $xTools['modx_run_processor']['effect'] === array('read_only' => false, 'destructive' => true, 'reversible' => false, 'open_world' => false)

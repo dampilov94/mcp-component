@@ -71,3 +71,72 @@ them), one edit through the bridge with revision tracking.
 ## Acceptance
 
 `npm run check`, `npm test`. Commit after each tool. Report as usual.
+
+## Report
+
+Based on: main at 52566ab (branch `task/50-file-lines`, created by the architect).
+
+### Implemented
+
+- `src/Code/FileLines.php` (new): line view and line edits of a text file. A final line break ends
+  the last line instead of opening an empty one, so `"a\nb\n"` has 2 lines and "append" is
+  `start_line = total_lines + 1`. Edits delegate to `Code\LineEdit::apply()`, then restore the file's
+  line endings (CRLF if the file contains any CRLF) and its final newline (or its absence).
+- `src/Action/ReadFileAction.php`: `start_line`, `end_line`, `numbered`; with any of them the result
+  has `numbered`, `total_lines`, `start_line`, `end_line`, `truncated` (and `next_line`), no `content`;
+  `revision` is of the whole file. The numbered text is cut at a line boundary at `max_bytes`. Binary
+  files and `offset` together with a window are `validation_failed`. `root` (the root id, e.g. `s1`,
+  `c:demo:core`) is now in every read_file result.
+- `src/Action/EditFileAction.php` (new, `modx_edit_file`): as briefed; goes through `Writer::run()`,
+  `touchSubject()`, the existing `FileSubject`, `FileRoot::assertWritable()` (so protected paths, component
+  directories and PHP scope rules are exactly those of `write_file`), PHP lint (`skip_lint`), dry run
+  returning `Code\Diff::lines`. Result: `{root, path, revision, changeset_id, reversible, edits_applied,
+  total_lines_before, total_lines_after}`. `source` or `root` (a root id `sN` as returned by read_file).
+- `src/Action/SearchFilesAction.php` (new, `modx_search_files`): as briefed, using `CodeSearch::position`
+  / `excerpt` (Unicode-safe).
+- `src/Files/FileSubject.php`: `root()` accessor. `src/Action/Registry.php`: the two actions
+  (search_files right after read_file, edit_file right after write_file). `src/Action/SearchAction.php`:
+  description mentions `modx_search_files`.
+- `client/index.js`: revision tracking covers `modx_edit_file` (by `source` or by `root` id `sN`; results
+  carry `root`, so a read by source and an edit by root share one revision key).
+- Help: `docs/index.md`, `docs/getting_started.md`.
+
+### Tests
+
+PHP checks 5784 -> 5858 (+74); Node tests 41 -> 43 (+2: bridge+kernel "file lines with revision tracking"
+in `tests/endpoint.test.js`, mock-bridge "line edits of a file are tracked by root id or source" in
+`tests/client.test.js`). `npm run check` and `npm test` pass.
+
+Existing assertions changed (exact tool lists/counts only): `tests/php/run.php` read-token tool list gains
+`modx_search_files`; full tool count 35 -> 37; "escape" counts 35 -> 37 and 37 -> 39 (label text too);
+`tests/endpoint.test.js` read-token manifest list gains `modx_search_files`, 35 -> 37 (two places), admin
+37 -> 39 and 36 -> 38, read token 19 -> 20; `tests/client.test.js` mock tool list gains `modx_edit_file`.
+Harness changes (not assertions): `tests/php/endpoint.php` creates a media source and a stylesheet when
+`MODXMCP_TEST_FILES` is set; `startSite()` now passes its env to the setup step as well.
+
+### Deviations and interpretations
+
+- "`source | root`" for `modx_edit_file`: `root` is a root id string `^s[1-9][0-9]*$` (what `read_file`
+  returns). `read_file` / `search_files` keep the existing `source | component + area` selection;
+  component roots are read-only, so a component id is refused by the schema.
+- `total_lines` of files excludes the phantom empty line after a final newline (differs from `modx_view_code`
+  on elements, where the same LineEdit counts it).
+- A mixed-EOL file is normalised to CRLF by an edit (any CRLF means CRLF), as `LineEdit` already did.
+- An empty file is refused by `edit_file` ("use modx_write_file"); an edit that changes nothing returns
+  `changeset_id: null`.
+- `search_files`: files with a non-listed extension are not counted in `files_scanned`; symbolic links are
+  counted in `skipped` but not scanned; oversize and binary/non-UTF-8 files are scanned (count towards the
+  2000 cap) and counted in `skipped`; secret file names (`FileRoot::SECRET_NAMES`) and directories forbidden
+  by `FileRoot::resolve()` (core/config, modxMCP data, under an opened root source) are silently skipped.
+  A query containing a line break never matches (search is line by line).
+- `edit_file` size limit uses `modxmcp.max_read_bytes` (default 262144), not read_file's 8 MB.
+
+### Verified only against the fake MODX
+
+Everything (real media source classes, `getBasePath`, file permissions/ownership, journal on MySQL, behaviour of
+`modFileMediaSource` with other base paths). Worth checking on the stand: a real CSS edit through the bridge,
+undo, CRLF file edited, a PHP file edited with develop and refused without, search over a large media source.
+
+### Open questions
+
+None blocking.

@@ -75,6 +75,12 @@ if (PHP_SAPI === 'cli') {
     if (!isset($argv[1], $argv[2]) || $argv[1] !== 'setup') { fwrite(STDERR, "usage: endpoint.php setup <dir>\n"); exit(2); }
     @mkdir($argv[2] . '/core', 0700, true);
     $modx = testSite($argv[2]);
+    if (getenv('MODXMCP_TEST_FILES')) {
+        // A local media source with one stylesheet, for the file tools.
+        mkdir($argv[2] . '/media/css', 0755, true);
+        file_put_contents($argv[2] . '/media/css/site.css', "body {\n  color: red;\n}\n");
+        $modx->store('sources.modMediaSource', array('id' => 1, 'name' => 'Media', 'description' => '', 'class_key' => 'sources.modFileMediaSource', 'basePath' => $argv[2] . '/media/'));
+    }
     $store = new \ModxMCP\Auth\TokenStore($modx);
     $tokens = array(
         'admin'   => $store->create('admin', 'admin'),
