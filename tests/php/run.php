@@ -85,7 +85,7 @@ check('token: short rejected', !TokenStore::looksLikeToken('short'));
 check('token: odd characters rejected', !TokenStore::looksLikeToken(str_repeat('a', 40) . ' or 1=1'));
 
 // --- Request store ---
-$dir = sys_get_temp_dir() . '/modxmcp-test-' . bin2hex(random_bytes(6));
+$dir = realpath(sys_get_temp_dir()) . '/modxmcp-test-' . bin2hex(random_bytes(6));
 $store = new RequestStore($dir, 3600, 1048576);
 $runs = 0;
 $callback = function () use (&$runs) { $runs++; return array('status' => 200, 'body' => '{"ok":true,"result":{"n":1}}'); };
@@ -214,7 +214,7 @@ $lint = PhpLint::check("\$a = 1;\nreturn \$a +;\n");
 check('lint: error line refers to the stored source', $lint && $lint['line'] === 2 && strpos($lint['message'], 'syntax error') === 0);
 
 // Pure bounded log reader: multiline entries, cursors and byte/character boundaries.
-$logPath = sys_get_temp_dir() . '/modxmcp-log-' . bin2hex(random_bytes(6));
+$logPath = realpath(sys_get_temp_dir()) . '/modxmcp-log-' . bin2hex(random_bytes(6));
 $logOne = "[2026-01-01 10:00:00] (ERROR @ /core/test.php : 7) first\ntrace one\ntrace two\n";
 $logTwo = "[2026-01-01 10:01:00] (INFO @ /core/next.php) second\n";
 $logThree = "[2026-01-01 10:02:00] odd header\ncontinued\n";
@@ -254,7 +254,7 @@ unlink($logPath);
 $emptyLog = ModxMCP\Verify\LogReader::tail($logPath);
 check('log: missing file is empty', $emptyLog === array('size' => 0, 'end_offset' => 0, 'entries' => array(), 'returned' => 0, 'truncated' => false, 'reset' => false));
 
-$blobDir = sys_get_temp_dir() . '/modxmcp-blob-' . bin2hex(random_bytes(6));
+$blobDir = realpath(sys_get_temp_dir()) . '/modxmcp-blob-' . bin2hex(random_bytes(6));
 $blobs = new BlobStore($blobDir, 2048);
 $hash = $blobs->put('hello');
 check('blobs: content addressed', $hash === hash('sha256', 'hello') && $blobs->get($hash) === 'hello' && $blobs->put('hello') === $hash);
@@ -280,7 +280,7 @@ file_put_contents($blobDir . '/' . substr($hash, 0, 2) . '/' . $hash . '.php', B
 throws('blobs: corruption is detected', RuntimeException::class, function () use ($blobs, $hash) { $blobs->get($hash); });
 
 // --- Objects, journal and undo on a fake site ---
-$siteDir = sys_get_temp_dir() . '/modxmcp-site-' . bin2hex(random_bytes(6));
+$siteDir = realpath(sys_get_temp_dir()) . '/modxmcp-site-' . bin2hex(random_bytes(6));
 mkdir($siteDir . '/core', 0700, true);
 $site = fakeSite($siteDir);
 // This older object/journal block specifically checks database-backed elements.
@@ -1622,7 +1622,7 @@ $lock->releaseAll();
 
 // --- Journal retention on isolated fake sites ---
 $retentionSite = function () use ($dev) {
-    $dir = sys_get_temp_dir() . '/modxmcp-retention-' . bin2hex(random_bytes(6));
+    $dir = realpath(sys_get_temp_dir()) . '/modxmcp-retention-' . bin2hex(random_bytes(6));
     mkdir($dir . '/core', 0700, true);
     $modx = fakeSite($dir);
     $context = new Context($modx, array('id' => 1, 'label' => 'retention', 'prefix' => 'mcp_test', 'scope' => 'develop',
@@ -1793,7 +1793,7 @@ $call($cyrContext, 'replace', array('find' => 'заголовок', 'replacement
 check('replace: the replacement text is literal', $cyrSite->row('modChunk', 1)['snippet'] === "Title \\1 \$0 и Title \\1 \$0\nЦена: \$1");
 check('search: Cyrillic through the tool', $call($cyrContext, 'search', array('query' => 'ЦЕНА'))['objects'] === 1);
 
-$inLog = sys_get_temp_dir() . '/modxmcp-log-' . bin2hex(random_bytes(6)) . '.log';
+$inLog = realpath(sys_get_temp_dir()) . '/modxmcp-log-' . bin2hex(random_bytes(6)) . '.log';
 file_put_contents($inLog, "[2026-11-11 20:06:18] (ERROR in modRestCurlClient::__construct @ /var/www/site/core/model/modx/rest/modrestcurlclient.class.php : 26) cURL is missing\n"
     . "[2026-11-11 20:06:19] (ERROR @ /var/www/site/index.php : 5) plain\n");
 $inEntries = ModxMCP\Verify\LogReader::tail($inLog)['entries'];
@@ -5846,7 +5846,7 @@ if ($vp1Ok && in_array('vp_route', $call($vp1Dev, 'capabilities')['kinds'], true
 // --- Manager history page: HistoryService ---
 use ModxMCP\Manager\HistoryService;
 $hCore = dirname(dirname(__DIR__)) . '/core/components/modxmcp/';
-$hDir = sys_get_temp_dir() . '/modxmcp-hist-' . bin2hex(random_bytes(6));
+$hDir = realpath(sys_get_temp_dir()) . '/modxmcp-hist-' . bin2hex(random_bytes(6));
 mkdir($hDir . '/core', 0700, true);
 $hSite = fakeSite($hDir);
 $hSite->options['modxmcp.auto_static'] = false;
@@ -6032,7 +6032,7 @@ use ModxMCP\Manager\Recorder;
 use ModxMCP\Write\Lock;
 use ModxMCP\Write\Transaction;
 $rCore = dirname(dirname(__DIR__)) . '/core/components/modxmcp/';
-$rDir = sys_get_temp_dir() . '/modxmcp-rec-' . bin2hex(random_bytes(6));
+$rDir = realpath(sys_get_temp_dir()) . '/modxmcp-rec-' . bin2hex(random_bytes(6));
 mkdir($rDir . '/core', 0700, true);
 $rSite = fakeSite($rDir);
 $rSite->options['modxmcp.auto_static'] = false;
@@ -6327,7 +6327,7 @@ check('plugin file: runs against the component and is a few lines', $rRan === tr
 unset($rSite->event);
 
 // --- Open in the manager ---
-$oDir = sys_get_temp_dir() . '/modxmcp-open-' . bin2hex(random_bytes(6));
+$oDir = realpath(sys_get_temp_dir()) . '/modxmcp-open-' . bin2hex(random_bytes(6));
 mkdir($oDir . '/core', 0700, true);
 $oSite = fakeSite($oDir);
 $oSite->options['modxmcp.auto_static'] = false;
@@ -6493,7 +6493,7 @@ $oSite->user = $oUserBefore;
 
 // --- Site audit ---
 use ModxMCP\Verify\SiteAudit;
-$aDir = sys_get_temp_dir() . '/modxmcp-audit-' . bin2hex(random_bytes(6));
+$aDir = realpath(sys_get_temp_dir()) . '/modxmcp-audit-' . bin2hex(random_bytes(6));
 mkdir($aDir . '/core/elements/chunks', 0700, true);
 $aSite = fakeSite($aDir);
 $aRead = new Context($aSite, array('scope' => 'read') + $dev->token, $dev->corePath, function () { throw new RuntimeException('no store'); });
@@ -6605,7 +6605,7 @@ throws('audit: limit above 200', ApiException::class, function () use ($call, $a
 check('audit: read scope sees the tool in its manifest', in_array('modx_audit_site', array_column(Manifest::tools($aRead), 'name'), true));
 
 // the resource cap: the most recently edited pages are scanned, and the result says so
-$cDir = sys_get_temp_dir() . '/modxmcp-audit-cap-' . bin2hex(random_bytes(6));
+$cDir = realpath(sys_get_temp_dir()) . '/modxmcp-audit-cap-' . bin2hex(random_bytes(6));
 mkdir($cDir . '/core', 0700, true);
 $cSite = fakeSite($cDir);
 foreach (array(1 => 400, 2 => 300, 3 => 200, 4 => 100) as $id => $edited) {
@@ -6621,7 +6621,7 @@ check('audit: above the cap the newest-edited pages are scanned and truncated is
     && array_column($cCapped['findings'], 'id') === array(1, 2) && count(array_filter($cCapped['notes'], function ($note) { return strpos($note, '2 most recently edited of 4 resources') !== false; })) === 1);
 
 // --- Run ---
-$uDir = sys_get_temp_dir() . '/modxmcp-run-' . bin2hex(random_bytes(6));
+$uDir = realpath(sys_get_temp_dir()) . '/modxmcp-run-' . bin2hex(random_bytes(6));
 mkdir($uDir . '/core/cache/logs', 0700, true);
 $uBase = dirname(dirname(__DIR__)) . '/';
 $uSite = fakeSite($uDir, array('modxmcp.allow_run' => true, 'base_path' => $uBase));
@@ -6797,7 +6797,7 @@ check('run: none of the failed validations ran anything or left state behind', $
 use ModxMCP\Manager\TokenService;
 use ModxMCP\Manager\Overview;
 $tkCore = dirname(dirname(__DIR__)) . '/core/components/modxmcp/';
-$tkDir = sys_get_temp_dir() . '/modxmcp-tokens-' . bin2hex(random_bytes(6));
+$tkDir = realpath(sys_get_temp_dir()) . '/modxmcp-tokens-' . bin2hex(random_bytes(6));
 mkdir($tkDir . '/core', 0700, true);
 $tkSite = fakeSite($tkDir, array('site_url' => 'https://example.test/', 'assets_url' => '/assets/', 'base_url' => '/'));
 $tkSite->store('modUser', array('id' => 1, 'username' => 'admin', 'primary_group' => 0));
@@ -6975,7 +6975,7 @@ $tkThrows('tokens page: store refuses a long create label just like update', fun
 });
 
 // the overview of the main page
-$ovDir = sys_get_temp_dir() . '/modxmcp-overview-' . bin2hex(random_bytes(6));
+$ovDir = realpath(sys_get_temp_dir()) . '/modxmcp-overview-' . bin2hex(random_bytes(6));
 mkdir($ovDir . '/core', 0700, true);
 $ovSite = fakeSite($ovDir, array('site_url' => 'https://example.test/', 'assets_url' => '/assets/', 'modxmcp.allow_run' => '1', 'modxmcp.allow_run_processor' => '0',
     'modxmcp.history_track_manager' => 1, 'modxmcp.lint_php' => '0', 'modxmcp.allowed_ips' => ' 10.0.0.1, 10.0.0.2 '));
@@ -7016,7 +7016,7 @@ check('overview: the result is plain JSON data without secrets', strpos(json_enc
 use ModxMCP\Draft\DraftStore;
 use ModxMCP\Manager\DraftService;
 $dCore = dirname(dirname(__DIR__)) . '/core/components/modxmcp/';
-$dDir = sys_get_temp_dir() . '/modxmcp-drafts-' . bin2hex(random_bytes(6));
+$dDir = realpath(sys_get_temp_dir()) . '/modxmcp-drafts-' . bin2hex(random_bytes(6));
 mkdir($dDir . '/core', 0700, true);
 $dSite = fakeSite($dDir, array('site_url' => 'https://example.test/', 'manager_url' => '/manager/'));
 $dSite->options['modxmcp.auto_static'] = false;
@@ -8310,7 +8310,7 @@ check('fenom refs: comments and ignored blocks are skipped', $fRef("{* {include 
 check('fenom refs: MODX tags are no business of Fenom, mixed with Fenom they stay apart', $fRef("[[\$a]] [[~5]] {include 'b'} [[!snip? &tpl=`x`]]") === array('fenom:chunk:b'));
 
 // a fake site with pdoTools
-$fDir = sys_get_temp_dir() . '/modxmcp-fenom-' . bin2hex(random_bytes(6));
+$fDir = realpath(sys_get_temp_dir()) . '/modxmcp-fenom-' . bin2hex(random_bytes(6));
 mkdir($fDir . '/core/components/pdotools/model/pdotools', 0700, true);
 file_put_contents($fDir . '/core/components/pdotools/model/pdotools/pdotools.class.php', "<?php\n");
 $fSite = fakeSite($fDir);
