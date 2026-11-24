@@ -78,3 +78,9 @@ Based on local main `94d88ae`.
   byte hashes, mode preservation and row IDs after undo and undo-of-undo. Also verified rollback
   with a small history limit, refusal after media-root relocation, and that deleting the last
   image did not touch an unrelated directory in the separate default source.
+
+## Review
+
+- Deployed runtime commit `b605d1a` and verified all 12 files on fordev. Its MCP API advertised
+  upload, delete and read and served the updated guide. The byte-level write scenarios used
+  the disposable MODX instance.

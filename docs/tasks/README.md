@@ -84,7 +84,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 45 | [miniShop2 product drafts](45-product-drafts.md) | `task/45-product-drafts` | merged |
 | 46 | [ClientConfig values](46-clientconfig.md) | `task/46-clientconfig` | merged |
 | 47 | [miniShop2 gallery reads and safe restore](47-minishop2-gallery.md) | `task/47-minishop2-gallery` | merged |
-| 48 | [miniShop2 gallery writes and byte-level undo](48-minishop2-gallery-writes.md) | `task/48-minishop2-gallery-writes` | in progress |
+| 48 | [miniShop2 gallery writes and byte-level undo](48-minishop2-gallery-writes.md) | `task/48-minishop2-gallery-writes` | merged |
 
 ## Doing several briefs in a row
 
@@ -149,7 +149,12 @@ Lessons from briefs 33–34:
 
 ## Handoff (2026-11-24)
 
-- Task 47 is merged into local `main`. fordev has the component source from `8681733`.
+- Task 48 is merged into local `main`. fordev has the component source from `b605d1a`.
+  Verified the 12 files and saved backups in `.local/fordev-before-b605d1a/`. The fordev MCP
+  API exposes both file-writing operations and the updated guide. On disposable MODX 2.8.8 and
+  miniShop2 3.0.7, upload, deletion, undo and undo-of-undo preserved the correct bytes, modes,
+  gallery IDs and cover. The PHP 7.4 suite passed 5753 PHP checks and 41 Node tests.
+- Task 47 was deployed to fordev from `8681733` and merged into local `main`.
   Verified all 3 files and saved originals in `.local/fordev-before-8681733/`. fordev advertised
   gallery reads. Native MODX 2.8.8 and miniShop2 3.0.7 on a disposable site verified image
   pages, checksums after undo, cover preservation and product and category removal guards.
