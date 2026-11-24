@@ -365,7 +365,7 @@ final class ResourceKind extends Kind {
         return array(
             'ms2_data' => array(
                 'class' => 'msProductData', 'fk' => 'id', 'present' => 'id', 'writable' => true, 'map' => true,
-                'description' => 'miniShop2 product data (msProduct only) as {column: value}: article, price, old_price, weight, vendor (msVendor id), '
+                'description' => 'miniShop2 product data (msProduct only) as {column: value}: article, price, old_price, weight, vendor (id of an ms2_vendor; the read result adds the read-only vendor_name), '
                     . 'made_in, new, popular, favorite, tags, color, size (lists of strings), source (media source id); image and thumb are read-only '
                     . '(the gallery maintains them). Writing changes only the given columns. A product has no options with the keys tags, color or size: '
                     . 'miniShop2 copies those columns into option values.',
@@ -526,7 +526,20 @@ final class ResourceKind extends Kind {
     }
 
     public function presentRelation(\modX $modx, $object, $name) {
-        if ($name === 'ms2_data') { $map = $this->dataMap($modx, (int) $object->get('id'), false); return $map ? $map : new \stdClass(); }
+        if ($name === 'ms2_data') {
+            $map = $this->dataMap($modx, (int) $object->get('id'), false);
+            if (array_key_exists('vendor', $map)) {
+                // Read side only: the name is not a column, the stored state and the revision do not carry it.
+                $vendor = (int) $map['vendor'] > 0 ? $modx->getObject('msVendor', array('id' => (int) $map['vendor']), false) : null;
+                $ordered = array();
+                foreach ($map as $column => $value) {
+                    $ordered[$column] = $value;
+                    if ($column === 'vendor') { $ordered['vendor_name'] = $vendor ? (string) $vendor->get('name') : null; }
+                }
+                $map = $ordered;
+            }
+            return $map ? $map : new \stdClass();
+        }
         if ($name === 'ms2_options') { $map = $this->optionMap($modx, (int) $object->get('id')); return $map ? $map : new \stdClass(); }
         if ($name === 'ms2_categories') {
             $ids = parent::presentRelation($modx, $object, $name);
@@ -642,6 +655,9 @@ final class ResourceKind extends Kind {
         $set = array();
         foreach ($value as $column => $given) {
             $column = (string) $column;
+            if ($column === 'vendor_name') {
+                throw new ApiException('validation_failed', "Column 'vendor_name' of ms2_data is read-only: it names the vendor; change the column 'vendor' (id of a vendor, kind ms2_vendor).");
+            }
             if (!isset(MiniShop2::DATA_COLUMNS[$column])) {
                 throw new ApiException('validation_failed', "Unknown column '{$column}' of ms2_data. Columns: " . implode(', ', array_keys(MiniShop2::DATA_COLUMNS)) . '.');
             }

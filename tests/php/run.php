@@ -4474,7 +4474,8 @@ $ms2Core = $ms2Dir . '/core/components/minishop2/';
 mkdir($ms2Core . 'model/minishop2', 0700, true);
 touch($ms2Core . 'model/minishop2/minishop2.class.php');
 foreach (array('mgr/settings/option/create', 'mgr/settings/option/update', 'mgr/settings/option/remove', 'mgr/settings/option/assign', 'mgr/category/option/delete',
-    'mgr/settings/link/create', 'mgr/settings/link/update', 'mgr/settings/link/remove', 'mgr/product/productlink/create', 'mgr/product/productlink/remove') as $ms2Processor) {
+    'mgr/settings/link/create', 'mgr/settings/link/update', 'mgr/settings/link/remove', 'mgr/product/productlink/create', 'mgr/product/productlink/remove',
+    'mgr/settings/vendor/create', 'mgr/settings/vendor/update', 'mgr/settings/vendor/remove') as $ms2Processor) {
     if (!is_dir(dirname($ms2Core . 'processors/' . $ms2Processor))) { mkdir(dirname($ms2Core . 'processors/' . $ms2Processor), 0700, true); }
     touch($ms2Core . 'processors/' . $ms2Processor . '.class.php');
 }
@@ -4519,7 +4520,7 @@ $sRelNames = function ($id, $ctx = null) use ($call, $sAdmin) { return array_key
 // ---- availability ----
 $sKinds = array_column($call($sAdmin, 'describe')['kinds'], 'kind');
 check('ms2: kind list with miniShop2 installed', $sKinds === array('chunk', 'snippet', 'template', 'plugin', 'tv', 'category', 'resource', 'media_source', 'user_group', 'role', 'resource_group', 'system_setting', 'context', 'context_setting', 'namespace', 'user',
-    'access_policy', 'policy_template', 'context_access', 'resourcegroup_access', 'package', 'provider', 'property_set', 'lexicon_entry', 'ms2_option', 'ms2_link', 'ms2_product_link', 'ms2_order', 'ms2_order_status'));
+    'access_policy', 'policy_template', 'context_access', 'resourcegroup_access', 'package', 'provider', 'property_set', 'lexicon_entry', 'ms2_option', 'ms2_link', 'ms2_product_link', 'ms2_order', 'ms2_order_status', 'ms2_vendor', 'ms2_delivery', 'ms2_payment'));
 check('ms2: kind list without miniShop2 is unchanged', !in_array('ms2_option', array_column($call($sPlain, 'describe')['kinds'], 'kind'), true));
 $e = throws('ms2: ms2_option is unavailable where miniShop2 is not installed', ApiException::class, function () use ($call, $sPlain) { $call($sPlain, 'describe', array('kind' => 'ms2_option')); });
 check('ms2: not installed is reported as unavailable', $e && $e->errorCode === 'unavailable' && $e->details['reason'] === 'not_installed');
@@ -4627,7 +4628,7 @@ $bareGot = $call($sRead, 'get', array('kind' => 'resource', 'id' => $pBare['id']
 check('ms2: get shows the three relations of a product', array_keys((array) $bareGot['relations']) === array('tvs', 'resource_groups', 'ms2_data', 'ms2_options', 'ms2_categories')
     && $bareGot['relations']['ms2_data']['price'] === 0.0 && $bareGot['relations']['ms2_data']['tags'] === array() && $bareGot['relations']['ms2_data']['new'] === false && $bareGot['relations']['ms2_data']['source'] === 1
     && $bareGot['relations']['ms2_data']['image'] === '' && json_encode($bareGot['relations']['ms2_options']) === '{}' && $bareGot['relations']['ms2_categories'] === array()
-    && array_keys($bareGot['relations']['ms2_data']) === array('article', 'price', 'old_price', 'weight', 'image', 'thumb', 'vendor', 'made_in', 'new', 'popular', 'favorite', 'tags', 'color', 'size', 'source'));
+    && array_keys($bareGot['relations']['ms2_data']) === array('article', 'price', 'old_price', 'weight', 'image', 'thumb', 'vendor', 'vendor_name', 'made_in', 'new', 'popular', 'favorite', 'tags', 'color', 'size', 'source'));
 check('ms2: a product is a container never', $sSite->row('modResource', $pBare['id'])['isfolder'] === '0' && $sSite->row('modResource', $pBare['id'])['class_key'] === 'msProduct');
 $sSite->options['fake_ms2_no_data'] = true;
 $pLoose = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Без строки данных', 'class_key' => 'msProduct', 'parent' => $catAccessories)));
@@ -5237,8 +5238,8 @@ $orderTables = function () use ($sSite) { return array($sSite->tableDump('msOrde
 // ---- orders: describe, read ----
 $oDesc = $call($sAdmin, 'describe', array('kind' => 'ms2_order'));
 check('ms2_order: describe', $oDesc['group'] === 'minishop2' && $oDesc['read_scope'] === 'admin' && $oDesc['write_scope'] === 'admin' && $oDesc['name_field'] === 'num' && $oDesc['generic_writes'] === false && $oDesc['key_type'] === 'integer'
-    && array_column($oDesc['fields'], 'name') === array('id', 'num', 'user_id', 'createdon', 'updatedon', 'cost', 'cart_cost', 'delivery_cost', 'weight', 'status', 'status_name', 'delivery', 'payment', 'context', 'comment')
-    && count(array_filter(array_column($oDesc['fields'], 'read_only'))) === 15 && array_column($oDesc['relations'], 'writable', 'name') === array('products' => false, 'address' => false, 'log' => false)
+    && array_column($oDesc['fields'], 'name') === array('id', 'num', 'user_id', 'createdon', 'updatedon', 'cost', 'cart_cost', 'delivery_cost', 'weight', 'status', 'status_name', 'delivery', 'delivery_name', 'payment', 'payment_name', 'context', 'comment')
+    && count(array_filter(array_column($oDesc['fields'], 'read_only'))) === 17 && array_column($oDesc['relations'], 'writable', 'name') === array('products' => false, 'address' => false, 'log' => false)
     && array_column($oDesc['operations'], 'op') === array('change_status') && $oDesc['operations'][0]['read_only'] === false && $oDesc['operations'][0]['needs_object'] === true);
 $oGot = $call($sAdmin, 'get', array('kind' => 'ms2_order', 'id' => 101));
 check('ms2_order: get shows the order, the status name and the computed numbers', $oGot['fields']['num'] === '2026/11-1' && $oGot['fields']['status'] === 1 && $oGot['fields']['status_name'] === 'Новый' && $oGot['fields']['cost'] === 2500.5
@@ -5257,7 +5258,7 @@ check('ms2_order: the session id, the properties and the IP addresses are never 
 check('ms2_order: get by number, and an order without an address', $call($sAdmin, 'get', array('kind' => 'ms2_order', 'name' => '2026/11-2'))['id'] === 102 && $call($sAdmin, 'get', array('kind' => 'ms2_order', 'id' => 103))['relations']['address'] === array()
     && $call($sAdmin, 'get', array('kind' => 'ms2_order', 'id' => 103))['relations']['products'] === array());
 $oList = $call($sAdmin, 'list', array('kind' => 'ms2_order'));
-check('ms2_order: list, newest first, with the listed fields', array_column($oList['items'], 'id') === array(104, 103, 102, 101) && $oList['total'] === 4 && array_keys($oList['items'][0]) === array('id', 'num', 'user_id', 'createdon', 'cost', 'status', 'status_name')
+check('ms2_order: list, newest first, with the listed fields', array_column($oList['items'], 'id') === array(104, 103, 102, 101) && $oList['total'] === 4 && array_keys($oList['items'][0]) === array('id', 'num', 'user_id', 'createdon', 'cost', 'status', 'status_name', 'delivery_name', 'payment_name')
     && $oList['items'][3]['status_name'] === 'Новый' && !isset($oList['items'][0]['comment']));
 check('ms2_order: list with where and query', array_column($call($sAdmin, 'list', array('kind' => 'ms2_order', 'where' => array('status' => 2)))['items'], 'id') === array(102) && array_column($call($sAdmin, 'list', array('kind' => 'ms2_order', 'where' => array('user_id' => 31)))['items'], 'id') === array(104, 101)
     && array_column($call($sAdmin, 'list', array('kind' => 'ms2_order', 'query' => '11-3'))['items'], 'id') === array(103));

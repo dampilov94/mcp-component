@@ -493,6 +493,13 @@ trait FakeMiniShop2 {
             $link->remove();   // xPDO composite: the product links go with it
             return new FakeResponse(null, array('id' => $data['id']));
         }
+        if (in_array($path, array('mgr/settings/vendor/create', 'mgr/settings/vendor/update'), true)) { return $this->ms2VendorSave($path === 'mgr/settings/vendor/create', $data); }
+        if ($path === 'mgr/settings/vendor/remove') {
+            $vendor = $this->getObject('msVendor', array('id' => $data['id']));
+            if (!$vendor) { return new FakeResponse('Vendor not found.'); }
+            $vendor->remove();
+            return new FakeResponse(null, array('id' => $data['id']));
+        }
         if ($path === 'mgr/product/productlink/create') { return $this->ms2ProductLinkCreate($data); }
         if ($path === 'mgr/product/productlink/remove') { return $this->ms2ProductLinkRemove($data); }
         if (in_array($path, array('mgr/settings/option/create', 'mgr/settings/option/update'), true)) { return $this->ms2OptionSave($path === 'mgr/settings/option/create', $data); }
@@ -540,6 +547,25 @@ trait FakeMiniShop2 {
         }
         $row = array('name' => $name, 'description' => array_key_exists('description', $data) ? $data['description'] : null);
         if ($creating) { $row['type'] = trim((string) $data['type']); $row['id'] = $this->nextId('msLink'); }
+        $object->fromArray($row, '', true, true);
+        $object->save();
+        return new FakeResponse(null, $object->toArray());
+    }
+
+    /** msVendorCreateProcessor / msVendorUpdateProcessor: name required (trimmed) and unique; the other columns are taken as sent. */
+    private function ms2VendorSave($creating, array $data) {
+        $name = isset($data['name']) ? trim((string) $data['name']) : '';
+        if ($name === '') { return new FakeResponse('The field name is required.'); }
+        $object = $creating ? $this->newObject('msVendor') : $this->getObject('msVendor', array('id' => $data['id']));
+        if (!$object) { return new FakeResponse('Vendor not found.'); }
+        foreach ($this->getCollection('msVendor', array('name' => $name)) as $other) {
+            if ($creating || (string) $other->get('id') !== (string) $data['id']) { return new FakeResponse('A vendor with this name already exists.'); }
+        }
+        $row = array('name' => $name);
+        foreach (array('resource', 'country', 'logo', 'address', 'phone', 'fax', 'email', 'description', 'properties') as $column) {
+            if (array_key_exists($column, $data)) { $row[$column] = $column === 'properties' ? self::ms2Json($data[$column]) : $data[$column]; }
+        }
+        if ($creating) { $row['id'] = $this->nextId('msVendor'); }
         $object->fromArray($row, '', true, true);
         $object->save();
         return new FakeResponse(null, $object->toArray());
