@@ -561,7 +561,8 @@ trait FakeMiniShop2 {
         foreach ($this->getCollection('msVendor', array('name' => $name)) as $other) {
             if ($creating || (string) $other->get('id') !== (string) $data['id']) { return new FakeResponse('A vendor with this name already exists.'); }
         }
-        $row = array('name' => $name);
+        // A real row has every column of the map (the defaults of the map: null, and 0 for resource).
+        $row = array('name' => $name) + ($creating ? array('resource' => 0, 'country' => null, 'logo' => null, 'address' => null, 'phone' => null, 'fax' => null, 'email' => null, 'description' => null, 'properties' => null) : array());
         foreach (array('resource', 'country', 'logo', 'address', 'phone', 'fax', 'email', 'description', 'properties') as $column) {
             if (array_key_exists($column, $data)) { $row[$column] = $column === 'properties' ? self::ms2Json($data[$column]) : $data[$column]; }
         }
