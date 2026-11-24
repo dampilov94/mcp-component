@@ -17,6 +17,8 @@ final class FileSubject implements Subject {
 
     public function kindName() { return 'file'; }
 
+    public function root() { return $this->root; }
+
     public function key() { return $this->root->id . ':' . $this->relative; }
 
     public function publicKey() { return $this->key(); }

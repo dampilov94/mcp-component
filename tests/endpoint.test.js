@@ -25,7 +25,7 @@ function freePort() {
 
 async function startSite(env = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "modxmcp-endpoint-"));
-  const setup = spawnSync(php, [harness, "setup", dir], { encoding: "utf8" });
+  const setup = spawnSync(php, [harness, "setup", dir], { encoding: "utf8", env: { ...process.env, ...env } });
   assert.equal(setup.status, 0, setup.stderr);
   const info = JSON.parse(setup.stdout);
   const port = await freePort();
@@ -118,11 +118,11 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
     assert.equal(result.protocol, 2);
     assert.deepEqual(result.tools.map((item) => item.name), [
       "modx_capabilities", "modx_site_info", "modx_describe", "modx_help", "modx_list", "modx_get",
-      "modx_invoke", "modx_resource_tree", "modx_view_code", "modx_search", "modx_find_usages", "modx_dependency_graph", "modx_list_files", "modx_read_file", "modx_history", "modx_history_diff",
+      "modx_invoke", "modx_resource_tree", "modx_view_code", "modx_search", "modx_find_usages", "modx_dependency_graph", "modx_list_files", "modx_read_file", "modx_search_files", "modx_history", "modx_history_diff",
       "modx_check_page", "modx_audit_site", "modx_request_status",
     ]);
     const full = (await call(admin, "manifest")).body.result;
-    assert.equal(full.tools.length, 35);
+    assert.equal(full.tools.length, 37);
     assert.equal(full.tools[full.tools.findIndex((item) => item.name === "modx_delete") + 1].name, "modx_duplicate");
     assert.equal(full.tools.find((item) => item.name === "modx_duplicate").effect.read_only, false);
     assert.notEqual(full.hash, result.hash);
@@ -321,7 +321,7 @@ test("bridge + kernel end to end", { skip: available ? false : "PHP with pdo_sql
   t.after(async () => { await client.close(); site.stop(); });
 
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 35);
+  assert.equal(tools.length, 37);
   const run = async (name, args = {}) => {
     const result = await client.callTool({ name, arguments: args });
     assert.equal(result.isError, undefined, `${name}: ${result.content[0].text}`);
@@ -368,6 +368,51 @@ test("bridge + kernel end to end", { skip: available ? false : "PHP with pdo_sql
   await assert.rejects(client.getPrompt({ name: "nope" }), /not_found/);
 });
 
+test("bridge + kernel: file lines with revision tracking", { skip: available ? false : "PHP with pdo_sqlite is not available" }, async (t) => {
+  const site = await startSite({ MODXMCP_TEST_FILES: "1" });
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [path.join(root, "client", "index.js")],
+    env: { ...process.env, MODX_MCP_SITE_URL: site.url, MODX_MCP_TOKEN: site.info.tokens.admin, MODX_MCP_TIMEOUT_MS: "5000" },
+    stderr: "ignore",
+  });
+  const client = new Client({ name: "test", version: "0" }, { capabilities: {} });
+  await client.connect(transport);
+  t.after(async () => { await client.close(); site.stop(); });
+  const file = path.join(site.dir, "media", "css", "site.css");
+  const call = (name, args) => client.callTool({ name, arguments: args });
+  const run = async (name, args) => {
+    const result = await call(name, args);
+    assert.equal(result.isError, undefined, `${name}: ${result.content[0].text}`);
+    return result.structuredContent;
+  };
+
+  const found = await run("modx_search_files", { source: 1, query: "RED" });
+  assert.deepEqual(found.results.map((item) => [item.path, item.matches[0].line]), [["css/site.css", 2]]);
+  const window = await run("modx_read_file", { source: 1, path: "css/site.css", start_line: 2, end_line: 2 });
+  assert.equal(window.numbered, "2\t  color: red;");
+  assert.equal(window.total_lines, 3);
+  assert.equal(window.root, "s1");
+
+  // Somebody else changes the file: the revision remembered from the read is sent and the edit is refused.
+  fs.writeFileSync(file, "body {\n  color: green;\n}\n");
+  const stale = await call("modx_edit_file", { root: window.root, path: "css/site.css", edits: [{ start_line: 2, replacement: "  color: blue;" }] });
+  assert.equal(stale.isError, true);
+  assert.match(stale.content[0].text, /revision_conflict/);
+  assert.equal(fs.readFileSync(file, "utf8"), "body {\n  color: green;\n}\n");
+
+  const again = await run("modx_read_file", { source: 1, path: "css/site.css", numbered: true });
+  const first = await run("modx_edit_file", { root: again.root, path: "css/site.css", edits: [{ start_line: 2, replacement: "  color: blue;", expect: "  color: green;" }] });
+  assert.equal(first.edits_applied, 1);
+  assert.equal(fs.readFileSync(file, "utf8"), "body {\n  color: blue;\n}\n");
+  // The revision of the edit result is remembered too: a second edit needs no read.
+  const second = await run("modx_edit_file", { source: 1, path: "css/site.css", edits: [{ start_line: 4, end_line: 3, replacement: "p {}" }] });
+  assert.equal(second.total_lines_after, 4);
+  assert.equal(fs.readFileSync(file, "utf8"), "body {\n  color: blue;\n}\np {}\n");
+  await run("modx_undo", { changeset_id: second.changeset_id, confirm: true });
+  assert.equal(fs.readFileSync(file, "utf8"), "body {\n  color: blue;\n}\n");
+});
+
 test("escape hatches: tools appear with the settings on", { skip: available ? false : "PHP with pdo_sqlite is not available" }, async (t) => {
   const site = await startSite({ MODXMCP_TEST_ALLOW_ESCAPE: "1" });
   t.after(site.stop);
@@ -375,10 +420,10 @@ test("escape hatches: tools appear with the settings on", { skip: available ? fa
   const call = (token, action, args = {}) => site.post(token, { v: 2, action, args });
   const names = async (token) => (await call(token, "manifest")).body.result.tools.map((item) => item.name);
   const adminTools = await names(admin);
-  assert.equal(adminTools.length, 37);
+  assert.equal(adminTools.length, 39);
   assert.deepEqual(adminTools.slice(adminTools.indexOf("modx_uninstall_package") + 1, adminTools.indexOf("modx_uninstall_package") + 4), ["modx_run_processor", "modx_query_db", "modx_request_status"]);
   const readTools = await names(read);
-  assert.equal(readTools.length, 19);
+  assert.equal(readTools.length, 20);
   assert.ok(!readTools.includes("modx_query_db") && !readTools.includes("modx_run_processor"));
   assert.equal((await call(read, "query_db", { sql: "SELECT 1" })).body.error.code, "forbidden_scope");
   const query = (await call(admin, "query_db", { sql: "SELECT ? AS a, 'x;y' AS b", params: [7] })).body.result;
@@ -408,7 +453,7 @@ test("modx_run: the tool appears only with its setting on", { skip: available ? 
   const call = (token, action, args = {}) => on.post(token, { v: 2, action, args });
   const names = async (token) => (await call(token, "manifest")).body.result.tools.map((item) => item.name);
   const adminTools = await names(admin);
-  assert.equal(adminTools.length, 36);
+  assert.equal(adminTools.length, 38);
   assert.equal(adminTools[adminTools.indexOf("modx_audit_site") + 1], "modx_run");
   const run = (await call(admin, "manifest")).body.result.tools.find((item) => item.name === "modx_run");
   assert.deepEqual(run.effect, { read_only: false, destructive: true, reversible: false, open_world: true });

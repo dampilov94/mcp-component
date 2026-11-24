@@ -171,6 +171,11 @@ scenarios it can carry out.
 - `modx_list_files {source, path?}`, `modx_read_file {source, path}` (returns `revision`),
   `modx_write_file {source, path, content, expected_revision?}`,
   `modx_move_path {source, path, to}`, `modx_delete_path {source, path}`.
+- Large files: `modx_search_files {source, query, path?, extensions?}` finds lines in the text files
+  of a source (CSS, JS, templates; skips binary, oversized files, `node_modules`, `.git`).
+  `modx_read_file {source, path, start_line, end_line}` returns numbered lines and the file's
+  `revision`; `modx_edit_file {source | root, path, edits, expected_revision?}` changes lines
+  like `modx_edit_code` (same `edits`, line endings kept, journaled, undoable). The file must exist.
 - To read the code of an installed add-on use `component` instead of `source`:
   `modx_list_files {component: "minishop2"}`, `modx_read_file {component: "minishop2",
   area: "core", path: "…"}`. Component code is read-only.

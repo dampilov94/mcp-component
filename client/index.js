@@ -99,17 +99,24 @@ function fileRevisionKey(source, path) {
   return `file:${source}:${relative}`;
 }
 
+// A file root id from modx_read_file / modx_edit_file ("s3") names media source 3.
+function rootSource(root) {
+  const match = typeof root === "string" ? /^s([1-9][0-9]*)$/.exec(root) : null;
+  return match ? Number(match[1]) : null;
+}
+
 function rememberRevisions(tool, args, result) {
   if (tool.action === "undo" && result.performed === true) {
     seenRevisions.clear();   // an undo moves any number of objects to older states
     return;
   }
-  if (Number.isInteger(args.source)) {
+  const fileSource = Number.isInteger(args.source) ? args.source : (rootSource(args.root) ?? rootSource(result.root));
+  if (fileSource !== null) {
     if (result.dry_run === true) return;
-    const files = tool.action === "read_file" ? [result] : result.files;
+    const files = tool.action === "read_file" || tool.action === "edit_file" ? [result] : result.files;
     if (Array.isArray(files)) {
       for (const file of files) {
-        const key = fileRevisionKey(args.source, file.path);
+        const key = fileRevisionKey(fileSource, file.path);
         if (!key) continue;
         if (typeof file.revision === "string") seenRevisions.set(key, file.revision);
         else if (file.op === "delete") seenRevisions.delete(key);
@@ -206,7 +213,8 @@ async function callTool(request, extra) {
       delete args._request_id;
     }
     const tracked = write && tool.inputSchema.properties?.expected_revision
-      ? (tool.action === "write_file" ? fileRevisionKey(args.source, args.path) : trackedKey(args)) : null;
+      ? (tool.action === "write_file" || tool.action === "edit_file"
+        ? fileRevisionKey(Number.isInteger(args.source) ? args.source : rootSource(args.root), args.path) : trackedKey(args)) : null;
     if (tracked && args.expected_revision === undefined && seenRevisions.has(tracked)) {
       args.expected_revision = seenRevisions.get(tracked);
     }

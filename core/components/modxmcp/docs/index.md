@@ -18,8 +18,10 @@ Quick reference:
 - `modx_list`, `modx_get`, `modx_view_code` — read objects and code.
 - `modx_create`, `modx_update`, `modx_edit_code`, `modx_delete`, `modx_duplicate` — change objects.
 - `modx_resource_tree`, `modx_bulk_resources` — the page tree and bulk page operations.
-- `modx_list_files`, `modx_read_file`, `modx_write_file`, `modx_move_path`,
-  `modx_delete_path` — files in media sources; component code read-only.
+- `modx_list_files`, `modx_read_file`, `modx_write_file`, `modx_edit_file`, `modx_search_files`,
+  `modx_move_path`, `modx_delete_path` — files in media sources; component code read-only.
+  Large CSS or JS: find with `modx_search_files`, read a window with `modx_read_file`
+  `{start_line, end_line}`, change lines with `modx_edit_file`.
 - `modx_search`, `modx_replace`, `modx_find_usages` — find and change text across code.
 - `modx_invoke` — special operations of a kind (see `modx_describe`); `modx_dependency_graph`
   — how elements are wired; `modx_check_page` — request a page and see what it logged;
