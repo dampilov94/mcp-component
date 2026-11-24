@@ -10,7 +10,8 @@ final class SearchAction extends Action {
     public function group() { return 'code'; }
     public function description() {
         return 'Literal text search in element code (and resource content when kinds includes resource). '
-            . 'Returns matching lines with numbers usable with modx_view_code / modx_edit_code.';
+            . 'Returns matching lines with numbers usable with modx_view_code / modx_edit_code. '
+            . 'For files (CSS, JS, file-based templates) use modx_search_files.';
     }
     public function inputSchema() {
         return Schema::obj(array(
