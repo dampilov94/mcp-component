@@ -27,7 +27,7 @@ final class JsonReferences {
             $isObject = is_object($value);
             $copy = $isObject ? clone $value : $value;
             foreach (($isObject ? get_object_vars($value) : $value) as $key => $item) {
-                $where = $path === '' ? (string) $key : (is_int($key) ? $path . '[' . $key . ']' : $path . '.' . $key);
+                $where = is_int($key) ? $path . '[' . $key . ']' : ($path === '' ? (string) $key : $path . '.' . $key);
                 $replacement = $item;
                 if (is_string($item) && in_array((string) $key, $keys, true)) {
                     $pattern = '/^(\s*' . ($allowBinding ? '(?:(?i:@CHUNK)\s+)?' : '') . ')' . preg_quote($old, '/') . '(\s*)$/u';

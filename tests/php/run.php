@@ -5916,6 +5916,31 @@ check('tv: another field update keeps the input options', $ipCaption['changed'] 
 $call($ipDev, 'undo', array('changeset_id' => $ipEdit['changeset_id'], 'force' => true, 'confirm' => true));
 check('tv: undo restores the input options', (array) $call($ipDev, 'get', array('kind' => 'tv', 'id' => $ipTv['id']))['fields']['input_properties'] == array('configs' => 'gallery', 'allowBlank' => 'true'));
 
+// MIGX configurations follow a renamed chunk and TV (task 54)
+$mSite->store('modChunk', array('id' => 901, 'name' => 'слайд', 'snippet' => '<div>слайд</div>', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => '', 'properties' => 0, 'property_preprocess' => 0));
+$mSite->store('modTemplateVar', array('id' => 902, 'name' => 'заголовок', 'caption' => 'Заголовок', 'type' => 'text', 'category' => 0, 'description' => '', 'locked' => 0, 'rank' => 0, 'elements' => '', 'default_text' => '', 'display' => 'default'));
+$mFieldCountBefore = count($mSite->tableDump('migxFormtabField'));
+$mRn = $call($mDev, 'create', array('kind' => 'migx_config', 'fields' => array('name' => 'rename-test',
+    'formtabs' => array(array('caption' => 'Вкладка', 'fields' => array(array('field' => 'a', 'caption' => 'A', 'inputTV' => 'заголовок'), array('field' => 'b', 'caption' => 'B', 'inputTV' => 'заголовок2'), array('field' => 'c', 'caption' => 'C', 'inputTVtype' => 'text')))),
+    'columns' => array(array('header' => 'Слайд', 'dataIndex' => 'a', 'renderchunktpl' => '@CHUNK слайд'), array('header' => 'Другой', 'dataIndex' => 'b', 'renderchunktpl' => 'слайд2')))));
+$mRnId = $mRn['id'];
+$mRnPlan = $call($mDev, 'invoke', array('kind' => 'chunk', 'id' => 901, 'op' => 'rename', 'args' => array('new_name' => 'slide')));
+check('migx rename: the plan names the configuration and the path of the reference', count($mRnPlan['references']) === 1 && $mRnPlan['references'][0]['kind'] === 'migx_config' && $mRnPlan['references'][0]['id'] === $mRnId
+    && $mRnPlan['references'][0]['fields'] === array('columns') && $mRnPlan['references'][0]['changes'][0]['where'] === '[0].renderchunktpl' && $mRnPlan['references'][0]['changes'][0]['new'] === '@CHUNK slide');
+$mRnDone = $call($mDev, 'invoke', array('kind' => 'chunk', 'id' => 901, 'op' => 'rename', 'args' => array('new_name' => 'slide', 'confirm' => true, 'expected_revisions' => $mRnPlan['revisions'])));
+$mRnGot = $call($mDev, 'get', array('kind' => 'migx_config', 'id' => $mRnId))['fields'];
+check('migx rename: the chunk of a column renderer follows, a longer name and the form tabs stay, one changeset', $mRnGot['columns'][0]->renderchunktpl === '@CHUNK slide' && $mRnGot['columns'][1]->renderchunktpl === 'слайд2' && $mRnGot['columns'][0]->header === 'Слайд'
+    && $mSite->row('modChunk', 901)['name'] === 'slide' && $mRnDone['objects_rewritten'] === 1 && $mRnDone['changeset_id'] > 0);
+$mRnTvPlan = $call($mDev, 'invoke', array('kind' => 'tv', 'id' => 902, 'op' => 'rename', 'args' => array('new_name' => 'title')));
+$mRnTvDone = $call($mDev, 'invoke', array('kind' => 'tv', 'id' => 902, 'op' => 'rename', 'args' => array('new_name' => 'title', 'confirm' => true, 'expected_revisions' => $mRnTvPlan['revisions'])));
+$mRnGot = $call($mDev, 'get', array('kind' => 'migx_config', 'id' => $mRnId))['fields'];
+check('migx rename: inputTV names a TV and follows it, with the mirrored form tab rows kept', $mRnGot['formtabs'][0]->fields[0]->inputTV === 'title' && $mRnGot['formtabs'][0]->fields[1]->inputTV === 'заголовок2' && $mRnTvDone['references_rewritten'] === 1
+    && count($mSite->tableDump('migxFormtabField')) === $mFieldCountBefore + 3);
+$call($mDev, 'undo', array('changeset_id' => $mRnTvDone['changeset_id'], 'confirm' => true));
+$call($mDev, 'undo', array('changeset_id' => $mRnDone['changeset_id'], 'confirm' => true));
+$mRnGot = $call($mDev, 'get', array('kind' => 'migx_config', 'id' => $mRnId))['fields'];
+check('migx rename: undo puts the names and the configuration back', $mRnGot['formtabs'][0]->fields[0]->inputTV === 'заголовок' && $mRnGot['columns'][0]->renderchunktpl === '@CHUNK слайд' && $mSite->row('modChunk', 901)['name'] === 'слайд' && $mSite->row('modTemplateVar', 902)['name'] === 'заголовок');
+
 // --- VirtualPage: kinds vp_event, vp_handler, vp_route, the route tester, help topic (task 24) ---
 $vpDir = $siteDir . '/vp24';
 $vpCore = $vpDir . '/core/components/virtualpage/';
