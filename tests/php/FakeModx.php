@@ -1079,6 +1079,8 @@ class modX extends xPDO {
     private function persist() { if ($this->file) { file_put_contents($this->file, json_encode($this->tables)); } }
     /** Primary key column(s) per class; rows of other classes are matched by id (or by their whole content without one). */
     public static $primaryKeys = array('modElementPropertySet' => array('element', 'element_class', 'property_set'), 'modSystemSetting' => 'key', 'modContext' => 'key', 'modNamespace' => 'name', 'modContextSetting' => array('context_key', 'key'), 'modUserSetting' => array('user', 'key'), 'transport.modTransportPackage' => 'signature',
+        // The source is part of the key of a media source row of an element (as in the MODX map).
+        'sources.modMediaSourceElement' => array('source', 'object_class', 'object', 'context_key'),
         'msCategoryMember' => array('product_id', 'category_id'), 'msCategoryOption' => array('option_id', 'category_id'), 'msProductLink' => array('link', 'master', 'slave'),
         // xPDO class without a primary key: rows are told apart by their whole content.
         'msProductOption' => null);
@@ -1927,6 +1929,13 @@ class modX extends xPDO {
             }
             unset($data['input_properties']);
             if ($options || $action === 'create') { $data['input_properties'] = json_encode($options); }
+            // Output options arrive as prop_<name>; create always sets the map, update only when one is given.
+            $outputs = array();
+            foreach ($data as $property => $value) {
+                if (strpos($property, 'prop_') !== false) { $outputs[str_replace('prop_', '', $property)] = $value; unset($data[$property]); }
+            }
+            unset($data['output_properties']);
+            if ($outputs || $action === 'create') { $data['output_properties'] = json_encode($outputs); }
         }
         $events = isset(self::$elementEvents[$class]) ? self::$elementEvents[$class] : null;
         if ($action === 'remove') {

@@ -83,6 +83,39 @@ Ext.onReady(function () {
         });
     }
 
+    // ---- pause / resume the API -----------------------------------------------------------
+    var apiBtn = document.getElementById('modxmcp-toggle-api');
+    var apiStatus = document.getElementById('modxmcp-api-status');
+    if (apiBtn) {
+        var switchApi = function (enabled) {
+            apiBtn.disabled = true;
+            if (apiStatus) { apiStatus.textContent = L.api_saving || ''; }
+            MODx.Ajax.request({
+                url: cfg.connector_url,
+                params: { action: 'mgr/settings/toggleapi', enabled: enabled ? 1 : 0 },
+                listeners: {
+                    success: { fn: function () { window.location.reload(); } },
+                    failure: {
+                        fn: function () {
+                            apiBtn.disabled = false;
+                            if (apiStatus) { apiStatus.textContent = L.api_failed || ''; }
+                        }
+                    }
+                }
+            });
+        };
+        apiBtn.addEventListener('click', function () {
+            if (apiBtn.getAttribute('data-enabled') !== '1') { switchApi(true); return; }
+            // Pausing cuts every client off: ask first.
+            var message = L.api_pause_confirm || '';
+            if (Ext.Msg && Ext.Msg.confirm) {
+                Ext.Msg.confirm(L.api_pause || '', message, function (answer) { if (answer === 'yes') { switchApi(false); } });
+            } else if (window.confirm(message)) {
+                switchApi(false);
+            }
+        });
+    }
+
     // ---- drafts of pages: list, plan, confirmation ----------------------------------------
     // Every value from the site (titles, names, field values, diffs) goes into the page with textContent only.
     var draftsRoot = document.getElementById('modxmcp-drafts');

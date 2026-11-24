@@ -311,6 +311,8 @@ newly protected key can prevent restoration. Create and manage definitions in Cl
   are joined in `output`, as MODX does. Use `dry_run: true` to see what would run.
 - `modx_read_log` returns the tail of the MODX error log and an `end_offset`. Read it
   before a risky change, then call it with `after_offset` afterwards to see only new errors.
+  A warning repeated on every request floods the tail: `dedupe: true` folds equal entries into
+  one with `count`, `first_time` and `last_time` (and `raw_entries` tells how many were read).
 - `modx_maintenance {operation}` (admin): `clear_cache`, `refresh_uris`, `remove_locks`,
   `flush_permissions`, `empty_trash`. Writes already refresh the cache. `empty_trash` is
   permanent and cannot be undone.

@@ -127,7 +127,7 @@ final class Journal {
 
     /**
      * Changesets, newest first.
-     * @param array $filter session_id, source, kind, object_key, since / until (unix time, inclusive), after_id, ids (int[]), status,
+     * @param array $filter session_id, token_id (the changes made with one API token), source, kind, object_key, since / until (unix time, inclusive), after_id, ids (int[]), status,
      *                      tool, query (substring of the summary or of an object's name),
      *                      exclude_undos (skip changesets that are themselves undos),
      *                      hidden_kinds (exclude changesets that only contain these restricted kinds),
@@ -164,6 +164,7 @@ final class Journal {
         foreach (array('session_id', 'source', 'status', 'tool') as $column) {
             if (isset($filter[$column])) { $where[] = "c.`{$column}` = ?"; $params[] = $filter[$column]; }
         }
+        if (isset($filter['token_id'])) { $where[] = 'c.`token_id` = ?'; $params[] = (int) $filter['token_id']; }
         if (!empty($filter['exclude_undos'])) { $where[] = 'c.`undoes` IS NULL'; }
         if (!empty($filter['with_changes'])) { $where[] = 'EXISTS (SELECT 1 FROM ' . $this->t('changes') . ' w WHERE w.`changeset_id` = c.`id`)'; }
         if (isset($filter['since'])) { $where[] = 'c.`created_at` >= ?'; $params[] = (int) $filter['since']; }

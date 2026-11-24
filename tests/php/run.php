@@ -6073,6 +6073,21 @@ check('history page: filter since and until', $ids(array('until' => 2000000)) ==
 check('history page: text search in an object name, case as typed, in Cyrillic', $ids(array('query' => 'шапк')) === array(2, 1) && $ids(array('query' => 'подвал')) === array(6, 5, 3));
 check('history page: text search in the summary', $ids(array('query' => 'запись о пакете')) === array(7));
 check('history page: wildcards in the search are literal', $ids(array('query' => '%')) === array() && $ids(array('query' => '_')) === array());
+check('history page: filter by token', $ids(array('token_id' => $hTokenA['id'])) === array(6, 3, 2, 1) && $ids(array('token_id' => $hTokenB['id'])) === array(4)
+    && $ids(array('token_id' => 999)) === array(7) && $ids(array('token_id' => (string) $hTokenA['id'])) === array(6, 3, 2, 1) && $ids(array('token_id' => 424242)) === array());
+check('history page: the token filter combines with the other filters', $ids(array('token_id' => $hTokenA['id'], 'query' => 'подвал')) === array(6, 3)
+    && $ids(array('token_id' => $hTokenA['id'], 'kind' => 'chunk', 'id' => $hHead['id'])) === array(2, 1) && $ids(array('token_id' => $hTokenB['id'], 'source' => 'external')) === array()
+    && $ids(array('token_id' => $hTokenA['id'], 'status' => 'undone')) === array() && $ids(array('token_id' => $hTokenA['id']), 2, 1) === array(3, 2));
+check('history page: an empty, zero or non-numeric token filter is no filter', $ids(array('token_id' => '')) === array(7, 6, 5, 4, 3, 2, 1) && $ids(array('token_id' => 0)) === array(7, 6, 5, 4, 3, 2, 1)
+    && $ids(array('token_id' => 'abc')) === array(7, 6, 5, 4, 3, 2, 1));
+check('history page: total counts the filtered changesets', $hService->changesets(array('token_id' => $hTokenA['id']), 1)['total'] === 4);
+check('history page: the journal filters by token too', array_column($hDev->journal()->page(array('token_id' => $hTokenB['id']), 10, 0)['changesets'], 'id') === array(4));
+$hTf = HistoryService::tokenFilter($hSite, (string) $hTokenA['id']);
+check('history page: token filter of the URL names the token', $hTf === array('id' => $hTokenA['id'], 'label' => 'Claude Code') && HistoryService::tokenFilter($hSite, $hTokenB['id'])['label'] === 'Старый токен'
+    && HistoryService::tokenFilter($hSite, '999') === array('id' => 999, 'label' => ''));
+check('history page: a token filter that is not a positive integer is ignored', HistoryService::tokenFilter($hSite, 'abc') === null && HistoryService::tokenFilter($hSite, '0') === null && HistoryService::tokenFilter($hSite, '-1') === null
+    && HistoryService::tokenFilter($hSite, '1 OR 1') === null && HistoryService::tokenFilter($hSite, '01') === null && HistoryService::tokenFilter($hSite, array('1')) === null && HistoryService::tokenFilter($hSite, null) === null);
+throws('history api: modx_history has no token_id filter (unchanged)', ApiException::class, function () use ($call, $hDev, $hTokenA) { $call($hDev, 'history', array('token_id' => $hTokenA['id'])); });
 check('history page: filters combine', $ids(array('source' => 'mcp', 'kind' => 'chunk', 'query' => 'подвал')) === array(6, 3));
 $e = throws('history page: unknown source', ApiException::class, function () use ($hService) { $hService->changesets(array('source' => 'robot')); });
 check('history page: unknown source is validation_failed', $e && $e->errorCode === 'validation_failed');
@@ -9517,6 +9532,119 @@ check('media source: history shows stored override values', $diff['old']->baseUr
 check('properties: serialized objects are ignored without losing plain entries', array_keys(Properties::decode(serialize(array(
     'plain' => array('value' => 'test'), 'invalid' => array('value' => new \stdClass()),
 )))) === array('plain'));
+
+// --- Log reader: dedupe (task 51) ---
+$ddPath = realpath(sys_get_temp_dir()) . '/modxmcp-dedupe-' . bin2hex(random_bytes(6));
+$ddWarn = "(WARN @ /core/a.php : 3) Не найден чанк «шапка»\nвторая строка\n";
+file_put_contents($ddPath, "[2026-02-01 10:00:00] {$ddWarn}[2026-02-01 10:00:05] (ERROR @ /core/b.php : 9) boom\n[2026-02-01 10:00:09] {$ddWarn}"
+    . "[2026-02-01 10:00:10] (WARN @ /core/a.php : 3) другое сообщение\n[2026-02-01 10:00:11] (ERROR @ /core/c.php : 9) boom\n[2026-02-01 10:00:12] {$ddWarn}");
+$ddPlain = ModxMCP\Verify\LogReader::tail($ddPath);
+check('log dedupe: off by default, output unchanged', $ddPlain['returned'] === 6 && !isset($ddPlain['raw_entries']) && !isset($ddPlain['entries'][0]['count']));
+$ddFold = ModxMCP\Verify\LogReader::tail($ddPath, 50, 262144, '', null, true);
+check('log dedupe: same level, location and message fold with count and times', $ddFold['returned'] === 4 && $ddFold['raw_entries'] === 6
+    && $ddFold['entries'][3]['count'] === 3 && $ddFold['entries'][3]['first_time'] === '2026-02-01 10:00:00' && $ddFold['entries'][3]['last_time'] === '2026-02-01 10:00:12'
+    && $ddFold['entries'][3]['message'] === "Не найден чанк «шапка»\nвторая строка" && !isset($ddFold['entries'][3]['time']));
+check('log dedupe: ordered by last occurrence, a different location is not folded', array_column($ddFold['entries'], 'count') === array(1, 1, 1, 3)
+    && array_column($ddFold['entries'], 'location') === array('/core/b.php : 9', '/core/a.php : 3', '/core/c.php : 9', '/core/a.php : 3')
+    && $ddFold['entries'][0]['first_time'] === $ddFold['entries'][0]['last_time']);
+$ddLimit = ModxMCP\Verify\LogReader::tail($ddPath, 2, 262144, '', null, true);
+check('log dedupe: limit counts folded entries and keeps the newest', $ddLimit['returned'] === 2 && $ddLimit['truncated'] === true && $ddLimit['raw_entries'] === 6
+    && array_column($ddLimit['entries'], 'count') === array(1, 3));
+$ddContains = ModxMCP\Verify\LogReader::tail($ddPath, 50, 262144, 'ШАПКА', null, true);
+check('log dedupe: the filter applies before folding', $ddContains['returned'] === 1 && $ddContains['raw_entries'] === 3 && $ddContains['entries'][0]['count'] === 3);
+check('log dedupe: respects the byte budget (older entries fall out of the window)', ModxMCP\Verify\LogReader::tail($ddPath, 50, 120, '', null, true)['raw_entries'] < 6);
+file_put_contents($site->getCachePath() . 'logs/error.log', str_repeat("[2026-01-01 10:00:00] (ERROR @ fake) repeated\n", 4));
+$ddAction = $call($dev, 'read_log', array('dedupe' => true));
+check('read_log action: dedupe', $ddAction['returned'] === 1 && $ddAction['entries'][0]['count'] === 4 && $ddAction['raw_entries'] === 4 && $call($dev, 'read_log')['returned'] === 4);
+unlink($ddPath);
+
+// --- TV media sources per context and output properties (task 51) ---
+$site->store('modContext', array('key' => 'web', 'name' => 'Web'));
+$site->store('modContext', array('key' => 'shop', 'name' => 'Магазин'));
+$site->store('modContext', array('key' => 'blog', 'name' => 'Blog'));
+foreach (array(71 => 'Картинки', 72 => 'Файлы', 73 => 'Архив') as $msId => $msName) {
+    $site->store('sources.modMediaSource', array('id' => $msId, 'name' => $msName, 'description' => '', 'class_key' => 'sources.modFileMediaSource', 'basePath' => ''));
+}
+$msRows = function ($tvId) use ($site) {
+    $out = array();
+    foreach ($site->getCollection('sources.modMediaSourceElement', array('object' => $tvId, 'object_class' => 'modTemplateVar')) as $row) { $out[$row->get('context_key')] = (int) $row->get('source'); }
+    ksort($out);
+    return $out;
+};
+$msTv = $call($dev, 'create', array('kind' => 'tv', 'fields' => array('name' => 'картинка_ms', 'type' => 'image'), 'relations' => array('media_sources' => array('web' => 71, 'shop' => 72))));
+check('tv media sources: set on create, shown as an object', $msRows($msTv['id']) === array('shop' => 72, 'web' => 71)
+    && (array) $call($dev, 'get', array('kind' => 'tv', 'id' => $msTv['id']))['relations']['media_sources'] === array('shop' => 72, 'web' => 71)
+    && $call($dev, 'get', array('kind' => 'tv', 'id' => $msTv['id']))['relations']['media_sources'] instanceof \stdClass);
+$msBefore = $call($dev, 'get', array('kind' => 'tv', 'id' => $msTv['id']));
+$msSet = $call($dev, 'update', array('kind' => 'tv', 'id' => $msTv['id'], 'expected_revision' => $msBefore['revision'], 'relations' => array('media_sources' => array('web' => 73))));
+check('tv media sources: one context is replaced, the other is left alone', $msRows($msTv['id']) === array('shop' => 72, 'web' => 73) && $msSet['changed'] === array('media_sources'));
+$msAdd = $call($dev, 'update', array('kind' => 'tv', 'id' => $msTv['id'], 'relations' => array('media_sources' => array('blog' => 71))));
+check('tv media sources: a new context is added', $msRows($msTv['id']) === array('blog' => 71, 'shop' => 72, 'web' => 73));
+$msRemove = $call($dev, 'update', array('kind' => 'tv', 'id' => $msTv['id'], 'relations' => array('media_sources' => array('shop' => null))));
+check('tv media sources: null removes the row of that context only', $msRows($msTv['id']) === array('blog' => 71, 'web' => 73));
+$call($dev, 'update', array('kind' => 'tv', 'id' => $msTv['id'], 'relations' => array('media_sources' => array('web' => 73, 'blog' => 71))));
+check('tv media sources: writing the same map changes nothing', $msRows($msTv['id']) === array('blog' => 71, 'web' => 73));
+$msBad = array(array('nope' => 71), array('web' => 999), array('web' => 'text'), array('web' => 0));
+foreach ($msBad as $msArg) {
+    $e = throws('tv media sources: invalid ' . json_encode($msArg), ApiException::class, function () use ($call, $dev, $msTv, $msArg) { $call($dev, 'update', array('kind' => 'tv', 'id' => $msTv['id'], 'relations' => array('media_sources' => $msArg))); });
+    check('tv media sources: invalid value is validation_failed and changes nothing ' . json_encode($msArg), $e && $e->errorCode === 'validation_failed' && $msRows($msTv['id']) === array('blog' => 71, 'web' => 73));
+}
+throws('tv media sources: a list is not a map', ApiException::class, function () use ($call, $dev, $msTv) { $call($dev, 'update', array('kind' => 'tv', 'id' => $msTv['id'], 'relations' => array('media_sources' => array(71)))); });
+$msDry = $call($dev, 'update', array('kind' => 'tv', 'id' => $msTv['id'], 'relations' => array('media_sources' => array('web' => 72)), 'dry_run' => true));
+check('tv media sources: dry run writes nothing', $msDry['dry_run'] === true && $msRows($msTv['id']) === array('blog' => 71, 'web' => 73));
+$call($dev, 'undo', array('changeset_id' => $msRemove['changeset_id'], 'confirm' => true));
+check('tv media sources: undo restores the removed row', $msRows($msTv['id']) === array('blog' => 71, 'shop' => 72, 'web' => 73));
+$call($dev, 'undo', array('changeset_id' => $msAdd['changeset_id'], 'confirm' => true));
+$call($dev, 'undo', array('changeset_id' => $msSet['changeset_id'], 'confirm' => true));
+check('tv media sources: undo of the earlier writes', $msRows($msTv['id']) === array('shop' => 72, 'web' => 71));
+$msDiff = $call($dev, 'history_diff', array('changeset_id' => $msSet['changeset_id']));
+check('tv media sources: the journal names the relation', isset($msDiff['objects'][0]['changed']['media_sources']));
+$msFull = $call($dev, 'get', array('kind' => 'tv', 'id' => $msTv['id']));
+$msDel = $call($dev, 'delete', array('kind' => 'tv', 'id' => $msTv['id']));
+$site->removeCollection('sources.modMediaSourceElement', array('object' => $msTv['id']));   // MODX leaves them; make the loss explicit
+check('tv media sources: gone with the TV in this test', $msRows($msTv['id']) === array());
+$call($dev, 'undo', array('changeset_id' => $msDel['changeset_id'], 'confirm' => true));
+check('tv media sources: delete and undo bring them back, same revision', $msRows($msTv['id']) === array('shop' => 72, 'web' => 71)
+    && $call($dev, 'get', array('kind' => 'tv', 'id' => $msTv['id']))['revision'] === $msFull['revision']);
+$msCopy = $call($dev, 'duplicate', array('kind' => 'tv', 'id' => $msTv['id'], 'name' => 'картинка_ms_copy'));
+check('tv media sources: duplicate copies the rows', $msRows($msCopy['id']) === array('shop' => 72, 'web' => 71));
+$msDescribe = array_column($call($dev, 'describe', array('kind' => 'tv'))['relations'], null, 'name');
+check('tv media sources: describe shows the relation as writable', $msDescribe['media_sources']['writable'] === true);
+
+// output_properties
+$opTv = $call($dev, 'create', array('kind' => 'tv', 'fields' => array('name' => 'фото_op', 'type' => 'image', 'display' => 'image', 'output_properties' => array('w' => 200, 'alt' => 'Фото', 'cls' => 'img'))));
+$opGet = $call($dev, 'get', array('kind' => 'tv', 'id' => $opTv['id']));
+check('tv output_properties: written on create and read back as an object', (array) $opGet['fields']['output_properties'] === array('w' => '200', 'alt' => 'Фото', 'cls' => 'img') || (array) $opGet['fields']['output_properties'] === array('w' => 200, 'alt' => 'Фото', 'cls' => 'img'));
+$opUpd = $call($dev, 'update', array('kind' => 'tv', 'id' => $opTv['id'], 'expected_revision' => $opGet['revision'], 'fields' => array('output_properties' => array('w' => 300, 'alt' => 'Другое'))));
+$opAfter = $call($dev, 'get', array('kind' => 'tv', 'id' => $opTv['id']));
+check('tv output_properties: update replaces the map', in_array('output_properties', $opUpd['changed'], true) && array_map('strval', (array) $opAfter['fields']['output_properties']) === array('w' => '300', 'alt' => 'Другое'));
+$call($dev, 'undo', array('changeset_id' => $opUpd['changeset_id'], 'confirm' => true));
+check('tv output_properties: undo restores the first map', array_map('strval', (array) $call($dev, 'get', array('kind' => 'tv', 'id' => $opTv['id']))['fields']['output_properties']) === array('w' => '200', 'alt' => 'Фото', 'cls' => 'img'));
+$call($dev, 'update', array('kind' => 'tv', 'id' => $opTv['id'], 'fields' => array('description' => 'без касания опций')));
+check('tv output_properties: an unrelated update keeps them', array_map('strval', (array) $call($dev, 'get', array('kind' => 'tv', 'id' => $opTv['id']))['fields']['output_properties']) === array('w' => '200', 'alt' => 'Фото', 'cls' => 'img'));
+
+// --- Pausing the API from the main page (task 51) ---
+$swDir = realpath(sys_get_temp_dir()) . '/modxmcp-switch-' . bin2hex(random_bytes(6));
+mkdir($swDir . '/core', 0700, true);
+$swSite = fakeSite($swDir, array('modxmcp.enabled' => true));
+$swApi = new ModxMCP\Manager\ApiSwitch($swSite);
+check('api switch: enabled by default as configured', $swApi->enabled() === true);
+$swOff = $swApi->set(false);
+check('api switch: pause stores 0, reloads the configuration and refreshes the cache', $swOff === array('enabled' => false, 'changed' => true)
+    && $swSite->getObject('modSystemSetting', array('key' => 'modxmcp.enabled'))->get('value') === '0'
+    && $swSite->getOption('modxmcp.enabled') === '0' && $swApi->enabled() === false && $swSite->getCacheManager()->refreshes >= 1);
+check('api switch: the pause is a manager action naming the setting', $swSite->managerActions === array(array('action' => 'modxmcp_pause_api', 'class' => 'modSystemSetting', 'pk' => 'modxmcp.enabled')));
+check('api switch: pausing again changes and logs nothing', $swApi->set(false) === array('enabled' => false, 'changed' => false) && count($swSite->managerActions) === 1);
+$swOn = $swApi->set(true);
+check('api switch: resume stores 1 and is logged', $swOn === array('enabled' => true, 'changed' => true) && $swSite->getObject('modSystemSetting', array('key' => 'modxmcp.enabled'))->get('value') === '1'
+    && $swApi->enabled() === true && $swSite->managerActions[1]['action'] === 'modxmcp_resume_api' && count($swSite->managerActions) === 2);
+check('api switch: no argument flips the state, both ways', $swApi->set()['enabled'] === false && $swApi->set()['enabled'] === true && count($swSite->managerActions) === 4);
+check('api switch: the setting row is not duplicated', $swSite->getCount('modSystemSetting', array('key' => 'modxmcp.enabled')) === 1);
+$swRow = $swSite->getObject('modSystemSetting', array('key' => 'modxmcp.enabled'));
+check('api switch: the missing setting row was created in the component namespace', $swRow->get('namespace') === 'modxmcp' && $swRow->get('area') === 'modxmcp:main' && $swRow->get('xtype') === 'combo-boolean');
+$swSite->options['modxmcp.enabled'] = '1';
+$swSite->store('modSystemSetting', array('key' => 'modxmcp.enabled', 'value' => '1', 'namespace' => 'modxmcp', 'area' => 'modxmcp:main', 'xtype' => 'combo-boolean'));
+check('api switch: an existing row is updated in place', $swApi->set(false)['changed'] === true && $swSite->getCount('modSystemSetting', array('key' => 'modxmcp.enabled')) === 1 && $swApi->enabled() === false);
 
 echo $failures ? "{$failures} of {$checks} PHP checks failed.\n" : "PHP: {$checks} checks passed.\n";
 exit($failures ? 1 : 0);

@@ -243,6 +243,15 @@ After alpha3:
   the original and thumbnail bytes, file modes, gallery rows and cover on supported local sources.
 - Rename a published leaf page and create an exact Redirector 301 rule for its previous path
   in one changeset. Undo restores the prior alias and removes the generated rule.
+- Files by lines: `modx_read_file` reads a numbered line window; `modx_edit_file` edits a text file
+  by lines (expect, revision, dry-run diff, line endings kept, journaled and undoable, the same
+  protected paths as `modx_write_file`); `modx_search_files` searches the text files of a media
+  source or a component's code.
+- `modx_read_log {dedupe: true}` folds repeated entries into one with a count and the first and
+  last time.
+- TVs: media sources per context (`relations.media_sources`, e.g. `{"web": 2}`) and
+  `output_properties` are writable.
+- Manager: "pause the API" on the main page; the changeset count of a token links to its history.
 
 Stage 7 — manager:
 

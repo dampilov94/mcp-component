@@ -117,9 +117,23 @@ Ext.onReady(function () {
     inputs.since = textInput('date', '');
     inputs.until = textInput('date', '');
 
+    // The changes of one token (?token_id=N): a chip with the label and a button that shows everyone's changes again.
+    var tokenId = (cfg.token && cfg.token.id) ? cfg.token.id : null;
+    var tokenBox = el('span', 'h-field h-tokenfilter');
+    function drawTokenFilter() {
+        clear(tokenBox);
+        tokenBox.style.display = tokenId === null ? 'none' : '';
+        if (tokenId === null) { return; }
+        var label = cfg.token && cfg.token.label ? cfg.token.label : t('token_unnamed', { id: tokenId });
+        add(tokenBox, el('span', 'h-flabel', t('f_token')), el('b', '', label + ' (#' + tokenId + ')'), document.createTextNode(' '),
+            link(t('token_clear'), function () { tokenId = null; drawTokenFilter(); reload(0); }));
+    }
+    drawTokenFilter();
+
     var statEl = el('span', 'h-stat');
     var bar = add(el('div', 'h-bar'),
         el('h2', '', t('heading')),
+        tokenBox,
         field(t('f_source'), inputs.source),
         field(t('f_kind'), inputs.kind),
         field(t('f_object'), inputs.object),
@@ -145,6 +159,7 @@ Ext.onReady(function () {
     function filterParams() {
         var params = {};
         if (inputs.source.value) { params.source = inputs.source.value; }
+        if (tokenId !== null) { params.token_id = tokenId; }
         if (inputs.kind.value) { params.kind = inputs.kind.value.replace(/^\s+|\s+$/g, ''); }
         if (inputs.object.value) { params.key = inputs.object.value.replace(/^\s+|\s+$/g, ''); }
         if (inputs.query.value) { params.query = inputs.query.value; }
@@ -398,6 +413,8 @@ Ext.onReady(function () {
         inputs.query.value = '';
         inputs.since.value = '';
         inputs.until.value = '';
+        tokenId = null;
+        drawTokenFilter();
         reload(0);
         loadCheckpoints();
     }

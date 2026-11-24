@@ -3,7 +3,7 @@ namespace ModxMCP\Verify;
 
 /** Bounded reverse chunk reads, followed by multiline entry parsing within that window. */
 final class LogReader {
-    public static function tail($path, $limit = 50, $maxBytes = 262144, $contains = '', $afterOffset = null) {
+    public static function tail($path, $limit = 50, $maxBytes = 262144, $contains = '', $afterOffset = null, $dedupe = false) {
         $limit = max(1, min(500, (int) $limit));
         $maxBytes = (int) $maxBytes > 0 ? (int) $maxBytes : 262144;
         clearstatcache(true, $path);
@@ -67,10 +67,37 @@ final class LogReader {
                 $entry['message'] = mb_strlen($raw, 'UTF-8') > 2000 ? mb_substr($raw, 0, 2000, 'UTF-8') . '…' : $raw;
                 $entries[] = $entry;
             }
+            $raw = count($entries);
+            if ($dedupe) { $entries = self::fold($entries); }
             if (count($entries) > $limit) { $truncated = true; $entries = array_slice($entries, -$limit); }
-            return self::result($size, $entries, $truncated, $reset);
+            $result = self::result($size, $entries, $truncated, $reset);
+            if ($dedupe) { $result['raw_entries'] = $raw; }
+            return $result;
         } finally { fclose($handle); }
     }
+    /**
+     * Fold entries with the same level, location and message into one with count, first_time and
+     * last_time, ordered by their last occurrence (newest last).
+     */
+    private static function fold(array $entries) {
+        $groups = array();
+        foreach ($entries as $index => $entry) {
+            $key = json_encode(array(isset($entry['level']) ? $entry['level'] : null, isset($entry['location']) ? $entry['location'] : null, $entry['message']));
+            if (!isset($groups[$key])) {
+                $group = $entry;
+                unset($group['time']);
+                $group['count'] = 0;
+                if (isset($entry['time'])) { $group['first_time'] = $entry['time']; }
+                $groups[$key] = array('last' => $index, 'entry' => $group);
+            }
+            $groups[$key]['entry']['count']++;
+            $groups[$key]['last'] = $index;
+            if (isset($entry['time'])) { $groups[$key]['entry']['last_time'] = $entry['time']; }
+        }
+        uasort($groups, function ($a, $b) { return $a['last'] - $b['last']; });
+        return array_values(array_map(function ($group) { return $group['entry']; }, $groups));
+    }
+
     private static function result($size, array $entries, $truncated, $reset) {
         return array('size' => $size, 'end_offset' => $size, 'entries' => $entries,
             'returned' => count($entries), 'truncated' => $truncated, 'reset' => $reset);

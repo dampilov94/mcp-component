@@ -32,8 +32,13 @@ class ModxmcpHistoryManagerController extends modExtraManagerController {
             null,
             $this->modx->getOption('assets_url') . 'components/modxmcp/'
         );
+        $corePath = $this->modx->getOption('modxmcp.core_path', null, $this->modx->getOption('core_path') . 'components/modxmcp/');
+        require_once rtrim($corePath, '/\\') . '/src/autoload.php';
+        // ?token_id=N shows the changes made with one token (the link from the Tokens page).
+        $token = \ModxMCP\Manager\HistoryService::tokenFilter($this->modx, isset($_GET['token_id']) ? $_GET['token_id'] : null);
         $cfg = json_encode(array(
             'connector_url' => $assetsUrl . 'connector.php',
+            'token'         => $token,
             'l'             => $this->modx->lexicon->fetch('modxmcp_history_', true),
         ), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP);
         $this->addHtml('<script type="text/javascript">var ModxmcpHistory = ' . $cfg . ';</script>');

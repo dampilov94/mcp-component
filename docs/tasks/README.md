@@ -86,8 +86,8 @@ below) or append a `## Review` section to the brief with numbered change request
 | 47 | [miniShop2 gallery reads and safe restore](47-minishop2-gallery.md) | `task/47-minishop2-gallery` | merged |
 | 48 | [miniShop2 gallery writes and byte-level undo](48-minishop2-gallery-writes.md) | `task/48-minishop2-gallery-writes` | merged |
 | 49 | [Redirector for alias changes](49-redirector.md) | `task/49-redirector` | merged |
-| 50 | [Search and line edits in files](50-file-lines.md) | `task/50-file-lines` | ready for the executor |
-| 51 | [Log repeats, TV sources, API pause, history by token](51-small-wins.md) | `task/51-small-wins` | ready for the executor |
+| 50 | [Search and line edits in files](50-file-lines.md) | `task/50-file-lines` | merged |
+| 51 | [Log repeats, TV sources, API pause, history by token](51-small-wins.md) | `task/51-small-wins` | merged |
 
 ## Doing several briefs in a row
 
