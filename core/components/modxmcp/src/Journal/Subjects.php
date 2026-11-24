@@ -5,12 +5,14 @@ use ModxMCP\ApiException;
 use ModxMCP\Context;
 use ModxMCP\Files\FileRoot;
 use ModxMCP\Files\FileSubject;
+use ModxMCP\Integration\GallerySubject;
 use ModxMCP\Kind\Objects;
 
 /** Rebuilds the subject a journal entry refers to. */
 final class Subjects {
     /** The key of a journal row in its API type: the kind's key type decides; files and unknown kinds keep the stored string. */
     public static function publicKey(Context $context, $kindName, $key) {
+        if ($kindName === GallerySubject::NAME) { return (int) $key; }
         $kind = $kindName === 'file' ? null : $context->kinds->get($kindName);
         return $kind ? $kind->publicKey($key) : (string) $key;
     }
@@ -26,6 +28,7 @@ final class Subjects {
      * @return Subject|null null when the kind is no longer known
      */
     public static function forChange(Context $context, $kindName, $key, $write) {
+        if ($kindName === GallerySubject::NAME) { return GallerySubject::fromId($context, $key, $write); }
         if ($kindName === 'file') {
             list($rootId, $relative) = FileSubject::parseKey($key);
             $root = FileRoot::fromId($context, $rootId);

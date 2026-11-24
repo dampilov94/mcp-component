@@ -139,6 +139,19 @@ Undoing a product edit preserves its current cover and gallery. If an undo would
 product or its data row while gallery records exist, the operation is refused. This also
 applies to products removed when a parent resource is undone.
 
+With a `content` or higher token, use `resource.upload_gallery_image` with `args` containing
+`filename` and `content_base64`. Use a simple JPEG or PNG basename and a file of at most 2 MiB
+and 4096 pixels per side. The site's request size limit also applies. Delete an original image
+with `resource.delete_gallery_image` and `args: {image_id: id}` to see the plan. Supply
+`confirm: true` inside `args` to remove its files and thumbnails.
+
+Writes use the product's stock local `modFileMediaSource` under `assets`, in its product-ID
+directory. Supported thumbnails use bounded JPEG or PNG settings in a single child directory.
+Existing rows and files must agree and the folder must be free of symlinks and unmanaged files.
+The snapshot covers at most 200 file rows and 16 MiB of file bytes and must fit the site's
+`modxmcp.history_max_blob_bytes` limit. Undo by `changeset_id` restores the bytes, file modes,
+gallery metadata and cover. Undo gallery edits separately from physical removal of the product.
+
 ## Scenarios
 
 The site offers ready-made scenarios as MCP prompts. In Claude Code call them as commands

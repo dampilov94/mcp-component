@@ -5,6 +5,7 @@ use ModxMCP\ApiException;
 use ModxMCP\Context;
 use ModxMCP\Draft\DraftStore;
 use ModxMCP\Journal\Snapshot;
+use ModxMCP\Integration\GallerySubject;
 use ModxMCP\Journal\Subjects;
 use ModxMCP\Journal\Undo;
 use ModxMCP\Schema;
@@ -96,11 +97,17 @@ final class UndoAction extends WriteAction {
             throw new ApiException('undo_conflict', 'Some objects changed after the selected changesets. Nothing was undone.', $summary);
         }
 
-        list(, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $plan, $ids) {
+        list(, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $plan, $ids, $args) {
             Snapshot::takeNotes();
             foreach ($plan['items'] as $item) {
                 if ($item['open']) { $context->warnings[] = "{$item['subject']->kindName()} {$item['key']} is open in the manager by {$item['open']['username']}; undone anyway because force is set."; }
-                $tx->touchSubject($item['subject']);
+                $before = $tx->touchSubject($item['subject']);
+                if ($item['subject'] instanceof GallerySubject) {
+                    if (Snapshot::revision($before) !== $item['current_revision']) {
+                        throw new ApiException('undo_conflict', 'The gallery changed while preparing undo. Review the new state and retry.');
+                    }
+                    $item['subject']->assertNotOpen($args);
+                }
                 $item['subject']->restore($item['target'], $item['extra']);
                 foreach (Snapshot::takeNotes() as $note) { $context->warnings[] = $note; }
             }

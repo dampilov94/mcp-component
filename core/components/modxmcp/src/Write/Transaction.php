@@ -2,6 +2,8 @@
 namespace ModxMCP\Write;
 
 use ModxMCP\Context;
+use ModxMCP\ApiException;
+use ModxMCP\Integration\GallerySubject;
 use ModxMCP\Journal\ObjectSubject;
 use ModxMCP\Journal\Retention;
 use ModxMCP\Journal\Snapshot;
@@ -19,6 +21,7 @@ final class Transaction {
     private $lock;
     private $touched = array();
     private $released = false;
+    private $strict = false;
 
     /** @var int Transactions open in this process: the manager recorder stays silent while one that is not its own is. */
     private static $open = 0;
@@ -49,8 +52,23 @@ final class Transaction {
     public function touchSubject(Subject $subject) {
         $id = $subject->kindName() . ':' . $subject->key();
         if (!isset($this->touched[$id])) {
+            if ($subject instanceof GallerySubject) {
+                // Apply and recover gallery changes under the same resource lock, including its cover.
+                $this->touch($this->context->kinds->get('resource'), $subject->key());
+                if (!$this->strict) {
+                    foreach ($this->touched as $entry) {
+                        if ($entry['before'] !== null && !$this->context->blobs()->accepts(Snapshot::encode($entry['before']))) {
+                            throw new ApiException('validation_failed', 'The original product exceeds the configured history blob limit.');
+                        }
+                    }
+                    $this->strict = true;
+                }
+            }
             $this->lock->acquire($id);
             $before = $subject->capture();
+            if ($this->strict && $before !== null && !$this->context->blobs()->accepts(Snapshot::encode($before))) {
+                throw new ApiException('validation_failed', 'The original state exceeds the configured history blob limit.');
+            }
             $this->recordOutsideChange($subject, $before);
             $this->touched[$id] = array('subject' => $subject, 'extra' => array(), 'before' => $before, 'lock_before' => $this->lockOwner($subject));
         }
@@ -168,6 +186,7 @@ final class Transaction {
             $note = '';
             foreach (array($before, $after) as $state) {
                 if ($state !== null && $blobs->put(Snapshot::encode($state)) === null) {
+                    if ($this->strict) { throw new ApiException('validation_failed', 'The change exceeds the gallery history blob limit.'); }
                     $reversible = false;
                     $note = 'Snapshot is larger than modxmcp.history_max_blob_bytes; this change cannot be undone.';
                 }
@@ -176,6 +195,7 @@ final class Transaction {
             if ($after === null && $entry['extra']) {
                 $extraBlob = $blobs->put(json_encode($entry['extra'], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
                 if ($extraBlob === null) {
+                    if ($this->strict) { throw new ApiException('validation_failed', 'Related data exceeds the gallery history blob limit.'); }
                     $reversible = false;
                     $note = 'Related data is larger than modxmcp.history_max_blob_bytes; this delete cannot be fully undone.';
                 }
@@ -240,6 +260,7 @@ final class Transaction {
         foreach (array_reverse($this->touched) as $entry) {
             $subject = $entry['subject'];
             try {
+                if ($subject instanceof GallerySubject) { $subject->rollback($entry['before']); continue; }
                 if (Snapshot::revision($subject->capture()) !== Snapshot::revision($entry['before'])) {
                     $subject->restore($entry['before'], $entry['extra']);
                 }

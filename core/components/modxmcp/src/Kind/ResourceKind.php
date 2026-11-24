@@ -7,6 +7,7 @@ use ModxMCP\Context;
 use ModxMCP\Draft\DraftStore;
 use ModxMCP\Draft\ProductDraft;
 use ModxMCP\Draft\Drafts;
+use ModxMCP\Integration\GalleryOperations;
 use ModxMCP\Integration\MiniShop2;
 use ModxMCP\Integration\MiniShop2Gallery;
 use ModxMCP\Integration\Migx;
@@ -152,6 +153,19 @@ final class ResourceKind extends Kind {
                     'limit' => Schema::int('Page size. Default: ' . MiniShop2Gallery::DEFAULT_LIMIT . '.', array('minimum' => 1, 'maximum' => MiniShop2Gallery::MAX_LIMIT)),
                     'offset' => Schema::int('Skip images from the start. Default: 0.', array('minimum' => 0)),
                 ))),
+            'upload_gallery_image' => array(
+                'description' => 'Upload a JPEG or PNG to the product’s local gallery with thumbnails and file-level undo.',
+                'read_only' => false, 'needs_object' => true, 'handler' => 'opUploadGalleryImage', 'preflight' => 'planUploadGalleryImage',
+                'input' => Schema::obj(array(
+                    'filename' => Schema::str('A simple JPEG or PNG basename.'),
+                    'content_base64' => Schema::str('Image bytes encoded as base64, without a data URL.'),
+                ), array('filename', 'content_base64'))),
+            'delete_gallery_image' => array(
+                'description' => 'Plan or confirm deletion of a gallery image and its thumbnails. Undo restores the original bytes.',
+                'read_only' => false, 'needs_object' => true, 'handler' => 'opDeleteGalleryImage', 'plan' => 'planDeleteGalleryImage',
+                'input' => Schema::obj(array(
+                    'image_id' => Schema::int('Original image ID from list_gallery.', array('minimum' => 1)), 'confirm' => $confirm,
+                ), array('image_id'))),
         );
     }
 
@@ -193,6 +207,22 @@ final class ResourceKind extends Kind {
 
     public function opListGallery(Context $context, $object, array $args) {
         return MiniShop2Gallery::images($context, $object, $args);
+    }
+
+    public function planUploadGalleryImage(Context $context, $object, array $args) {
+        return GalleryOperations::planUpload($context, $object, $args);
+    }
+
+    public function opUploadGalleryImage(Context $context, Transaction $tx, $object, array $args) {
+        return GalleryOperations::upload($context, $tx, $object, $args);
+    }
+
+    public function planDeleteGalleryImage(Context $context, $object, array $args) {
+        return GalleryOperations::planDelete($context, $object, $args);
+    }
+
+    public function opDeleteGalleryImage(Context $context, Transaction $tx, $object, array $args) {
+        return GalleryOperations::delete($context, $tx, $object, $args);
     }
 
     /** The links of drafts follow the resources: after a call that may have added or removed a draft resource they are brought in line. */

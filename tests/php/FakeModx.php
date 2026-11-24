@@ -81,6 +81,12 @@ class FakeObject {
             'baseUrlRelative' => $make('baseUrlRelative', 'combo-boolean', true), 'allowedFileTypes' => $make('allowedFileTypes', 'textfield', ''), 'imageExtensions' => $make('imageExtensions', 'textfield', 'jpg,jpeg,png,gif,svg,webp'),
             'skipFiles' => $make('skipFiles', 'textfield', '.svn,.git,_notes,nbproject,.idea,.DS_Store'));
     }
+    public function getPropertyList() {
+        $configured = $this->get('properties');
+        $properties = (is_array($configured) ? $configured : array()) + $this->getDefaultProperties();
+        return array_column($properties, 'value', 'name');
+    }
+    public function getOption($key, $default = null) { return $this->fields[$key] ?? $this->modx->getOption($key, null, $default); }
     public function getSourceFile() {
         if (empty($this->fields['static'])) { return false; }
         // Setting tags [[++name]] are filled in, and a streaming media source puts its base path in front (the real
@@ -157,6 +163,7 @@ class FakeObject {
         if ($this->class === 'msProductData') { $this->modx->ms2DataRemoving($this->fields); }
         if ($this->class === 'msCategoryOption') { $this->modx->ms2LinkRemoving($this->fields); }
         if ($this->class === 'modResource' && isset($this->fields['class_key']) && $this->fields['class_key'] === 'msProduct') { $this->modx->ms2ProductRemoving($this->fields); }
+        if ($this->class === 'msProductFile' && $this->modx->galleryRemove) { ($this->modx->galleryRemove)($this); }
         // xPDO removes the composites first and the object last; the miniShop2 option's links need the option to find its key.
         if ($this->class !== 'msOption') { $this->modx->drop($this->class, $this->fields); }
         foreach (modX::$cascades as $spec) {
@@ -183,6 +190,14 @@ class FakeProductObject extends FakeObject {
     public function toArray($prefix = '', $raw = false) {
         $data = $this->xpdo->getObject('msProductData', array('id' => $this->fields['id']));
         return $this->fields + ($data ? $data->fields : array()) + array('vendor.id' => '0', 'vendor.name' => '');
+    }
+    public function updateProductImage() {
+        $query = $this->xpdo->newQuery('msProductFile', array('product_id' => $this->get('id'), 'parent' => 0, 'type' => 'image'));
+        $query->sortby('`rank`')->sortby('`id`')->limit(1);
+        $image = $this->xpdo->getObject('msProductFile', $query);
+        $thumb = $image ? $this->xpdo->getObject('msProductFile', array('parent' => $image->get('id'))) : null;
+        $this->xpdo->store('msProductData', array('image' => $image ? $image->get('url') : null, 'thumb' => $thumb ? $thumb->get('url') : null)
+            + $this->xpdo->row('msProductData', $this->get('id')));
     }
 }
 
@@ -229,6 +244,11 @@ class FakeStatement {
     public function fetch() { return $this->rows ? array_shift($this->rows) : false; }
     public function fetchColumn() { $row = $this->fetch(); return is_array($row) ? reset($row) : $row; }
     public function fetchAll() { $rows = $this->rows; $this->rows = array(); return $rows; }
+}
+class FakeGalleryWriteStatement {
+    private $write;
+    public function __construct(callable $write) { $this->write = $write; }
+    public function execute(array $params) { ($this->write)($params); return true; }
 }
 class FakeResponse {
     private $error; private $object;
@@ -910,6 +930,31 @@ class FakeParser {
 }
 
 class modX extends xPDO {
+    public $galleryRemove = null;
+
+    public function getTableName($class) {
+        $tables = array('msProductFile' => 'ms2_product_files', 'msProductData' => 'ms2_products');
+        return $this->escape($this->getOption('table_prefix') . $tables[$class]);
+    }
+
+    public function prepare($sql) {
+        if (!$this->getOption('fake_gallery_native_sql')) { return parent::prepare($sql); }
+        $files = $this->getTableName('msProductFile');
+        $data = $this->getTableName('msProductData');
+        if ($sql === 'DELETE FROM ' . $files . ' WHERE `product_id` = ?') {
+            return new FakeGalleryWriteStatement(function ($params) { $this->removeCollection('msProductFile', array('product_id' => $params[0])); });
+        }
+        if (strpos($sql, 'INSERT INTO ' . $files . ' (') === 0 && preg_match('/\(([^)]*)\) VALUES/', $sql, $match)) {
+            $columns = array_map(function ($column) { return trim($column, '`'); }, explode(',', $match[1]));
+            return new FakeGalleryWriteStatement(function ($params) use ($columns) { $this->store('msProductFile', array_combine($columns, $params)); });
+        }
+        if ($sql === 'UPDATE ' . $data . ' SET `image` = ?, `thumb` = ? WHERE `id` = ?') {
+            return new FakeGalleryWriteStatement(function ($params) {
+                $this->store('msProductData', array('image' => $params[0], 'thumb' => $params[1]) + $this->row('msProductData', $params[2]));
+            });
+        }
+        return parent::prepare($sql);
+    }
     use FakeResourceProcessors;
     use FakeMiniShop2;
     use FakePackageProcessors;
@@ -958,6 +1003,7 @@ class modX extends xPDO {
         array('msOption', 'msCategoryOption', 'option_id', array()),
         // miniShop2: a link type takes its product links.
         array('msLink', 'msProductLink', 'link', array()),
+        array('msProductFile', 'msProductFile', 'parent', array()),
         // Access control: a policy removes its child policies; a template its permissions and policies (which remove theirs).
         array('modAccessPolicy', 'modAccessPolicy', 'parent', array()),
         array('modAccessPolicyTemplate', 'modAccessPermission', 'template', array()),

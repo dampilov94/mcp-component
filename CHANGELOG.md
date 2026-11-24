@@ -239,6 +239,8 @@ After alpha3:
 - Read miniShop2 galleries through `resource.list_gallery`. Restore product data in place
   during undo to preserve gallery files and the current cover. Reject undo when it would
   remove a product with gallery files, including through a parent resource.
+- Upload JPEG and PNG photos and delete selected gallery images through miniShop2. Undo restores
+  the original and thumbnail bytes, file modes, gallery rows and cover on supported local sources.
 
 Stage 7 — manager:
 
