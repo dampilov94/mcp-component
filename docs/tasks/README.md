@@ -83,7 +83,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 44 | [Shareable draft preview](44-draft-preview.md) | `task/44-draft-preview` | merged |
 | 45 | [miniShop2 product drafts](45-product-drafts.md) | `task/45-product-drafts` | merged |
 | 46 | [ClientConfig values](46-clientconfig.md) | `task/46-clientconfig` | merged |
-| 47 | [miniShop2 gallery reads and safe restore](47-minishop2-gallery.md) | `task/47-minishop2-gallery` | in progress |
+| 47 | [miniShop2 gallery reads and safe restore](47-minishop2-gallery.md) | `task/47-minishop2-gallery` | merged |
 
 ## Doing several briefs in a row
 
@@ -146,9 +146,14 @@ Lessons from briefs 33–34:
   header before PHP sees it; anything a client must authenticate with goes in a custom header too.
 - A long executor run is lost when the host machine sleeps; commit work in progress early.
 
-## Handoff (2026-11-22)
+## Handoff (2026-11-24)
 
-- Task 46 is merged into local `main`. fordev has the component source from `8937458`.
+- Task 47 is merged into local `main`. fordev has the component source from `8681733`.
+  Verified all 3 files and saved originals in `.local/fordev-before-8681733/`. fordev advertised
+  gallery reads. Native MODX 2.8.8 and miniShop2 3.0.7 on a disposable site verified image
+  pages, checksums after undo, cover preservation and product and category removal guards.
+  The PHP 7.4 suite passed 5726 PHP checks and 41 Node tests.
+- Task 46 was deployed to fordev from `8937458` and merged into local `main`.
   Verified the 16 deployed files and saved backups in `.local/fordev-before-8937458/`.
   Confirmed optional absence and existing tools on fordev. Native ClientConfig 2.5.0 on
   local MODX 2.8.8 covered saving and restoring global and context values, permissions and

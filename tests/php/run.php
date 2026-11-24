@@ -7605,6 +7605,160 @@ $e = throws('product draft: forcing approval cannot recreate missing product dat
 check('product draft: missing original data still leaves the shadow intact', $e && $e->errorCode === 'validation_failed'
     && $sSite->getCount('modResource', array('id' => $pdPriceOnly)) === 1);
 
+// Product gallery metadata is separate from generic product snapshots and product-data restoration.
+$sSite->store('msOption', array('key' => 'gallery_test_option', 'caption' => 'Gallery fixture option', 'type' => 'textfield'));
+$gProduct = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('class_key' => 'msProduct', 'parent' => $catPhones,
+    'pagetitle' => 'Gallery fixture product'), 'relations' => array('ms2_data' => array('price' => 20),
+    'ms2_options' => array('gallery_test_option' => array('Original option')), 'ms2_categories' => array($catAccessories))));
+$gId = $gProduct['id'];
+$gRead = function () use ($call, $sRead, $gId) { return $call($sRead, 'get', array('kind' => 'resource', 'id' => $gId)); };
+$gOriginalRevision = $gRead()['revision'];
+$gRows = array(
+    array('id' => 9002, 'rank' => 5, 'name' => 'Second tie', 'url' => '/assets/gallery/b.jpg?rev=2', 'active' => 0),
+    array('id' => 9001, 'rank' => 5, 'name' => 'Первое фото', 'description' => 'Подпись', 'url' => '/assets/gallery/a.jpg'),
+    array('id' => 9003, 'rank' => 20, 'name' => 'Credential-bearing URL', 'url' => 'https://example.invalid/c.jpg?token=fixture-url-credential'),
+    array('id' => 9004, 'rank' => 1, 'type' => 'pdf', 'name' => 'Document', 'url' => '/assets/gallery/file.pdf'),
+    array('id' => 9005, 'rank' => 0, 'parent' => 9001, 'url' => 'https://example.invalid/gallery/a-small.jpg'),
+    array('id' => 9006, 'rank' => 1, 'parent' => 9001, 'url' => '/assets/gallery/a-large.jpg'),
+    array('id' => 9007, 'rank' => 2, 'product_id' => $phoneId, 'url' => '/assets/gallery/other.jpg'),
+    array('id' => 9008, 'rank' => 0, 'parent' => 9002, 'product_id' => $phoneId, 'url' => '/assets/gallery/wrong-thumbnail.jpg'),
+);
+foreach ($gRows as $gRow) {
+    $sSite->store('msProductFile', $gRow + array('product_id' => $gId, 'source' => 1, 'parent' => 0, 'type' => 'image',
+        'description' => null, 'active' => 1, 'path' => 'fixture-storage-path', 'file' => 'fixture-internal-name',
+        'properties' => '{"credential":"fixture-media-credential"}'));
+}
+$gFiles = $sSite->tableDump('msProductFile');
+$gOptionSet = $sRelations($gId);
+$gDetails = $call($sRead, 'describe', array('kind' => 'resource'));
+$gOperation = array_column($gDetails['operations'], null, 'op')['list_gallery'];
+check('gallery: describe declares a read-only operation with bounded paging', $gOperation['read_only']
+    && $gOperation['input']['properties']['limit']['maximum'] === 200 && $gOperation['input']['properties']['offset']['minimum'] === 0);
+$gChangeset = $sRead->journal()->lastChangesetId();
+$gPage = $dInvoke($sRead, 'list_gallery', $gId, array('limit' => 1));
+check('gallery: only this product’s root images are counted and equal ranks are sorted by ID', $gPage['total'] === 3
+    && $gPage['images'] === array(array('id' => 9001, 'name' => 'Первое фото', 'description' => 'Подпись', 'rank' => 5,
+        'active' => true, 'url' => '/assets/gallery/a.jpg', 'thumbnail' => 'https://example.invalid/gallery/a-small.jpg')));
+$gLastPage = $dInvoke($sRead, 'list_gallery', $gId, array('limit' => 2, 'offset' => 1));
+check('gallery: pagination preserves ordering, activity and stored safe URLs', $gLastPage['total'] === 3
+    && array_column($gLastPage['images'], 'id') === array(9002, 9003) && !$gLastPage['images'][0]['active']
+    && $gLastPage['images'][0]['url'] === '/assets/gallery/b.jpg?rev=2' && !isset($gLastPage['images'][0]['thumbnail']));
+check('gallery: credentials and raw storage details are omitted', $gLastPage['images'][1]['url'] === ''
+    && !preg_match('/fixture-(?:url-credential|media-credential|storage-path|internal-name)/', json_encode(array($gPage, $gLastPage))));
+check('gallery: read leaves the journal and the existing resource revision unchanged', $sRead->journal()->lastChangesetId() === $gChangeset
+    && $gRead()['revision'] === $gOriginalRevision && $dInvoke($sRead, 'list_gallery', $gId, array('offset' => 30))['images'] === array());
+
+foreach (array(
+    array($sRead, $docId, array(), 'validation_failed'),
+    array($sRead, $gId, array('limit' => 201), 'validation_failed'),
+    array($sRead, $gId, array('offset' => -1), 'validation_failed'),
+    array($sActor('read', array('denied_groups' => array('minishop2'))), $gId, array(), 'unavailable'),
+    array($sActor('draft_only'), $gId, array(), 'forbidden_scope'),
+    array($sPlain, $news['id'], array(), 'unavailable'),
+) as $gIndex => list($gActor, $gTarget, $gArgs, $gCode)) {
+    $e = throws('gallery: refuses an invalid or unavailable read ' . $gIndex, ApiException::class, function () use ($dInvoke, $gActor, $gTarget, $gArgs) {
+        $dInvoke($gActor, 'list_gallery', $gTarget, $gArgs);
+    });
+    check('gallery: expected refusal reason ' . $gIndex, $e && $e->errorCode === $gCode);
+}
+
+$sSite->store('msProductLink', array('link' => 990, 'master' => $gId, 'slave' => $phoneId));
+$sSite->store('msProductLink', array('link' => 991, 'master' => $phoneId, 'slave' => $gId));
+$gLinks = $sSite->tableDump('msProductLink');
+$sSite->store('msProductData', array('image' => '/assets/gallery/old-cover.jpg', 'thumb' => '/assets/gallery/old-thumb.jpg') + $sSite->row('msProductData', $gId));
+$gEdited = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $gId, 'relations' => array('ms2_data' => array('price' => 80),
+    'ms2_options' => array('gallery_test_option' => array('Replaced')), 'ms2_categories' => array())));
+$sSite->store('msProductData', array('image' => '/assets/gallery/new-cover.jpg', 'thumb' => '/assets/gallery/new-thumb.jpg') + $sSite->row('msProductData', $gId));
+$gUndo = function ($change, array $flags = array()) use ($call, $sEditor) {
+    return $call($sEditor, 'undo', array('changeset_id' => $change['changeset_id'], 'confirm' => true) + $flags);
+};
+$e = throws('gallery: a later cover change is still a revision conflict', ApiException::class, function () use ($gUndo, $gEdited) { $gUndo($gEdited); });
+check('gallery: ordinary revision conflicts retain their existing guard', $e && $e->errorCode === 'undo_conflict');
+$gUndo($gEdited, array('force' => true));
+$gRestored = $sRelations($gId);
+check('gallery: editing undo preserves gallery rows, links and the latest cover', $sSite->tableDump('msProductFile') === $gFiles
+    && $sSite->tableDump('msProductLink') === $gLinks && $gRestored['ms2_data']['image'] === '/assets/gallery/new-cover.jpg'
+    && $gRestored['ms2_data']['thumb'] === '/assets/gallery/new-thumb.jpg');
+check('gallery: in-place restore still restores price, options and categories', $gRestored['ms2_data']['price'] === 20.0
+    && $gRestored['ms2_options'] === $gOptionSet['ms2_options'] && $gRestored['ms2_categories'] === $gOptionSet['ms2_categories']);
+$gTitle = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $gId, 'fields' => array('pagetitle' => 'Changed title')));
+$gUndo($gTitle);
+check('gallery: ordinary undo of a product title leaves the gallery and links intact', $sSite->tableDump('msProductFile') === $gFiles
+    && $sSite->tableDump('msProductLink') === $gLinks && $gRead()['fields']['pagetitle'] === 'Gallery fixture product');
+
+$e = throws('gallery: force cannot undo creation of a product with gallery files', ApiException::class, function () use ($gUndo, $gProduct) {
+    $gUndo($gProduct, array('force' => true));
+});
+check('gallery: product-removing undo leaves the rows intact', $e && $e->errorCode === 'not_reversible'
+    && $sSite->tableDump('msProductFile') === $gFiles && $gRead()['fields']['class_key'] === 'msProduct');
+$gConverted = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Converted gallery fixture', 'parent' => $catPhones)));
+$gConversion = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $gConverted['id'], 'fields' => array('class_key' => 'msProduct')));
+$sSite->store('msProductFile', array('id' => 9010, 'product_id' => $gConverted['id'], 'parent' => 0, 'type' => 'pdf'));
+$e = throws('gallery: conversion undo is blocked even with an unlisted non-image file', ApiException::class, function () use ($gUndo, $gConversion) {
+    $gUndo($gConversion, array('force' => true));
+});
+check('gallery: class conversion is a product-removing operation', $e && $e->errorCode === 'not_reversible'
+    && $sSite->row('modResource', $gConverted['id'])['class_key'] === 'msProduct');
+$gMissingData = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('class_key' => 'msProduct', 'parent' => $catPhones,
+    'pagetitle' => 'Gallery without a data row')));
+$sSite->removeCollection('msProductData', array('id' => $gMissingData['id']));
+$gDataCreated = $call($sEditor, 'update', array('kind' => 'resource', 'id' => $gMissingData['id'], 'relations' => array('ms2_data' => array('price' => 10))));
+$sSite->removeCollection('msProductData', array('id' => $gMissingData['id']));
+$sSite->store('msProductFile', array('id' => 9011, 'product_id' => $gMissingData['id'], 'parent' => 0, 'type' => 'image'));
+$e = throws('gallery: undo toward empty data checks gallery even before a native save could create a row', ApiException::class, function () use ($gUndo, $gDataCreated) {
+    $gUndo($gDataCreated, array('force' => true));
+});
+check('gallery: gallery rows survive attempted restoration to an explicitly empty data snapshot', $e && $e->errorCode === 'not_reversible'
+    && $sSite->getCount('msProductFile', array('product_id' => $gMissingData['id'])) === 1);
+
+$gNoFiles = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('class_key' => 'msProduct', 'parent' => $catPhones,
+    'pagetitle' => 'Empty gallery fixture')));
+foreach (array('msProductData', 'msProductFile') as $gClass) {
+    $sSite->options['fake_query_unavailable_class'] = $gClass;
+    $e = throws('gallery: unreadable product state cannot be removed by undo', ApiException::class, function () use ($gUndo, $gNoFiles) {
+        $gUndo($gNoFiles, array('force' => true));
+    });
+    check('gallery: unknown availability is not reversible', $e && $e->errorCode === 'not_reversible');
+}
+unset($sSite->options['fake_query_unavailable_class']);
+$sSite->options['modxmcp.disabled_groups'] = 'minishop2';
+throws('gallery: site group switch disables gallery reads', ApiException::class, function () use ($dInvoke, $sActor, $gId) {
+    $dInvoke($sActor('read'), 'list_gallery', $gId);
+});
+$e = throws('gallery: undo of product creation requires the enabled integration', ApiException::class, function () use ($call, $sActor, $gNoFiles) {
+    $call($sActor('admin'), 'undo', array('changeset_id' => $gNoFiles['changeset_id'], 'confirm' => true, 'force' => true));
+});
+check('gallery: disabled integration leaves current data intact', $e && $e->errorCode === 'not_reversible'
+    && $sSite->getCount('msProductData', array('id' => $gNoFiles['id'])) === 1);
+unset($sSite->options['modxmcp.disabled_groups']);
+$gUndo($gNoFiles);
+check('gallery: verified empty gallery does not prevent product-removing undo', $sSite->row('modResource', $gNoFiles['id']) === null);
+
+$gCategory = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Undo category', 'class_key' => 'msCategory')));
+$gSubcategory = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Nested category',
+    'class_key' => 'msCategory', 'parent' => $gCategory['id'])));
+$gNestedProduct = $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Nested product',
+    'class_key' => 'msProduct', 'parent' => $gSubcategory['id'])));
+$sSite->store('msProductFile', array('id' => 9012, 'product_id' => $gNestedProduct['id'], 'parent' => 0, 'type' => 'image'));
+$e = throws('gallery: undoing a non-product parent would also remove its nested product gallery', ApiException::class, function () use ($gUndo, $gCategory) {
+    $gUndo($gCategory, array('force' => true));
+});
+check('gallery: subtree guard preserves the parent, descendant and file records', $e && $e->errorCode === 'not_reversible'
+    && $sSite->getCount('modResource', array('id' => $gCategory['id'])) === 1
+    && $sSite->getCount('modResource', array('id' => $gNestedProduct['id'])) === 1
+    && $sSite->getCount('msProductFile', array('id' => 9012)) === 1);
+$sSite->removeCollection('msProductFile', array('id' => 9012));
+$sSite->options['modxmcp.disabled_groups'] = 'minishop2';
+$e = throws('gallery: a category removal cannot verify descendant data while miniShop2 is disabled', ApiException::class, function () use ($gUndo, $gCategory) {
+    $gUndo($gCategory, array('force' => true));
+});
+check('gallery: disabled integration leaves the descendant product intact', $e && $e->errorCode === 'not_reversible'
+    && $sSite->getCount('msProductData', array('id' => $gNestedProduct['id'])) === 1);
+unset($sSite->options['modxmcp.disabled_groups']);
+$gUndo($gCategory, array('force' => true));
+check('gallery: a category with verified empty galleries can still be undone', $sSite->row('modResource', $gCategory['id']) === null
+    && $sSite->row('modResource', $gNestedProduct['id']) === null);
+
 // ClientConfig values use native processor contracts for global changes and per-context overrides.
 $ccDir = $siteDir . '/clientconfig46';
 $ccCore = $ccDir . '/core/components/clientconfig/';

@@ -39,3 +39,35 @@ access and draft-only refusal. Cover in-place undo with product files and galler
 intact, existing option/category restore, a changed cover after the old snapshot, and refusal
 over a product with gallery records if undo would remove it. Run `npm run check` and `npm test`
 on PHP 7.4. Architect will test with native miniShop2 3.0.7 and a harmless local fixture image.
+
+## Report
+
+Based on `main` at `3e557c3`.
+
+- `resource.list_gallery` reads selected columns from `msProductFile`, using the optional
+  integration and token group gates. It lists only root images and takes the first stored
+  thumbnail URL in rank and ID order for each image. The response omits raw storage metadata,
+  unsupported URL schemes and recognized credential-bearing URLs.
+- `ResourceKind` restores existing `msProductData` in place and leaves its current cover URLs
+  intact. Restoration still supports recreating a missing data row with the correct media
+  source and restores options and categories through the existing relations.
+- Removing product data or a product requires successful reads of the product and gallery
+  tables. Physical removal verifies the resource subtree in bounded pages, covering galleries on
+  descendants as well. Force cannot bypass either check. Generic product snapshots still
+  exclude gallery rows and media bytes.
+- The architect verified gallery paging, native product restore, cover preservation and
+  physical file hashes on disposable MODX 2.8.8 with miniShop2 3.0.7. The native checks also
+  verified refusal for an undo that would remove a product or a category with gallery files.
+- `npm run check` and `npm test` passed in WSL on PHP 7.4.33. All 5726 fixture checks and
+  41 Node tests passed. The fixture includes a gallery-free subtree with over a thousand
+  descendants and a nested product gallery protected from category removal.
+
+## Review
+
+- On MODX 2.8.8 with miniShop2 3.0.7, gallery pages returned the requested product's top-level
+  images and their stored thumbnails. Ordinary and forced
+  undo left the gallery rows and physical file hashes intact. Forced undo of a product and of
+  its parent category was refused with the original rows and files still present.
+- Deployed and verified 3 files on fordev. Its resource description exposes `list_gallery` as
+  read-only. The stand has no sample products, so gallery rows and undo were tested on the
+  disposable MODX instance.

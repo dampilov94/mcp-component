@@ -126,6 +126,19 @@ drafts. The manager plan shows the proposed price changes. Applying saves the ed
 explicitly staged prices, and undo restores both the product and the draft. Use Share preview
 to review edited text on an HTTPS site.
 
+### miniShop2 product galleries
+
+Use `modx_describe {kind: "resource"}` to find `list_gallery`. With the miniShop2 group
+available to the token, call `modx_invoke {kind: "resource", id: product_id, op: "list_gallery",
+args: {limit: 20, offset: 0}}`. The default page size is 50 and the maximum is 200.
+The result contains `total` and `images`, sorted by rank and ID. Each image has `id`, `name`,
+`description`, `rank`, `active` and its stored `url`. `thumbnail` is included when a stored
+image thumbnail URL is available. The operation reads metadata from the site database.
+
+Undoing a product edit preserves its current cover and gallery. If an undo would remove a
+product or its data row while gallery records exist, the operation is refused. This also
+applies to products removed when a parent resource is undone.
+
 ## Scenarios
 
 The site offers ready-made scenarios as MCP prompts. In Claude Code call them as commands
