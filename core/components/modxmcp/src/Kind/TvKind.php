@@ -6,6 +6,8 @@ use ModxMCP\Context;
 use ModxMCP\Schema;
 
 final class TvKind extends Kind {
+    use RenameOperation;
+
     public function name() { return 'tv'; }
 
     public function label() { return 'Template variable'; }
@@ -140,7 +142,7 @@ final class TvKind extends Kind {
                 'needs_object' => false, 'input' => Schema::obj(), 'handler' => 'opListInputTypes'),
             'suggest_type' => array('description' => 'Suggest TV input types for a need described in English or Russian.', 'read_only' => true,
                 'needs_object' => false, 'input' => Schema::obj(array('description' => Schema::str()), array('description')), 'handler' => 'opSuggestType'),
-        );
+        ) + $this->renameOperation();
     }
     public function opListInputTypes(Context $context, $object, array $args): array {
         return TvInputTypes::listTvInputTypes($context->modx);

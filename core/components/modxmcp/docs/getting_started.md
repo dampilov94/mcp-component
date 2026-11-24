@@ -304,6 +304,13 @@ newly protected key can prevent restoration. Create and manage definitions in Cl
 - `modx_find_usages {kind, id|name}` — where a chunk, snippet, TV, template, category or
   page is used. Run it before renaming or deleting. Matching is textual: a name built at
   run time is not found.
+- `modx_invoke {kind: "chunk"|"snippet"|"tv", id, op: "rename", args: {new_name}}` renames an element
+  together with its exact references (tags, template parameters, Fenom and PHP calls, default
+  properties, MIGX). Without `confirm` it returns the plan: per object the lines with the old and
+  the new text, the references that cannot be rewritten safely (`manual`) and `revisions`. Confirm with
+  `confirm: true, expected_revisions: <revisions>`: one changeset, refused if anything changed
+  meanwhile, one `modx_undo` reverts it. A static element keeps its file name; TV values on pages are
+  stored by id and stay.
 - `modx_replace {find, replacement, dry_run: true}` shows what would change and returns
   `revisions`; call it again with `expected_revisions: <that map>` to apply. Everything is
   one changeset: if any object changed in between or the result would break PHP, nothing

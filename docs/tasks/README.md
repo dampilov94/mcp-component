@@ -88,9 +88,9 @@ below) or append a `## Review` section to the brief with numbered change request
 | 49 | [Redirector for alias changes](49-redirector.md) | `task/49-redirector` | merged |
 | 50 | [Search and line edits in files](50-file-lines.md) | `task/50-file-lines` | merged |
 | 51 | [Log repeats, TV sources, API pause, history by token](51-small-wins.md) | `task/51-small-wins` | merged |
-| 52 | [check_page renders drafts](52-check-draft.md) | `task/52-check-draft` | ready for the executor |
-| 53 | [miniShop2 vendors, deliveries, payments](53-ms2-references.md) | `task/53-ms2-references` | ready for the executor |
-| 54 | [Rename with references](54-rename.md) | `task/54-rename` | ready for the executor |
+| 52 | [check_page renders drafts](52-check-draft.md) | `task/52-check-draft` | merged |
+| 53 | [miniShop2 vendors, deliveries, payments](53-ms2-references.md) | `task/53-ms2-references` | merged |
+| 54 | [Rename with references](54-rename.md) | `task/54-rename` | merged |
 
 ## Doing several briefs in a row
 
@@ -209,3 +209,10 @@ Lessons from briefs 33–34:
   preserved existing site content and allowed a new admin token. On Devshop, the package list
   shows alpha3 installed. The existing MCP connection could read site info, the dependency
   graph and history.
+
+Lessons from briefs 50–54:
+
+- The plugin body and its events live in the database. A file-only deploy to the stand does not
+  change them: after a deploy that changes `elements/plugins/recorder.php` or the plugin's events,
+  update plugin `modxMCP` on the stand (its `content` and `events`) before the stand checks. A
+  package install does this itself (`Recorder::syncPlugin`).

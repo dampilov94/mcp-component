@@ -2,6 +2,8 @@
 namespace ModxMCP\Kind;
 
 final class SnippetKind extends Kind {
+    use RenameOperation;
+
     public function name() { return 'snippet'; }
 
     public function label() { return 'Snippet'; }
@@ -27,7 +29,7 @@ final class SnippetKind extends Kind {
         );
     }
 
-    public function operations() { return $this->staticOperations(); }
+    public function operations() { return $this->staticOperations() + $this->renameOperation(); }
 
     public function relationSpecs() {
         return array('property_sets' => $this->propertySetRelation());

@@ -5916,6 +5916,31 @@ check('tv: another field update keeps the input options', $ipCaption['changed'] 
 $call($ipDev, 'undo', array('changeset_id' => $ipEdit['changeset_id'], 'force' => true, 'confirm' => true));
 check('tv: undo restores the input options', (array) $call($ipDev, 'get', array('kind' => 'tv', 'id' => $ipTv['id']))['fields']['input_properties'] == array('configs' => 'gallery', 'allowBlank' => 'true'));
 
+// MIGX configurations follow a renamed chunk and TV (task 54)
+$mSite->store('modChunk', array('id' => 901, 'name' => 'слайд', 'snippet' => '<div>слайд</div>', 'category' => 0, 'static' => 0, 'static_file' => '', 'source' => 0, 'locked' => 0, 'description' => '', 'properties' => 0, 'property_preprocess' => 0));
+$mSite->store('modTemplateVar', array('id' => 902, 'name' => 'заголовок', 'caption' => 'Заголовок', 'type' => 'text', 'category' => 0, 'description' => '', 'locked' => 0, 'rank' => 0, 'elements' => '', 'default_text' => '', 'display' => 'default'));
+$mFieldCountBefore = count($mSite->tableDump('migxFormtabField'));
+$mRn = $call($mDev, 'create', array('kind' => 'migx_config', 'fields' => array('name' => 'rename-test',
+    'formtabs' => array(array('caption' => 'Вкладка', 'fields' => array(array('field' => 'a', 'caption' => 'A', 'inputTV' => 'заголовок'), array('field' => 'b', 'caption' => 'B', 'inputTV' => 'заголовок2'), array('field' => 'c', 'caption' => 'C', 'inputTVtype' => 'text')))),
+    'columns' => array(array('header' => 'Слайд', 'dataIndex' => 'a', 'renderchunktpl' => '@CHUNK слайд'), array('header' => 'Другой', 'dataIndex' => 'b', 'renderchunktpl' => 'слайд2')))));
+$mRnId = $mRn['id'];
+$mRnPlan = $call($mDev, 'invoke', array('kind' => 'chunk', 'id' => 901, 'op' => 'rename', 'args' => array('new_name' => 'slide')));
+check('migx rename: the plan names the configuration and the path of the reference', count($mRnPlan['references']) === 1 && $mRnPlan['references'][0]['kind'] === 'migx_config' && $mRnPlan['references'][0]['id'] === $mRnId
+    && $mRnPlan['references'][0]['fields'] === array('columns') && $mRnPlan['references'][0]['changes'][0]['where'] === '[0].renderchunktpl' && $mRnPlan['references'][0]['changes'][0]['new'] === '@CHUNK slide');
+$mRnDone = $call($mDev, 'invoke', array('kind' => 'chunk', 'id' => 901, 'op' => 'rename', 'args' => array('new_name' => 'slide', 'confirm' => true, 'expected_revisions' => $mRnPlan['revisions'])));
+$mRnGot = $call($mDev, 'get', array('kind' => 'migx_config', 'id' => $mRnId))['fields'];
+check('migx rename: the chunk of a column renderer follows, a longer name and the form tabs stay, one changeset', $mRnGot['columns'][0]->renderchunktpl === '@CHUNK slide' && $mRnGot['columns'][1]->renderchunktpl === 'слайд2' && $mRnGot['columns'][0]->header === 'Слайд'
+    && $mSite->row('modChunk', 901)['name'] === 'slide' && $mRnDone['objects_rewritten'] === 1 && $mRnDone['changeset_id'] > 0);
+$mRnTvPlan = $call($mDev, 'invoke', array('kind' => 'tv', 'id' => 902, 'op' => 'rename', 'args' => array('new_name' => 'title')));
+$mRnTvDone = $call($mDev, 'invoke', array('kind' => 'tv', 'id' => 902, 'op' => 'rename', 'args' => array('new_name' => 'title', 'confirm' => true, 'expected_revisions' => $mRnTvPlan['revisions'])));
+$mRnGot = $call($mDev, 'get', array('kind' => 'migx_config', 'id' => $mRnId))['fields'];
+check('migx rename: inputTV names a TV and follows it, with the mirrored form tab rows kept', $mRnGot['formtabs'][0]->fields[0]->inputTV === 'title' && $mRnGot['formtabs'][0]->fields[1]->inputTV === 'заголовок2' && $mRnTvDone['references_rewritten'] === 1
+    && count($mSite->tableDump('migxFormtabField')) === $mFieldCountBefore + 3);
+$call($mDev, 'undo', array('changeset_id' => $mRnTvDone['changeset_id'], 'confirm' => true));
+$call($mDev, 'undo', array('changeset_id' => $mRnDone['changeset_id'], 'confirm' => true));
+$mRnGot = $call($mDev, 'get', array('kind' => 'migx_config', 'id' => $mRnId))['fields'];
+check('migx rename: undo puts the names and the configuration back', $mRnGot['formtabs'][0]->fields[0]->inputTV === 'заголовок' && $mRnGot['columns'][0]->renderchunktpl === '@CHUNK слайд' && $mSite->row('modChunk', 901)['name'] === 'слайд' && $mSite->row('modTemplateVar', 902)['name'] === 'заголовок');
+
 // --- VirtualPage: kinds vp_event, vp_handler, vp_route, the route tester, help topic (task 24) ---
 $vpDir = $siteDir . '/vp24';
 $vpCore = $vpDir . '/core/components/virtualpage/';
@@ -9956,6 +9981,284 @@ check('api switch: the missing setting row was created in the component namespac
 $swSite->options['modxmcp.enabled'] = '1';
 $swSite->store('modSystemSetting', array('key' => 'modxmcp.enabled', 'value' => '1', 'namespace' => 'modxmcp', 'area' => 'modxmcp:main', 'xtype' => 'combo-boolean'));
 check('api switch: an existing row is updated in place', $swApi->set(false)['changed'] === true && $swSite->getCount('modSystemSetting', array('key' => 'modxmcp.enabled')) === 1 && $swApi->enabled() === false);
+
+// --- Rename with references (task 54): the text rules ---
+use ModxMCP\Code\ReferenceRewriter;
+use ModxMCP\Code\JsonReferences;
+$rwText = function ($kind, $old, $new, $text, array $options = array()) { return ReferenceRewriter::rewrite($kind, $old, $new, $text, $options)['text']; };
+$rwFenom = array('fenom' => true);
+$rwPhp = array('php' => true);
+check('rename rules: chunk tags with every prefix and suffix, nothing longer', $rwText('chunk', 'card', 'tile',
+    '[[$card]] [[!$card]] [[$card? &a=`1`]] [[!$card:ucase]] [[$card@set]] [[ $card]] [[$card_big]] [[$cardigan]] [[$card.row]] [[$card/x]] [[$my_card]] [[card]] [[*card]] [[+card]] [[$Card]]')
+    === '[[$tile]] [[!$tile]] [[$tile? &a=`1`]] [[!$tile:ucase]] [[$tile@set]] [[ $tile]] [[$card_big]] [[$cardigan]] [[$card.row]] [[$card/x]] [[$my_card]] [[card]] [[*card]] [[+card]] [[$Card]]');
+check('rename rules: template parameters of a tag, by the graph\'s key rule', $rwText('chunk', 'card', 'tile',
+    '[[x? &tpl=`card` &rowChunk=`card` &tplWrapper=` card ` &outerTPL=`card` &parents=`card` &tplOther=`card_big`]]')
+    === '[[x? &tpl=`tile` &rowChunk=`tile` &tplWrapper=` tile ` &outerTPL=`tile` &parents=`card` &tplOther=`card_big`]]');
+check('rename rules: tag comments are skipped, also nested ones', $rwText('chunk', 'card', 'tile', '[[- [[$card]] ]] [[$card]] [[-a [[-b]] [[$card]] ]]') === '[[- [[$card]] ]] [[$tile]] [[-a [[-b]] [[$card]] ]]');
+$rwFenomText = "{include 'card'} {include \"chunk:card\"} {insert 'card'} {extends 'card'} {'card' | chunk} {'card'|chunk : ['a' => 1]} {\$_modx->getChunk('card')} {\$_modx->parseChunk(\"card\", [])} {\$_modx->runSnippet('card')} "
+    . "{'tpl' => 'card'} {'tplOuter' => \"card\"} {'rowChunk' => 'card'} {'limit' => 'card'} {include 'card_big'} {include 'template:card'} {include \$card} {include 'card' ~ \$x} {include 'a' ~ 'card'} {'card' | snippet} {* {include 'card'} *}{ignore}{include 'card'}{/ignore}";
+$rwFenomExpected = "{include 'tile'} {include \"chunk:tile\"} {insert 'tile'} {extends 'tile'} {'tile' | chunk} {'tile'|chunk : ['a' => 1]} {\$_modx->getChunk('tile')} {\$_modx->parseChunk(\"tile\", [])} {\$_modx->runSnippet('card')} "
+    . "{'tpl' => 'tile'} {'tplOuter' => \"tile\"} {'rowChunk' => 'tile'} {'limit' => 'card'} {include 'card_big'} {include 'template:card'} {include \$card} {include 'card' ~ \$x} {include 'a' ~ 'card'} {'card' | snippet} {* {include 'card'} *}{ignore}{include 'card'}{/ignore}";
+check('rename rules: every Fenom form of a chunk, and nothing built at run time, of another type or in a comment', $rwText('chunk', 'card', 'tile', $rwFenomText, $rwFenom) === $rwFenomExpected);
+check('rename rules: Fenom forms are left alone in a text that is not Fenom', $rwText('chunk', 'card', 'tile', "{include 'card'} [[\$card]]") === "{include 'card'} [[\$tile]]");
+check('rename rules: PHP getChunk and parseChunk in code, with other forms left alone', $rwText('chunk', 'card', 'tile',
+    "\$modx->getChunk('card'); \$modx->getChunk(\"card\", \$p); \$modx->parseChunk('card', \$p); getChunk('card_big'); \$modx->getChunk('card' . \$x); \$modx->runSnippet('card'); \$o->get('card'); // getChunk('card')", $rwPhp)
+    === "\$modx->getChunk('tile'); \$modx->getChunk(\"tile\", \$p); \$modx->parseChunk('tile', \$p); getChunk('card_big'); \$modx->getChunk('card' . \$x); \$modx->runSnippet('card'); \$o->get('card'); // getChunk('tile')");
+$rwBindings = ReferenceRewriter::rewrite('chunk', 'card', 'tile', "@CHUNK card\n@chunk card_big\n@CHUNK card", array('tvfield' => true));
+check('rename rules: @CHUNK bindings of a TV field', $rwBindings['text'] === "@CHUNK tile\n@chunk card_big\n@CHUNK tile" && count($rwBindings['changes']) === 2);
+check('rename rules: Cyrillic names, with a longer Cyrillic name and a different case left alone', $rwText('chunk', 'карточка', 'tile', '[[$карточка]] [[$карточка_ряд]] [[$карточкаX]] [[$Карточка]] [[x? &tpl=`карточка`]]', $rwFenom)
+    === '[[$tile]] [[$карточка_ряд]] [[$карточкаX]] [[$Карточка]] [[x? &tpl=`tile`]]');
+check('rename rules: Cyrillic name boundary is Unicode-aware', $rwText('chunk', 'шапка', 'head', '[[$шапка]] [[$шапкаВерх]] [[$шапка-2]]') === '[[$head]] [[$шапкаВерх]] [[$шапка-2]]');
+$rwSnippet = "[[worker]] [[!worker]] [[worker? &a=`1`]] [[!worker@set:ucase]] [[worker.extra]] [[worker_more]] [[\$worker]] [[*worker]] [[+worker]] [[Worker]] [[x? &s=`worker`]] {'worker' | snippet} {'!worker' | snippet} {'worker' | chunk} {\$_modx->runSnippet('worker')} {\$_modx->runSnippet('!worker', [])} runSnippet('worker') runSnippet(\"!worker\") runSnippet('worker2') runSnippet('worker' . \$x)";
+check('rename rules: snippet tags and calls in Fenom and PHP, with other types and longer names left alone', $rwText('snippet', 'worker', 'job', $rwSnippet, array('fenom' => true, 'php' => true))
+    === "[[job]] [[!job]] [[job? &a=`1`]] [[!job@set:ucase]] [[worker.extra]] [[worker_more]] [[\$worker]] [[*worker]] [[+worker]] [[Worker]] [[x? &s=`worker`]] {'job' | snippet} {'!job' | snippet} {'worker' | chunk} {\$_modx->runSnippet('job')} {\$_modx->runSnippet('!job', [])} runSnippet('job') runSnippet(\"!job\") runSnippet('worker2') runSnippet('worker' . \$x)");
+$rwTv = ReferenceRewriter::rewrite('tv', 'price', 'cost', "[[*price]] [[!*price]] [[*price:default=`0`]] [[*price_old]] [[+price]] [[\$price]] [[price]] [[x? &includeTVs=`old, price ,other` &processTVs=`price` &tvFilters=`price==5`]] {\$_modx->resource.price} {\$_modx->resource['price']} {\$_modx->resource.price_old} getTVValue('price') getTVValue('price' . \$x) ->getTVValue(\"price\")",
+    array('fenom' => true, 'php' => true, 'placeholders' => true));
+check('rename rules: TV tags, placeholders where allowed, include lists, Fenom and PHP forms', $rwTv['text'] === "[[*cost]] [[!*cost]] [[*cost:default=`0`]] [[*price_old]] [[+cost]] [[\$price]] [[price]] [[x? &includeTVs=`old, cost ,other` &processTVs=`cost` &tvFilters=`price==5`]] {\$_modx->resource.cost} {\$_modx->resource['cost']} {\$_modx->resource.price_old} getTVValue('cost') getTVValue('price' . \$x) ->getTVValue(\"cost\")");
+$rwTvNoPh = ReferenceRewriter::rewrite('tv', 'price', 'cost', '[[*price]] [[+price]]', array());
+check('rename rules: a TV placeholder outside the linked elements is reported, not rewritten', $rwTvNoPh['text'] === '[[*cost]] [[+price]]' && count($rwTvNoPh['manual']) === 1 && strpos($rwTvNoPh['manual'][0]['reason'], 'placeholder') !== false);
+$rwMan = ReferenceRewriter::rewrite('chunk', 'card', 'tile', "[[\$Card]]\n[[x? &parents=`card`]]\n\$modx->getChunk('card' . \$a);", array('php' => true));
+check('rename rules: manual items carry the line and the reason', $rwMan['text'] === "[[\$Card]]\n[[x? &parents=`card`]]\n\$modx->getChunk('card' . \$a);" && array_column($rwMan['manual'], 'line') === array(1, 2, 3)
+    && strpos($rwMan['manual'][0]['reason'], 'letter case') !== false && strpos($rwMan['manual'][1]['reason'], '&parents') !== false && strpos($rwMan['manual'][2]['reason'], 'run time') !== false);
+$rwLines = ReferenceRewriter::rewrite('chunk', 'card', 'tile', "a\n  [[\$card]] and [[!\$card]]\r\nb [[\$card]]", array());
+check('rename rules: changes list the line with the old and the new text', array_column($rwLines['changes'], 'line') === array(2, 3) && $rwLines['changes'][0]['old'] === '[[$card]] and [[!$card]]' && $rwLines['changes'][0]['new'] === '[[$tile]] and [[!$tile]]'
+    && $rwLines['text'] === "a\n  [[\$tile]] and [[!\$tile]]\r\nb [[\$tile]]");
+check('rename rules: invalid UTF-8 is reported, not rewritten', ReferenceRewriter::rewrite('chunk', 'card', 'tile', "[[\$card]] \xff")['manual'][0]['reason'] === 'The text is not valid UTF-8 and was not scanned.');
+foreach (array(array('chunk', '', 'empty'), array('chunk', 'a b', 'space'), array('chunk', ' ab', 'leading space'), array('chunk', 'a`b', 'backtick'), array('chunk', 'a]b', 'bracket'), array('chunk', str_repeat('x', 51), 'too long'),
+    array('chunk', 'a"b', 'quote'), array('tv', 'pagetitle', 'reserved'), array('tv', 'published', 'reserved')) as $bad) {
+    check("rename rules: the name '{$bad[1]}' ({$bad[2]}) is refused", ReferenceRewriter::nameProblem($bad[0], $bad[1]) !== null);
+}
+foreach (array(array('chunk', 'шапка-2'), array('snippet', 'My.Name/x_1'), array('tv', 'цена'), array('tv', 'pagetitle2')) as $good) { check("rename rules: the name '{$good[1]}' is fine", ReferenceRewriter::nameProblem($good[0], $good[1]) === null); }
+
+$jrMigx = json_decode('{"configs":"x","formtabs":"[{\"caption\":\"Таб\",\"fields\":[{\"field\":\"a\",\"inputTV\":\"price\"},{\"field\":\"b\",\"inputTV\":\"price_old\"}]}]","renderchunktpl":"@CHUNK card","chunk":" card ","formtabs_chunk":"card_big","other":"card"}');
+list($jrNew, $jrChanges) = JsonReferences::rewrite($jrMigx, 'chunk', 'card', 'tile');
+check('rename rules: MIGX chunk names, also as @CHUNK, with other keys and longer names left alone', $jrNew->renderchunktpl === '@CHUNK tile' && $jrNew->chunk === ' tile ' && $jrNew->formtabs_chunk === 'card_big' && $jrNew->other === 'card'
+    && count($jrChanges) === 2 && $jrNew->formtabs === $jrMigx->formtabs);
+list($jrNew, $jrChanges) = JsonReferences::rewrite($jrMigx, 'tv', 'price', 'cost');
+$jrInner = json_decode($jrNew->formtabs);
+check('rename rules: MIGX inputTV inside JSON kept as a string is rewritten and the string stays JSON in the same style', $jrInner[0]->fields[0]->inputTV === 'cost' && $jrInner[0]->fields[1]->inputTV === 'price_old' && $jrInner[0]->caption === 'Таб'
+    && strpos($jrNew->formtabs, 'Таб') !== false && count($jrChanges) === 1 && $jrChanges[0]['where'] === 'formtabs[0].fields[0].inputTV' && $jrNew->renderchunktpl === '@CHUNK card');
+list($jrNew, $jrChanges) = JsonReferences::rewrite(json_decode('[{"fields":[{"inputTV":"price"}],"x":{}}]'), 'tv', 'price', 'cost');
+check('rename rules: JSON lists and empty objects keep their shape', json_encode($jrNew) === '[{"fields":[{"inputTV":"cost"}],"x":{}}]' && count($jrChanges) === 1);
+
+// --- Rename with references (task 54): the operation on a fake site ---
+$rnDir = realpath(sys_get_temp_dir()) . '/modxmcp-rename-' . bin2hex(random_bytes(6));
+mkdir($rnDir . '/core/components/pdotools/model/pdotools', 0700, true);
+file_put_contents($rnDir . '/core/components/pdotools/model/pdotools/pdotools.class.php', "<?php\n");
+$rnSite = fakeSite($rnDir);
+$rnSite->options['modxmcp.auto_static'] = false;
+$rnSite->options['minishop2.core_path'] = $rnDir . '/none/';
+$rnToken = array('id' => 1, 'label' => 'rename', 'prefix' => 'mcp_rn', 'scope' => 'develop', 'plan_only' => false, 'denied_groups' => array(), 'expires_at' => null);
+$rnActor = function (array $override = array()) use ($rnSite, $dev, $rnToken) {
+    $c = new Context($rnSite, $override + $rnToken, $dev->corePath, function () { throw new RuntimeException('no store in tests'); });
+    $c->sessionId = 'session-rename-01';
+    return $c;
+};
+$rnDev = $rnActor();
+$rnStore = function ($kindName, array $row) use ($rnSite, $rnDev) {
+    $kind = $rnDev->kinds->get($kindName);
+    $defaults = array();
+    foreach ($kind->fields() as $field => $definition) { $defaults[$kind->column($field)] = $definition['type'] === 'string' ? '' : 0; }
+    $rnSite->store($kind->modelClass(), $row + $defaults);
+};
+$rnStore('chunk', array('id' => 10, 'name' => 'card', 'snippet' => '<div>[[$card]]</div>'));   // refers to itself
+$rnStore('chunk', array('id' => 11, 'name' => 'card_big', 'snippet' => '<b>big</b>'));
+$rnStore('chunk', array('id' => 12, 'name' => 'карточка', 'snippet' => '<i>кириллица</i>'));
+$rnStore('snippet', array('id' => 30, 'name' => 'card', 'snippet' => "return \$modx->getChunk('card') . \$modx->getChunk(\"card\", \$p) . \$modx->parseChunk('card', \$p) . \$modx->getChunk('card_big') . \$modx->getChunk('card' . \$x) . \$modx->runSnippet('card');"));
+$rnStore('snippet', array('id' => 31, 'name' => 'lister', 'snippet' => 'return 1;',
+    'properties' => array('tpl' => array('name' => 'tpl', 'type' => 'textfield', 'value' => 'card', 'desc' => ''), 'tplWrapper' => array('name' => 'tplWrapper', 'type' => 'textfield', 'value' => 'card_big', 'desc' => ''),
+        'caption' => array('name' => 'caption', 'type' => 'textfield', 'value' => 'card', 'desc' => ''))));
+$rnStore('tv', array('id' => 40, 'name' => 'card', 'caption' => 'Карточка', 'type' => 'text', 'elements' => '@CHUNK card', 'default_text' => '@CHUNK card_big',
+    'input_properties' => array('renderchunktpl' => '@CHUNK card', 'configs' => 'cfg', 'formtabs' => json_encode(array(array('caption' => 'Таб', 'fields' => array(array('field' => 'a', 'chunk' => 'card'), array('field' => 'b', 'chunk' => 'card_big')))), JSON_UNESCAPED_UNICODE))));
+$rnStore('tv', array('id' => 41, 'name' => 'price', 'caption' => 'Цена', 'type' => 'number', 'input_properties' => array('inputTV' => 'price', 'other' => 'price_old')));
+$rnStore('template', array('id' => 1, 'templatename' => 'Главная',
+    'content' => "[[\$card]] [[!\$card? &a=`1`]] [[\$card:ucase]] [[\$card@set]]\n[[\$card_big]] [[\$cardigan]] [[\$card.row]] [[\$Card]] [[card]] [[*card]]\n[[x? &tpl=`card` &rowChunk=`card` &tplOuter=`card_big` &parents=`card`]]\n[[- [[\$card]] ]]\n{include 'card'} {include 'chunk:card'} {'card' | chunk} {\$_modx->getChunk('card')}\n{'tpl' => 'card'} {include 'card_big'} {include 'template:card'} {include 'card' ~ \$x} {* {include 'card'} *}\n[[*price]] [[+price]] [[*price_old]] resource.price"));
+$rnStore('template', array('id' => 2, 'templatename' => 'Каталог', 'content' => "[[*price]] [[+price]] {\$_modx->resource.price} {\$_modx->resource['price']}"));
+$rnStore('chunk', array('id' => 13, 'name' => 'price_row', 'snippet' => "<b>[[+price]]</b> [[*price]] [[+price_old]] {\$_modx->resource.price}"));
+$rnStore('chunk', array('id' => 14, 'name' => 'unrelated', 'snippet' => '[[+price]] [[x? &includeTVs=`price_old` &tvFilters=`price==1`]]'));
+$rnStore('chunk', array('id' => 15, 'name' => 'list_row', 'snippet' => '<tr>[[+price]]</tr>'));
+$rnStore('chunk', array('id' => 16, 'name' => 'list_caller', 'snippet' => '[[!pdoResources? &tpl=`list_row` &includeTVs=`other,price` &limit=`3`]]'));
+$rnStore('chunk', array('id' => 17, 'name' => 'fenom user', 'snippet' => "{include 'card'} {'карточка' | chunk} {\$_modx->runSnippet('card')} {'card' | snippet} {\$_modx->getChunk('card_big')}"));
+$rnStore('plugin', array('id' => 50, 'name' => 'OnX', 'plugincode' => "\$modx->getChunk('card'); \$modx->runSnippet('lister'); \$r->getTVValue('card'); \$r->getTVValue('price');"));
+$rnStore('chunk', array('id' => 18, 'name' => 'caller2', 'snippet' => "[[lister? &tpl=`card`]] [[!lister]] [[lister.more]] [[\$lister]] [[*lister]] {'lister' | snippet} {\$_modx->runSnippet('lister')}"));
+$rnSite->store('modPropertySet', array('id' => 5, 'name' => 'Набор', 'category' => 0, 'description' => '', 'properties' => array('rowTpl' => array('name' => 'rowTpl', 'type' => 'textfield', 'value' => 'card', 'desc' => ''))));
+$rnSite->store('modResource', array('id' => 60, 'pagetitle' => 'Страница с карточкой', 'class_key' => 'modDocument', 'content' => "<p>[[\$card]]</p> [[*price]] [[+price]]", 'template' => 1, 'parent' => 0, 'deleted' => 0, 'published' => 1,
+    'alias' => 'page', 'uri' => 'page.html', 'context_key' => 'web', 'isfolder' => 0, 'hidemenu' => 0, 'richtext' => 0, 'searchable' => 1, 'cacheable' => 1, 'type' => 'document', 'content_type' => 1));
+$rnSite->store('modTemplateVarResource', array('contentid' => 60, 'tmplvarid' => 41, 'value' => '[[$card]] 100'));
+$rnSite->store('modTemplateVarResource', array('contentid' => 60, 'tmplvarid' => 40, 'value' => 'plain'));
+$rnSite->store('modTemplateVarTemplate', array('templateid' => 2, 'tmplvarid' => 41));
+$rnSite->store('modSystemSetting', array('key' => 'ms2_tpl_row', 'value' => 'card', 'xtype' => 'textfield', 'namespace' => 'core', 'area' => ''));
+$rnSite->store('modSystemSetting', array('key' => 'site_name_chunk', 'value' => 'card_big', 'xtype' => 'textfield', 'namespace' => 'core', 'area' => ''));
+$rnStaticFile = $rnDir . '/static-card.tpl';
+file_put_contents($rnStaticFile, "static [[\$card]] file\n");
+$rnStore('chunk', array('id' => 19, 'name' => 'static user', 'snippet' => "static [[\$card]] file\n", 'static' => 1, 'static_file' => $rnStaticFile));
+$rnTables = function () use ($rnSite) {
+    $out = array();
+    foreach (array('modChunk', 'modSnippet', 'modTemplate', 'modTemplateVar', 'modPlugin', 'modPropertySet', 'modSystemSetting') as $class) { $out[$class] = $rnSite->tableDump($class); }
+    foreach ($rnSite->tableDump('modResource') as $row) { $out['content'][$row['id']] = $row['content']; }
+    foreach ($rnSite->tableDump('modTemplateVarResource') as $row) { $out['tvvalues'][] = $row['contentid'] . ':' . $row['tmplvarid'] . ':' . $row['value']; }
+    sort($out['tvvalues']);
+    $out['file'] = file_get_contents($GLOBALS['rnStaticFile']);
+    return $out;
+};
+$rnBefore = $rnTables();
+$rnOp = function ($ctx, $kind, $id, array $args, array $extra = array()) use ($call) { return $call($ctx, 'invoke', array('kind' => $kind, 'id' => $id, 'op' => 'rename', 'args' => $args) + $extra); };
+$rnChangesets = function () use ($rnDev) { return count($rnDev->journal()->changesets(array(), 500)); };
+
+// the plan
+$rnPlan = $rnOp($rnDev, 'chunk', 10, array('new_name' => 'tile'));
+$rnRefs = array();
+foreach ($rnPlan['references'] as $ref) { $rnRefs[$ref['kind'] . ':' . $ref['id']] = $ref; }
+check('rename plan: nothing is changed, a plan is returned with the names and the revisions', $rnPlan['dry_run'] === true && $rnTables() == $rnBefore && $rnPlan['rename'] === array('kind' => 'chunk', 'id' => 10, 'from' => 'card', 'to' => 'tile')
+    && isset($rnPlan['revisions']['chunk:10']) && count($rnPlan['revisions']) === count($rnPlan['references']));
+check('rename plan: lists exactly the objects that hold exact references to the chunk', array_keys($rnRefs) === array('chunk:10', 'chunk:17', 'chunk:18', 'chunk:19', 'plugin:50', 'property_set:5', 'resource:60', 'snippet:30', 'snippet:31', 'template:1', 'tv:40'));
+check('rename plan: longer names, other element types and a TV of the same name are not in it', !isset($rnRefs['chunk:11']) && !isset($rnRefs['chunk:12']) && !isset($rnRefs['chunk:13']) && !isset($rnRefs['tv:41']) && !isset($rnRefs['template:2']));
+check('rename plan: each change names the line, the old and the new text', $rnRefs['template:1']['changes'][0]['line'] === 1 && strpos($rnRefs['template:1']['changes'][0]['old'], '[[$card]]') !== false && strpos($rnRefs['template:1']['changes'][0]['new'], '[[$tile]]') !== false
+    && $rnRefs['template:1']['change_count'] === array_sum(array_column($rnRefs['template:1']['changes'], 'count')) && $rnRefs['template:1']['changes'][0]['count'] === 4 && array_unique(array_column($rnRefs['template:1']['changes'], 'field')) === array('content'));
+check('rename plan: the chunk refers to itself and its own code is part of the plan', $rnRefs['chunk:10']['change_count'] === 1 && strpos($rnRefs['chunk:10']['changes'][0]['new'], '[[$tile]]') !== false);
+check('rename plan: properties, a property set, TV options and a page are covered', array_column($rnRefs['snippet:31']['changes'], 'where') === array('property tpl') && array_column($rnRefs['property_set:5']['changes'], 'where') === array('property rowTpl')
+    && array_column($rnRefs['tv:40']['changes'], 'field') !== array() && in_array('elements', $rnRefs['tv:40']['fields'], true) && in_array('input_properties', $rnRefs['tv:40']['fields'], true) && !in_array('default_text', $rnRefs['tv:40']['fields'], true)
+    && $rnRefs['resource:60']['fields'] === array('content') && $rnRefs['plugin:50']['change_count'] === 1);
+$rnManual = array();
+foreach ($rnPlan['manual'] as $item) { $rnManual[$item['kind'] . ':' . $item['id'] . ':' . $item['field']][] = $item['reason']; }
+check('rename plan: what cannot be rewritten safely is listed apart, with the reason',
+    isset($rnManual['template:1:content']) && isset($rnManual['snippet:30:content']) && isset($rnManual['snippet:31:properties']) && isset($rnManual['system_setting:ms2_tpl_row:value']) && !isset($rnManual['system_setting:site_name_chunk:value'])
+    && isset($rnManual['resource:60:TV price']) && count($rnPlan['manual']) === $rnPlan['manual_count']);
+check('rename plan: the case variant, the other parameter and the run-time name are manual in the template and snippet', count(array_filter($rnManual['template:1:content'], function ($r) { return strpos($r, 'letter case') !== false; })) === 1
+    && count(array_filter($rnManual['template:1:content'], function ($r) { return strpos($r, '&parents') !== false; })) === 1 && strpos($rnManual['snippet:30:content'][0], 'run time') !== false
+    && strpos($rnManual['snippet:31:properties'][0], 'caption') !== false);
+check('rename plan: the static file of a static chunk is read and rewritten through the element', $rnRefs['chunk:19']['static'] === true && $rnRefs['chunk:19']['changes'][0]['line'] === 1 && $rnRefs['chunk:19']['fields'] === array('content'));
+$rnDry = $rnOp($rnDev, 'chunk', 10, array('new_name' => 'tile', 'confirm' => true), array('dry_run' => true));
+check('rename plan: dry_run with confirm is still a plan', $rnDry['dry_run'] === true && $rnTables() == $rnBefore);
+$rnPlanOnly = $rnOp($rnActor(array('plan_only' => true)), 'chunk', 10, array('new_name' => 'tile', 'confirm' => true, 'expected_revisions' => $rnPlan['revisions']));
+check('rename plan: a plan-only token never confirms', $rnPlanOnly['dry_run'] === true && $rnTables() == $rnBefore);
+
+// refusals
+foreach (array('a name that is taken' => array('card_big', 'already exists'), 'the same name' => array('card', 'same'), 'a name with a space' => array('new name', 'space'), 'an empty name' => array('', 'empty'),
+    'a too long name' => array(str_repeat('n', 60), 'name'), 'a name with a quote' => array('a"b', 'letters')) as $label => $case) {
+    $e = throws("rename: {$label}", ApiException::class, function () use ($rnOp, $rnDev, $case) { $rnOp($rnDev, 'chunk', 10, array('new_name' => $case[0])); });
+    check("rename: {$label} is refused with a message", $e && ($e->errorCode === 'validation_failed') && stripos($e->getMessage(), $case[1]) !== false && $rnTables() == $rnBefore);
+}
+$e = throws('rename: a TV with a reserved name', ApiException::class, function () use ($rnOp, $rnDev) { $rnOp($rnDev, 'tv', 41, array('new_name' => 'pagetitle')); });
+check('rename: a TV cannot take the name of a resource field', $e && $e->errorCode === 'validation_failed' && stripos($e->getMessage(), 'reserved') !== false);
+$e = throws('rename: confirm without a plan', ApiException::class, function () use ($rnOp, $rnDev) { $rnOp($rnDev, 'chunk', 10, array('new_name' => 'tile', 'confirm' => true)); });
+check('rename: confirm needs the revisions of a plan', $e && $e->errorCode === 'validation_failed' && stripos($e->getMessage(), 'expected_revisions') !== false && $rnTables() == $rnBefore);
+$e = throws('rename: a read token', ApiException::class, function () use ($rnOp, $rnActor) { $rnOp($rnActor(array('scope' => 'read')), 'chunk', 10, array('new_name' => 'tile')); });
+check('rename: a token below develop is refused', $e && $e->errorCode === 'forbidden_scope');
+
+// a change between the plan and the confirm
+$call($rnDev, 'update', array('kind' => 'chunk', 'id' => 17, 'fields' => array('description' => 'changed after the plan')));
+$rnAfterEdit = $rnTables();
+$e = throws('rename: a changed object', ApiException::class, function () use ($rnOp, $rnDev, $rnPlan) { $rnOp($rnDev, 'chunk', 10, array('new_name' => 'tile', 'confirm' => true, 'expected_revisions' => $rnPlan['revisions'])); });
+check('rename: a revision conflict between plan and confirm refuses everything', $e && $e->errorCode === 'revision_conflict' && $e->details['changed'] === array('chunk:17') && $rnTables() == $rnAfterEdit);
+$rnPlan = $rnOp($rnDev, 'chunk', 10, array('new_name' => 'tile'));
+$rnTemplatePlan = $rnPlan['revisions'];
+$rnSite->store('modChunk', array('snippet' => "[[\$card]] new reference") + $rnSite->row('modChunk', 14));
+$e = throws('rename: a new reference appeared', ApiException::class, function () use ($rnOp, $rnDev, $rnTemplatePlan) { $rnOp($rnDev, 'chunk', 10, array('new_name' => 'tile', 'confirm' => true, 'expected_revisions' => $rnTemplatePlan)); });
+check('rename: a reference that was not in the plan stops the confirm', $e && $e->errorCode === 'revision_conflict' && $e->details['changed'] === array('chunk:14'));
+$rnStore('chunk', array('id' => 14, 'name' => 'unrelated', 'snippet' => '[[+price]] [[x? &includeTVs=`price_old` &tvFilters=`price==1`]]'));
+$rnPlan = $rnOp($rnDev, 'chunk', 10, array('new_name' => 'tile'));
+$rnBeforeConfirm = $rnTables();
+$rnChangesetsBefore = $rnChangesets();
+
+// the confirm: one changeset
+$rnDone = $rnOp($rnDev, 'chunk', 10, array('new_name' => 'tile', 'confirm' => true, 'expected_revisions' => $rnPlan['revisions']));
+$rnChanges = $rnDev->journal()->changes(array($rnDone['changeset_id']));
+$rnChangedKeys = array_map(function ($c) { return $c['kind'] . ':' . $c['object_key']; }, $rnChanges);
+sort($rnChangedKeys);
+$rnPlanned = array_keys($rnPlan['revisions']);
+sort($rnPlanned);
+check('rename: confirm renames the chunk and reports what was rewritten', $rnDone['renamed'] === array('kind' => 'chunk', 'id' => 10, 'from' => 'card', 'to' => 'tile') && $rnSite->row('modChunk', 10)['name'] === 'tile'
+    && $rnDone['objects_rewritten'] === count($rnPlan['references']) && $rnDone['references_rewritten'] === $rnPlan['total_changes'] && $rnDone['manual_count'] === $rnPlan['manual_count'] && $rnDone['changeset_id'] > 0);
+check('rename: everything is one changeset: the chunk and each object of the plan', $rnChangedKeys === $rnPlanned && $rnChangesets() === $rnChangesetsBefore + 1);
+check('rename: references are rewritten in the code of the template, chunks, snippet, plugin and page',
+    strpos($rnSite->row('modTemplate', 1)['content'], "[[\$tile]] [[!\$tile? &a=`1`]] [[\$tile:ucase]] [[\$tile@set]]") === 0 && strpos($rnSite->row('modTemplate', 1)['content'], '[[x? &tpl=`tile` &rowChunk=`tile` &tplOuter=`card_big` &parents=`card`]]') !== false
+    && strpos($rnSite->row('modTemplate', 1)['content'], "{include 'tile'} {include 'chunk:tile'} {'tile' | chunk} {\$_modx->getChunk('tile')}") !== false && strpos($rnSite->row('modTemplate', 1)['content'], "{'tpl' => 'tile'} {include 'card_big'} {include 'template:card'} {include 'card' ~ \$x} {* {include 'card'} *}") !== false
+    && strpos($rnSite->row('modTemplate', 1)['content'], "[[- [[\$card]] ]]") !== false && strpos($rnSite->row('modTemplate', 1)['content'], '[[$card_big]] [[$cardigan]] [[$card.row]] [[$Card]] [[card]] [[*card]]') !== false
+    && $rnSite->row('modChunk', 10)['snippet'] === '<div>[[$tile]]</div>' && strpos($rnSite->row('modSnippet', 30)['snippet'], "\$modx->getChunk('tile') . \$modx->getChunk(\"tile\", \$p) . \$modx->parseChunk('tile', \$p) . \$modx->getChunk('card_big') . \$modx->getChunk('card' . \$x) . \$modx->runSnippet('card')") !== false
+    && strpos($rnSite->row('modPlugin', 50)['plugincode'], "\$modx->getChunk('tile'); \$modx->runSnippet('lister'); \$r->getTVValue('card')") !== false && $rnSite->row('modResource', 60)['content'] === "<p>[[\$tile]]</p> [[*price]] [[+price]]"
+    && $rnSite->row('modChunk', 17)['snippet'] === "{include 'tile'} {'карточка' | chunk} {\$_modx->runSnippet('card')} {'card' | snippet} {\$_modx->getChunk('card_big')}");
+check('rename: the static chunk is rewritten through its file', file_get_contents($rnStaticFile) === "static [[\$tile]] file\n" && $rnSite->row('modChunk', 19)['static_file'] === $rnStaticFile);
+$rnDefaults = Properties::stored($rnSite->getObject('modSnippet', array('id' => 31)));
+$rnSet = Properties::stored($rnSite->getObject('modPropertySet', array('id' => 5)));
+check('rename: default properties and a property set follow, other keys and names stay', $rnDefaults['tpl']['value'] === 'tile' && $rnDefaults['tplWrapper']['value'] === 'card_big' && $rnDefaults['caption']['value'] === 'card' && $rnSet['rowTpl']['value'] === 'tile');
+$rnTvOptions = $rnSite->getObject('modTemplateVar', array('id' => 40));
+$rnTvInput = (array) $call($rnDev, 'get', array('kind' => 'tv', 'id' => 40))['fields']['input_properties'];
+check('rename: a TV follows in its @CHUNK bindings and MIGX-style options', $rnSite->row('modTemplateVar', 40)['elements'] === '@CHUNK tile' && $rnSite->row('modTemplateVar', 40)['default_text'] === '@CHUNK card_big'
+    && $rnTvInput['renderchunktpl'] === '@CHUNK tile' && $rnTvInput['configs'] === 'cfg' && json_decode($rnTvInput['formtabs'])[0]->fields[0]->chunk === 'tile' && json_decode($rnTvInput['formtabs'])[0]->fields[1]->chunk === 'card_big'
+    && json_decode($rnTvInput['formtabs'])[0]->caption === 'Таб');
+check('rename: things that must stay stay: other elements of the same name, longer names, values by id, settings', $rnSite->row('modSnippet', 30)['name'] === 'card' && $rnSite->row('modTemplateVar', 40)['name'] === 'card' && $rnSite->row('modChunk', 11)['name'] === 'card_big'
+    && $rnSite->row('modChunk', 12)['name'] === 'карточка' && $rnSite->getObject('modSystemSetting', array('key' => 'ms2_tpl_row'))->get('value') === 'card' && $rnTables()['tvvalues'] === $rnBefore['tvvalues']
+    && $rnSite->row('modTemplate', 2)['content'] === "[[*price]] [[+price]] {\$_modx->resource.price} {\$_modx->resource['price']}" && $rnSite->row('modChunk', 13)['snippet'] === "<b>[[+price]]</b> [[*price]] [[+price_old]] {\$_modx->resource.price}");
+$rnFound = $call($rnDev, 'find_usages', array('kind' => 'chunk', 'id' => 10));
+$rnFoundKeys = array_map(function ($u) { return $u['kind'] . ':' . $u['id']; }, $rnFound['usages']);
+check('rename: find_usages under the new name finds the rewritten objects', $rnFound['name'] === 'tile' && in_array('template:1', $rnFoundKeys, true) && in_array('chunk:17', $rnFoundKeys, true) && in_array('resource:60', $rnFoundKeys, true));
+
+// undo reverts everything
+$call($rnDev, 'undo', array('changeset_id' => $rnDone['changeset_id'], 'confirm' => true));
+check('rename: undo puts every object and the file back', $rnTables() == $rnBeforeConfirm && $rnSite->row('modChunk', 10)['name'] === 'card');
+
+// a snippet
+$rnSnippetBefore = $rnTables();
+$rnSnPlan = $rnOp($rnDev, 'snippet', 31, array('new_name' => 'job'));
+check('rename snippet: the plan lists the objects with exact calls', array_column($rnSnPlan['references'], 'id', 'kind') === array('chunk' => 18, 'plugin' => 50) && $rnSnPlan['total_changes'] === 5 && $rnTables() == $rnSnippetBefore);
+$rnSnDone = $rnOp($rnDev, 'snippet', 31, array('new_name' => 'job', 'confirm' => true, 'expected_revisions' => $rnSnPlan['revisions']));
+check('rename snippet: tags, Fenom and PHP calls are rewritten, other tag types and longer names stay', $rnSite->row('modSnippet', 31)['name'] === 'job'
+    && $rnSite->row('modChunk', 18)['snippet'] === "[[job? &tpl=`card`]] [[!job]] [[lister.more]] [[\$lister]] [[*lister]] {'job' | snippet} {\$_modx->runSnippet('job')}"
+    && $rnSite->row('modPlugin', 50)['plugincode'] === "\$modx->getChunk('card'); \$modx->runSnippet('job'); \$r->getTVValue('card'); \$r->getTVValue('price');" && $rnSnDone['references_rewritten'] === 5 && $rnSnDone['objects_rewritten'] === 2);
+$call($rnDev, 'undo', array('changeset_id' => $rnSnDone['changeset_id'], 'confirm' => true));
+check('rename snippet: undo restores the snippet and the callers', $rnTables() == $rnSnippetBefore);
+
+// a TV: the placeholders only in what is linked to it
+$rnTvBefore = $rnTables();
+$rnTvPlan = $rnOp($rnDev, 'tv', 41, array('new_name' => 'cost'));
+$rnTvRefs = array();
+foreach ($rnTvPlan['references'] as $ref) { $rnTvRefs[$ref['kind'] . ':' . $ref['id']] = $ref; }
+check('rename tv: the plan lists the places that name the TV', array_keys($rnTvRefs) === array('chunk:13', 'chunk:15', 'chunk:16', 'plugin:50', 'resource:60', 'template:1', 'template:2', 'tv:41'));
+$rnTvManual = array();
+foreach ($rnTvPlan['manual'] as $item) { $rnTvManual[$item['kind'] . ':' . $item['id']][] = $item['reason']; }
+check('rename tv: a placeholder outside the linked templates and chunks, and tvFilters, are manual', count($rnTvManual['chunk:14']) === 2 && strpos(implode(' ', $rnTvManual['chunk:14']), 'placeholder') !== false && strpos(implode(' ', $rnTvManual['chunk:14']), 'tvFilters') !== false
+    && isset($rnTvManual['resource:60']) && count($rnTvManual['resource:60']) === 1 && strpos($rnTvManual['resource:60'][0], 'placeholder') !== false);
+$rnTvDone = $rnOp($rnDev, 'tv', 41, array('new_name' => 'cost', 'confirm' => true, 'expected_revisions' => $rnTvPlan['revisions']));
+check('rename tv: tags everywhere, placeholders in linked elements, Fenom, PHP and include lists', $rnSite->row('modTemplateVar', 41)['name'] === 'cost'
+    && strpos($rnSite->row('modTemplate', 1)['content'], "[[*cost]] [[+cost]] [[*price_old]] resource.price") !== false
+    && $rnSite->row('modTemplate', 2)['content'] === "[[*cost]] [[+cost]] {\$_modx->resource.cost} {\$_modx->resource['cost']}"
+    && $rnSite->row('modChunk', 13)['snippet'] === "<b>[[+cost]]</b> [[*cost]] [[+price_old]] {\$_modx->resource.cost}"
+    && $rnSite->row('modChunk', 14)['snippet'] === '[[+price]] [[x? &includeTVs=`price_old` &tvFilters=`price==1`]]'
+    && $rnSite->row('modChunk', 15)['snippet'] === '<tr>[[+cost]]</tr>' && $rnSite->row('modChunk', 16)['snippet'] === '[[!pdoResources? &tpl=`list_row` &includeTVs=`other,cost` &limit=`3`]]'
+    && $rnSite->row('modResource', 60)['content'] === "<p>[[\$card]]</p> [[*cost]] [[+price]]" && strpos($rnSite->row('modPlugin', 50)['plugincode'], "\$r->getTVValue('cost')") !== false && strpos($rnSite->row('modPlugin', 50)['plugincode'], "\$r->getTVValue('card')") !== false);
+$rnTvInputs = (array) $call($rnDev, 'get', array('kind' => 'tv', 'id' => 41))['fields']['input_properties'];
+check('rename tv: the TV options that name a TV follow, values of the TV on pages stay (stored by id)', $rnTvInputs['inputTV'] === 'cost' && $rnTvInputs['other'] === 'price_old' && $rnTables()['tvvalues'] === $rnTvBefore['tvvalues']);
+$call($rnDev, 'undo', array('changeset_id' => $rnTvDone['changeset_id'], 'confirm' => true));
+check('rename tv: undo restores the TV and every page and element', $rnTables() == $rnTvBefore);
+
+// a static element outside the writable roots, and an element open in the manager
+$rnOutside = realpath(sys_get_temp_dir()) . '/modxmcp-rename-outside-' . bin2hex(random_bytes(6));
+mkdir($rnOutside, 0700, true);
+file_put_contents($rnOutside . '/out.tpl', "[[\$card]]\n");
+$rnSite->options['modxmcp.static_roots'] = 'assets/';
+$rnStore('chunk', array('id' => 20, 'name' => 'outside user', 'snippet' => "[[\$card]]\n", 'static' => 1, 'static_file' => $rnOutside . '/out.tpl'));
+$rnOutPlan = $rnOp($rnDev, 'chunk', 10, array('new_name' => 'tile'));
+$rnOutManual = array_values(array_filter($rnOutPlan['manual'], function ($m) { return $m['kind'] === 'chunk' && $m['id'] === 20; }));
+check('rename: a static file outside the writable roots is manual and not written', count($rnOutManual) === 1 && strpos($rnOutManual[0]['reason'], 'static file') !== false && !isset($rnOutPlan['revisions']['chunk:20']) && file_get_contents($rnOutside . '/out.tpl') === "[[\$card]]\n");
+$rnSite->options['modxmcp.static_roots'] = './';
+unlink($rnOutside . '/out.tpl');
+rmdir($rnOutside);
+$rnSite->store('modChunk', array('static' => 0, 'static_file' => '') + $rnSite->row('modChunk', 20));
+
+// describe, help and the audit prompt
+$rnDesc = array();
+foreach (array('chunk', 'snippet', 'tv') as $rnKind) {
+    foreach ($call($rnDev, 'describe', array('kind' => $rnKind))['operations'] as $rnOpDesc) { if ($rnOpDesc['op'] === 'rename') { $rnDesc[$rnKind] = $rnOpDesc; } }
+}
+check('rename: describe lists the operation for a chunk, a snippet and a TV, not for a template', array_keys($rnDesc) === array('chunk', 'snippet', 'tv') && $rnDesc['chunk']['needs_object'] === true && $rnDesc['chunk']['read_only'] === false
+    && strpos($rnDesc['tv']['description'], 'expected_revisions') !== false
+    && !in_array('rename', array_column($call($rnDev, 'describe', array('kind' => 'template'))['operations'], 'op'), true));
+$rnDraftToken = array('scope' => 'draft_only');
+$e = throws('rename: a draft-only token', ApiException::class, function () use ($rnOp, $rnActor, $rnDraftToken) { $rnOp($rnActor($rnDraftToken), 'chunk', 10, array('new_name' => 'tile')); });
+check('rename: a draft-only token cannot rename', $e && $e->errorCode === 'forbidden_scope');
+check('help and the audit prompt mention the rename', strpos(file_get_contents($dev->corePath . 'docs/getting_started.md'), 'op: "rename"') !== false && strpos(file_get_contents($dev->corePath . 'docs/getting_started.md'), 'expected_revisions: <revisions>') !== false
+    && strpos(( new ModxMCP\Prompt\AuditPrompt())->messages(array(), $dev)[0]['content']['text'], 'op: "rename"') !== false);
 
 echo $failures ? "{$failures} of {$checks} PHP checks failed.\n" : "PHP: {$checks} checks passed.\n";
 exit($failures ? 1 : 0);
