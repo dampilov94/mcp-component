@@ -8,6 +8,7 @@ use ModxMCP\Draft\DraftStore;
 use ModxMCP\Draft\ProductDraft;
 use ModxMCP\Draft\Drafts;
 use ModxMCP\Integration\MiniShop2;
+use ModxMCP\Integration\MiniShop2Gallery;
 use ModxMCP\Integration\Migx;
 use ModxMCP\Schema;
 use ModxMCP\Write\Transaction;
@@ -144,6 +145,13 @@ final class ResourceKind extends Kind {
             'list_drafts' => array(
                 'description' => 'Every open draft: original id and title, draft id, created_at, author, preview_url and original_changed. Takes no id.',
                 'read_only' => true, 'needs_object' => false, 'input' => Schema::obj(), 'handler' => 'opListDrafts'),
+            'list_gallery' => array(
+                'description' => 'List a miniShop2 product’s root gallery images in rank and ID order. Returns total and images with stored URLs and available thumbnails.',
+                'read_only' => true, 'needs_object' => true, 'handler' => 'opListGallery',
+                'input' => Schema::obj(array(
+                    'limit' => Schema::int('Page size. Default: ' . MiniShop2Gallery::DEFAULT_LIMIT . '.', array('minimum' => 1, 'maximum' => MiniShop2Gallery::MAX_LIMIT)),
+                    'offset' => Schema::int('Skip images from the start. Default: 0.', array('minimum' => 0)),
+                ))),
         );
     }
 
@@ -181,6 +189,10 @@ final class ResourceKind extends Kind {
 
     public function opListDrafts(Context $context, $object, array $args) {
         return array('drafts' => Drafts::items($this, $context));
+    }
+
+    public function opListGallery(Context $context, $object, array $args) {
+        return MiniShop2Gallery::images($context, $object, $args);
     }
 
     /** The links of drafts follow the resources: after a call that may have added or removed a draft resource they are brought in line. */
@@ -275,6 +287,20 @@ final class ResourceKind extends Kind {
         if ($target !== null) {
             $link = (new DraftStore($modx))->ofDraft($key);
             if (ProductDraft::isLink($link)) { ProductDraft::assertShadow($modx, $link, $target['fields']); }
+        }
+        if ($target === null) {
+            $removing = MiniShop2Gallery::productsInTree($modx, $key);
+        } else {
+            $removesProduct = ($target['fields']['class_key'] ?? '') !== 'msProduct'
+                && MiniShop2Gallery::resourceClass($modx, $key) === 'msProduct';
+            $removesData = isset($target['relations']['ms2_data']) && !$target['relations']['ms2_data'];
+            $removing = $removesProduct || $removesData ? array($key) : array();
+        }
+        if ($removing) {
+            if (!$this->ms2Active()) {
+                throw new ApiException('not_reversible', 'Enable miniShop2 to verify the product data and gallery before this undo.');
+            }
+            MiniShop2Gallery::assertSafeRemoval($modx, $removing);
         }
         if ($target === null || $this->ms2Active()) { return; }
         foreach (array('ms2_data', 'ms2_options', 'ms2_categories') as $name) {
@@ -671,15 +697,27 @@ final class ResourceKind extends Kind {
      */
     public function restoreRelation(\modX $modx, $name, array $spec, $key, array $rows) {
         if ($name !== 'ms2_data') { return false; }
-        $modx->removeCollection('msProductData', array('id' => $key));
-        foreach ($rows as $row) {
-            $data = $modx->newObject('msProductData');
-            $data->fromArray($row, '', true, true);
-            if (!$data->save()) { throw new \RuntimeException("Cannot restore the miniShop2 data of product {$key}."); }
-            if (isset($row['source']) && (string) $data->get('source') !== (string) $row['source']) {
-                $data->set('source', $row['source']);
-                if (!$data->save()) { throw new \RuntimeException("Cannot restore the miniShop2 data of product {$key}."); }
+        $data = $modx->getObject('msProductData', array('id' => $key), false);
+        if (!$rows) {
+            if ($data) {
+                MiniShop2Gallery::assertSafeRemoval($modx, array($key));
+                if (!$data->remove()) { throw new \RuntimeException("Cannot remove the miniShop2 data of product {$key}."); }
             }
+            return true;
+        }
+
+        $row = reset($rows);
+        if ($data) {
+            // The gallery owns the current cover URLs. Removing the data row would also remove the files and product links.
+            unset($row['image'], $row['thumb']);
+        } else {
+            $data = $modx->newObject('msProductData');
+        }
+        $data->fromArray($row, '', true, true);
+        if (!$data->save()) { throw new \RuntimeException("Cannot restore the miniShop2 data of product {$key}."); }
+        if (isset($row['source']) && (string) $data->get('source') !== (string) $row['source']) {
+            $data->set('source', $row['source']);
+            if (!$data->save()) { throw new \RuntimeException("Cannot restore the miniShop2 data of product {$key}."); }
         }
         return true;
     }

@@ -206,10 +206,17 @@ class FakeQuery {
     public function select($columns) { $this->selected = (array) $columns; return $this; }
     public function __call($name, $arguments) { return $this; }
     public function prepare() {
-        // Capabilities asks which namespaces exist: the first selected column of the matching rows.
-        if ($this->class === 'modNamespace' && $this->modx && $this->selected) {
+        if ($this->modx && $this->modx->getOption('fake_query_unavailable_class') === $this->class) { return false; }
+        if ($this->modx && $this->selected) {
             $rows = array();
-            foreach ($this->modx->getCollection('modNamespace', $this) as $namespace) { $rows[] = $namespace->get(reset($this->selected)); }
+            foreach ($this->modx->getCollection($this->class, $this) as $object) {
+                $row = array();
+                foreach ($this->selected as $quoted) {
+                    $column = trim($quoted, '`');
+                    $row[$column] = $object->get($column);
+                }
+                $rows[] = $row;
+            }
             $this->stmt = new FakeStatement($rows);
         }
         return true;
@@ -219,8 +226,9 @@ class FakeStatement {
     private $rows;
     public function __construct(array $rows = array()) { $this->rows = $rows; }
     public function execute() { return true; }
-    public function fetch() { return false; }
-    public function fetchColumn() { return $this->rows ? array_shift($this->rows) : false; }
+    public function fetch() { return $this->rows ? array_shift($this->rows) : false; }
+    public function fetchColumn() { $row = $this->fetch(); return is_array($row) ? reset($row) : $row; }
+    public function fetchAll() { $rows = $this->rows; $this->rows = array(); return $rows; }
 }
 class FakeResponse {
     private $error; private $object;
@@ -359,11 +367,17 @@ trait FakeMiniShop2 {
         }
     }
 
-    /** msProductData::remove(): the product's option values and category memberships go with the data. */
+    /** msProductData::remove() also removes links and gallery roots with their thumbnails. */
     public function ms2DataRemoving(array $fields) {
         if (!$this->ms2On()) { return; }
         $this->removeCollection('msProductOption', array('product_id' => $fields['id']));
         $this->removeCollection('msCategoryMember', array('product_id' => $fields['id']));
+        $this->removeCollection('msProductLink', array('master' => $fields['id']));
+        $this->removeCollection('msProductLink', array('slave' => $fields['id']));
+        foreach ($this->getCollection('msProductFile', array('product_id' => $fields['id'], 'parent' => 0)) as $file) {
+            $this->removeCollection('msProductFile', array('parent' => $file->get('id')));
+            $file->remove();
+        }
     }
 
     /** msProduct::save(): a product always has a data row, saved with it; a resource that stops being a product loses it. */
@@ -921,6 +935,7 @@ class modX extends xPDO {
         array('modTemplateVar', 'modTemplateVarTemplate', 'tmplvarid', array()),
         array('modTemplateVar', 'modTemplateVarResource', 'tmplvarid', array()),
         array('modResource', 'modTemplateVarResource', 'contentid', array()),
+        array('modResource', 'modResource', 'parent', array()),
         array('modUserGroup', 'modUserGroupMember', 'user_group', array()),
         // MIGX: a configuration takes its form tabs, and a form tab its fields (xPDO composites).
         array('migxConfig', 'migxFormtab', 'config_id', array()),
@@ -1143,6 +1158,8 @@ class modX extends xPDO {
             foreach ($criteria as $key => $value) {
                 if (substr($key, -3) === ':IN') {
                     if (!in_array((string) $row[substr($key, 0, -3)], array_map('strval', $value), true)) { continue 2; }
+                } elseif (substr($key, -2) === ':>') {
+                    if (!isset($row[substr($key, 0, -2)]) || $row[substr($key, 0, -2)] <= $value) { continue 2; }
                 } elseif (substr($key, -5) === ':LIKE') {
                     if (!self::likes($row, $key, $value)) { continue 2; }
                 } elseif (!array_key_exists($key, $row) || (string) $row[$key] !== (string) $value) { continue 2; }
