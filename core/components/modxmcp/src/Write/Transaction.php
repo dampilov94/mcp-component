@@ -55,14 +55,7 @@ final class Transaction {
             if ($subject instanceof GallerySubject) {
                 // Apply and recover gallery changes under the same resource lock, including its cover.
                 $this->touch($this->context->kinds->get('resource'), $subject->key());
-                if (!$this->strict) {
-                    foreach ($this->touched as $entry) {
-                        if ($entry['before'] !== null && !$this->context->blobs()->accepts(Snapshot::encode($entry['before']))) {
-                            throw new ApiException('validation_failed', 'The original product exceeds the configured history blob limit.');
-                        }
-                    }
-                    $this->strict = true;
-                }
+                $this->requireReversible();
             }
             $this->lock->acquire($id);
             $before = $subject->capture();
@@ -73,6 +66,18 @@ final class Transaction {
             $this->touched[$id] = array('subject' => $subject, 'extra' => array(), 'before' => $before, 'lock_before' => $this->lockOwner($subject));
         }
         return $this->touched[$id]['before'];
+    }
+
+    /** The remaining operation may write only if every changed snapshot fits in history. */
+    public function requireReversible() {
+        if ($this->strict) { return; }
+        $blobs = $this->context->blobs();
+        foreach ($this->touched as $entry) {
+            if ($entry['before'] !== null && !$blobs->accepts(Snapshot::encode($entry['before']))) {
+                throw new ApiException('validation_failed', 'The original state exceeds the configured history blob limit.');
+            }
+        }
+        $this->strict = true;
     }
 
     /**
@@ -186,7 +191,7 @@ final class Transaction {
             $note = '';
             foreach (array($before, $after) as $state) {
                 if ($state !== null && $blobs->put(Snapshot::encode($state)) === null) {
-                    if ($this->strict) { throw new ApiException('validation_failed', 'The change exceeds the gallery history blob limit.'); }
+                    if ($this->strict) { throw new ApiException('validation_failed', 'The change exceeds the configured history blob limit.'); }
                     $reversible = false;
                     $note = 'Snapshot is larger than modxmcp.history_max_blob_bytes; this change cannot be undone.';
                 }
@@ -195,7 +200,7 @@ final class Transaction {
             if ($after === null && $entry['extra']) {
                 $extraBlob = $blobs->put(json_encode($entry['extra'], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
                 if ($extraBlob === null) {
-                    if ($this->strict) { throw new ApiException('validation_failed', 'Related data exceeds the gallery history blob limit.'); }
+                    if ($this->strict) { throw new ApiException('validation_failed', 'Related data exceeds the configured history blob limit.'); }
                     $reversible = false;
                     $note = 'Related data is larger than modxmcp.history_max_blob_bytes; this delete cannot be fully undone.';
                 }

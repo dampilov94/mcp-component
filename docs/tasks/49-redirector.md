@@ -54,3 +54,31 @@ leaf guards, generated URI and rule, collision/no-op, exact nonmatching paths, s
 unchanged state on failure, counters, and undo. Architect will install official Redirector on
 disposable real MODX and check the HTTP 301/Location, a neighboring path and the post-undo view.
 fordev has no Redirector, so check optional absence and existing tools there.
+
+## Report
+
+Based on `task/49-redirector` at `473a35a`.
+
+- Registered Redirector as an optional admin-only read kind. The native traffic counters
+  remain readable and stay outside revisions. Redirector names in mixed history entries
+  follow the same access checks as the native rule kind.
+- The opt-in operation checks the original URI and existing rules under one rule lock and
+  uses only a relative URI produced by the native resource processor as the target.
+  It records the exact regex-escaped prior path and requires both snapshots to fit history.
+- Native session tracking is suspended during the complete rename or undo writer call so it
+  cannot generate an extra rule during a save or recovery. Reinstating a generated rule checks
+  the current context and competing matches again. An arbitrary edited rule cannot be restored.
+- The architect verified real MODX 2.8.8 with Redirector 2.0.11, including the actual HTTP
+  301 and Location, the adjacent nonmatching path, traffic, undo and a redo conflict. Offline
+  fixtures also exercise an error after the vendor writes its row and rollback of both objects.
+- `npm run check` and `npm test` passed in WSL on PHP 7.4.33. All 5784 PHP checks and 41
+  Node tests passed with no failures or skips.
+
+## Review
+
+- Verified on MODX 2.8.8 with official Redirector 2.0.11. The old path returned HTTP 301 with
+  the new path in Location and a neighboring path returned 404. After undo the old page was
+  available again and the new path returned 404. Redirector's session tracker and observed
+  traffic counters did not interfere with undo. A competing rule blocked redo.
+- Verified all 16 deployed files on fordev. The API reports Redirector as unavailable when
+  the add-on is absent; ordinary resource reads and the new help are available.

@@ -85,7 +85,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 46 | [ClientConfig values](46-clientconfig.md) | `task/46-clientconfig` | merged |
 | 47 | [miniShop2 gallery reads and safe restore](47-minishop2-gallery.md) | `task/47-minishop2-gallery` | merged |
 | 48 | [miniShop2 gallery writes and byte-level undo](48-minishop2-gallery-writes.md) | `task/48-minishop2-gallery-writes` | merged |
-| 49 | [Redirector for alias changes](49-redirector.md) | `task/49-redirector` | in progress |
+| 49 | [Redirector for alias changes](49-redirector.md) | `task/49-redirector` | merged |
 
 ## Doing several briefs in a row
 
@@ -150,7 +150,12 @@ Lessons from briefs 33–34:
 
 ## Handoff (2026-11-24)
 
-- Task 48 is merged into local `main`. fordev has the component source from `b605d1a`.
+- Task 49 is merged into local `main`. fordev has the component source from `59d9acc`.
+  Verified 16 files and saved backups in `.local/fordev-before-59d9acc/`. fordev confirmed
+  optional absence. Native MODX 2.8.8 and Redirector 2.0.11 verified actual HTTP 301,
+  neighboring route, undo and refusal of a conflicting redo. The PHP 7.4 suite passed
+  5784 PHP checks and 41 Node tests.
+- Task 48 was deployed to fordev from `b605d1a` and merged into local `main`.
   Verified the 12 files and saved backups in `.local/fordev-before-b605d1a/`. The fordev MCP
   API exposes both file-writing operations and the updated guide. On disposable MODX 2.8.8 and
   miniShop2 3.0.7, upload, deletion, undo and undo-of-undo preserved the correct bytes, modes,

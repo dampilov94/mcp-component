@@ -241,6 +241,8 @@ After alpha3:
   remove a product with gallery files, including through a parent resource.
 - Upload JPEG and PNG photos and delete selected gallery images through miniShop2. Undo restores
   the original and thumbnail bytes, file modes, gallery rows and cover on supported local sources.
+- Rename a published leaf page and create an exact Redirector 301 rule for its previous path
+  in one changeset. Undo restores the prior alias and removes the generated rule.
 
 Stage 7 — manager:
 

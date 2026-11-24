@@ -130,7 +130,7 @@ final class Journal {
      * @param array $filter session_id, source, kind, object_key, since / until (unix time, inclusive), after_id, ids (int[]), status,
      *                      tool, query (substring of the summary or of an object's name),
      *                      exclude_undos (skip changesets that are themselves undos),
-     *                      hidden_kind (exclude changesets that only contain this restricted kind),
+     *                      hidden_kinds (exclude changesets that only contain these restricted kinds),
      *                      with_changes (skip changesets that record no change, e.g. a package install)
      */
     public function changesets(array $filter = array(), $limit = 20) {
@@ -173,19 +173,20 @@ final class Journal {
             if (!$filter['ids']) { return null; }
             $where[] = 'c.`id` IN (' . implode(',', array_map('intval', $filter['ids'])) . ')';
         }
-        if (isset($filter['hidden_kind'])) {
-            if (($filter['kind'] ?? null) === $filter['hidden_kind']) { return null; }
+        $hidden = $filter['hidden_kinds'] ?? (array) ($filter['hidden_kind'] ?? array());
+        if ($hidden) {
+            if (in_array($filter['kind'] ?? null, $hidden, true)) { return null; }
+            $holders = implode(',', array_fill(0, count($hidden), '?'));
             $changes = $this->t('changes');
-            $where[] = '(NOT EXISTS (SELECT 1 FROM ' . $changes . ' h WHERE h.`changeset_id` = c.`id` AND h.`kind` = ?)'
-                . ' OR EXISTS (SELECT 1 FROM ' . $changes . ' v WHERE v.`changeset_id` = c.`id` AND v.`kind` <> ?))';
-            $params[] = $filter['hidden_kind'];
-            $params[] = $filter['hidden_kind'];
+            $where[] = '(NOT EXISTS (SELECT 1 FROM ' . $changes . ' h WHERE h.`changeset_id` = c.`id` AND h.`kind` IN (' . $holders . '))'
+                . ' OR EXISTS (SELECT 1 FROM ' . $changes . ' v WHERE v.`changeset_id` = c.`id` AND v.`kind` NOT IN (' . $holders . ')))';
+            $params = array_merge($params, $hidden, $hidden);
         }
         if (isset($filter['kind']) || isset($filter['object_key'])) {
             $sub = 'SELECT 1 FROM ' . $this->t('changes') . ' x WHERE x.`changeset_id` = c.`id`';
             if (isset($filter['kind'])) { $sub .= ' AND x.`kind` = ?'; $params[] = $filter['kind']; }
             if (isset($filter['object_key'])) { $sub .= ' AND x.`object_key` = ?'; $params[] = (string) $filter['object_key']; }
-            if (isset($filter['hidden_kind'])) { $sub .= ' AND x.`kind` <> ?'; $params[] = $filter['hidden_kind']; }
+            if ($hidden) { $sub .= ' AND x.`kind` NOT IN (' . $holders . ')'; $params = array_merge($params, $hidden); }
             $where[] = 'EXISTS (' . $sub . ')';
         }
         if (isset($filter['query']) && (string) $filter['query'] !== '') {

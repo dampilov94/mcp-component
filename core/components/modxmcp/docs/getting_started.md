@@ -225,6 +225,20 @@ Rules that keep a live site safe:
   `modx_request_status` with the reported `request_id`, or retry the identical call with
   that ID as `_request_id`.
 
+## Rename a page with Redirector
+
+With the Redirector group and its OnPageNotFound plugin enabled, an `admin` token can call
+`modx_invoke {kind: "resource", id, op: "rename_with_redirect", args: {alias: "new-slug"}}`.
+The page must be a published `modDocument` with friendly URLs, a normal generated URI and
+no descendants. The alias is one segment containing Unicode letters, numbers, underscores
+or hyphens. A dry run or plan-only call gives the prior URI and proposed alias.
+
+The confirmed write records the exact old-address rule and returns `old_uri`, `new_uri`,
+`redirect_id` and the changeset ID. Use `expected_revision` in `args` to guard against changes
+since reading the resource. Colliding routes or rules cause an error. Undo restores the page
+and removes the generated rule. The `redirect` kind lists native rules by numeric ID for
+administrators. Manage other rules in the Redirector manager.
+
 ## ClientConfig values
 
 An `admin` token can read existing `clientconfig_setting` objects when the `clientconfig`
