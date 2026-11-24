@@ -88,6 +88,9 @@ below) or append a `## Review` section to the brief with numbered change request
 | 49 | [Redirector for alias changes](49-redirector.md) | `task/49-redirector` | merged |
 | 50 | [Search and line edits in files](50-file-lines.md) | `task/50-file-lines` | merged |
 | 51 | [Log repeats, TV sources, API pause, history by token](51-small-wins.md) | `task/51-small-wins` | merged |
+| 52 | [check_page renders drafts](52-check-draft.md) | `task/52-check-draft` | ready for the executor |
+| 53 | [miniShop2 vendors, deliveries, payments](53-ms2-references.md) | `task/53-ms2-references` | ready for the executor |
+| 54 | [Rename with references](54-rename.md) | `task/54-rename` | ready for the executor |
 
 ## Doing several briefs in a row
 
