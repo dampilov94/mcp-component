@@ -2,6 +2,8 @@
 namespace ModxMCP\Kind;
 
 final class ChunkKind extends Kind {
+    use RenameOperation;
+
     public function name() { return 'chunk'; }
 
     public function label() { return 'Chunk'; }
@@ -25,7 +27,7 @@ final class ChunkKind extends Kind {
 
     public function lint() { return 'fenom'; }
 
-    public function operations() { return $this->staticOperations(); }
+    public function operations() { return $this->staticOperations() + $this->renameOperation(); }
 
     public function relationSpecs() {
         return array('property_sets' => $this->propertySetRelation());
