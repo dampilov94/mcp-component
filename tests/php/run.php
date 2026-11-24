@@ -1291,7 +1291,7 @@ $pageSite->store('modContext', array('key' => 'web', 'name' => 'Web'));
 $pageSite->store('modContext', array('key' => 'other', 'name' => 'Other'));
 $pageSite->store('modContextSetting', array('context_key' => 'other', 'key' => 'site_url', 'value' => 'https://Other.Example:8443/sub/'));
 $pageSite->store('modContextSetting', array('context_key' => 'other', 'key' => 'http_host', 'value' => 'alias.example:8080'));
-$pageSite->store('modResource', array('id' => 1, 'pagetitle' => 'Страница', 'context_key' => 'web', 'uri' => 'page.html'));
+$pageSite->store('modResource', array('id' => 1, 'pagetitle' => 'Страница', 'context_key' => 'web', 'uri' => 'page.html', 'published' => 1));
 $pageRead = new Context($pageSite, array('scope' => 'read') + $dev->token, $dev->corePath, function () {});
 $fetcher = new class implements ModxMCP\Verify\PageFetcher {
     public $response;
@@ -1356,6 +1356,179 @@ foreach (array(array(), array('id' => 1, 'url_path' => '/')) as $badSelector) {
 }
 $e = throws('check_page: unknown resource', ApiException::class, function () use ($call, $pageRead) { $call($pageRead, 'check_page', array('id' => 999)); });
 check('check_page: not_found', $e && $e->errorCode === 'not_found');
+
+// --- Rendering drafts and unpublished pages (one-time render keys) ---
+use ModxMCP\Render\RenderKeys;
+use ModxMCP\Render\RenderGate;
+$rkDir = realpath(sys_get_temp_dir()) . '/modxmcp-render-' . bin2hex(random_bytes(6));
+$rk = new RenderKeys($rkDir);
+$rkNow = time();
+$rkKey = $rk->issue(31, 701, $rkNow);
+$rkFile = $rkDir . '/' . hash('sha256', $rkKey) . '.php';
+$rkRaw = (string) file_get_contents($rkFile);
+check('render key: 64 hex characters, only the hash is on disk, behind the file guard, private permissions',
+    RenderKeys::validKey($rkKey) && is_file($rkFile) && strpos($rkRaw, $rkKey) === false && strncmp($rkRaw, ModxMCP\Request\RequestStore::FILE_GUARD, strlen(ModxMCP\Request\RequestStore::FILE_GUARD)) === 0
+    && (fileperms($rkFile) & 0777) === 0600 && (fileperms($rkDir) & 0777) === 0700 && count(glob($rkDir . '/*')) === 1);
+check('render key: consume gives the binding once and removes the file', $rk->consume($rkKey, $rkNow + 5) === array('resource' => 31, 'token_id' => 701)
+    && !is_file($rkFile) && $rk->consume($rkKey, $rkNow + 6) === null);
+$rkKey = $rk->issue(31, null, $rkNow);
+check('render key: expires after 60 seconds and is gone either way', $rk->consume($rkKey, $rkNow + 60) === null && count(glob($rkDir . '/*')) === 0);
+$rkKey = $rk->issue(31, 701, $rkNow);
+check('render key: valid up to the last second of its lifetime', $rk->consume($rkKey, $rkNow + 59) === array('resource' => 31, 'token_id' => 701));
+$rkBad = array('', 'abc', str_repeat('z', 64), strtoupper(bin2hex(random_bytes(32))), bin2hex(random_bytes(31)), bin2hex(random_bytes(32)) . "\n", '../' . str_repeat('a', 61), array('x'), null, 31);
+$rkAllRefused = true;
+foreach ($rkBad as $rkValue) { if ($rk->grant($rkValue, 31, $rkNow) !== null) { $rkAllRefused = false; } }
+check('render key: garbage, wrong length, uppercase, traversal and non-strings are refused', $rkAllRefused);
+$rkKey = $rk->issue(31, 701, $rkNow);
+check('render key: a mismatching resource is refused and uses the key up', $rk->grant($rkKey, 32, $rkNow) === null && $rk->grant($rkKey, 31, $rkNow) === null && count(glob($rkDir . '/*')) === 0);
+$rkKey = $rk->issue(31, 701, $rkNow);
+check('render key: unknown requested id is refused, matching id granted once', $rk->grant($rkKey, 0, $rkNow) === null);
+$rkKey = $rk->issue(31, 701, $rkNow);
+check('render key: grant returns the resource id and cannot be reused', $rk->grant($rkKey, 31, $rkNow + 1) === 31 && $rk->grant($rkKey, 31, $rkNow + 1) === null);
+$rkKeys = array();
+for ($i = 0; $i < 40; ++$i) { $rkKeys[] = $rk->issue(40 + $i, 701, $rkNow); }
+$rkDistinct = count(array_unique($rkKeys)) === 40 && count(glob($rkDir . '/*')) === 40;
+$rkEach = true;
+foreach ($rkKeys as $i => $rkValue) { if ($rk->grant($rkValue, 40 + $i, $rkNow) !== 40 + $i) { $rkEach = false; } }
+check('render key: many keys issued at once are distinct and each works for its own page only', $rkDistinct && $rkEach && count(glob($rkDir . '/*')) === 0);
+file_put_contents($rkDir . '/' . str_repeat('a', 64) . '.php', 'old');
+touch($rkDir . '/' . str_repeat('a', 64) . '.php', $rkNow - 1000);
+file_put_contents($rkDir . '/' . str_repeat('b', 64) . '.used-abc', 'old');
+touch($rkDir . '/' . str_repeat('b', 64) . '.used-abc', $rkNow - 1000);
+file_put_contents($rkDir . '/notes.txt', 'keep');
+$rk->issue(31, 701, $rkNow);
+check('render key: issuing removes stale key files and leaves other files', !is_file($rkDir . '/' . str_repeat('a', 64) . '.php') && !is_file($rkDir . '/' . str_repeat('b', 64) . '.used-abc') && is_file($rkDir . '/notes.txt'));
+$rkLink = realpath(sys_get_temp_dir()) . '/modxmcp-render-link-' . bin2hex(random_bytes(6));
+symlink($rkDir, $rkLink);
+$rkLinked = new RenderKeys($rkLink);
+$e = throws('render key: a symbolic-link directory is refused', RuntimeException::class, function () use ($rkLinked, $rkNow) { $rkLinked->issue(31, 1, $rkNow); });
+check('render key: a symbolic-link directory gives nothing', $e && $rkLinked->consume(str_repeat('a', 64), $rkNow) === null);
+unlink($rkLink);
+
+// The plugin's decision on a fake site: unpublished page, header present, key bound to the requested resource.
+$rgDir = $siteDir . '/render-gate';
+mkdir($rgDir . '/core', 0700, true);
+$rgSite = fakeSite($rgDir, array('site_url' => 'https://site.example/'));
+$rgSite->store('modResource', array('id' => 31, 'pagetitle' => 'Черновик', 'context_key' => 'web', 'published' => 0, 'deleted' => 0, 'cacheable' => 1, 'uri' => 'chernovik.html'));
+$rgSite->store('modResource', array('id' => 32, 'pagetitle' => 'Живая', 'context_key' => 'web', 'published' => 1, 'deleted' => 0, 'cacheable' => 1));
+$rgSite->store('modResource', array('id' => 33, 'pagetitle' => 'Удалена', 'context_key' => 'web', 'published' => 0, 'deleted' => 1, 'cacheable' => 1));
+$rgSite->store('modResource', array('id' => 34, 'pagetitle' => 'Другой контекст', 'context_key' => 'other', 'published' => 0, 'deleted' => 0, 'cacheable' => 1));
+$rgSite->context = new FakeContext('web');
+$rgKeys = RenderKeys::forModx($rgSite);
+$rgRun = function ($id, $identifier, $header, $method = 'id') use ($rgSite, $rgKeys) {
+    $rgSite->resource = null;
+    $rgSite->resourceGenerated = false;
+    $rgSite->resourceMethod = $method;
+    $rgSite->resourceIdentifier = $identifier;
+    $key = $header === true ? $rgKeys->issue($id, 701) : $header;
+    $server = $key === null ? array() : array(RenderGate::SERVER_KEY => $key);
+    return array(RenderGate::handle($rgSite, $server), $key);
+};
+list($rgDone) = $rgRun(31, '31', true);
+check('render gate: serves the unpublished resource the key is bound to, in memory only', $rgDone === true && is_object($rgSite->resource) && (int) $rgSite->resource->get('id') === 31
+    && $rgSite->resource->get('pagetitle') === 'Черновик' && !$rgSite->resource->get('cacheable') && $rgSite->resourceGenerated === true
+    && (int) $rgSite->getObject('modResource', array('id' => 31))->get('cacheable') === 1 && !$rgSite->getObject('modResource', array('id' => 31))->get('published'));
+list($rgDone) = $rgRun(31, '32', true);
+check('render gate: a key for another resource does nothing', $rgDone === false && $rgSite->resource === null);
+list($rgDone, $rgUsed) = $rgRun(31, '31', true);
+list($rgAgain) = $rgRun(31, '31', $rgUsed);
+check('render gate: a key works once', $rgDone === true && $rgAgain === false && $rgSite->resource === null);
+list($rgDone) = $rgRun(31, '31', null);
+check('render gate: no header does nothing', $rgDone === false && $rgSite->resource === null);
+list($rgDone) = $rgRun(31, '31', 'not-a-key');
+check('render gate: a malformed key does nothing', $rgDone === false && $rgSite->resource === null);
+list($rgDone) = $rgRun(31, 'chernovik', true, 'alias');
+check('render gate: an unresolved alias is not served', $rgDone === false && $rgSite->resource === null);
+list($rgDone) = $rgRun(32, '32', true);
+check('render gate: a published resource is left to MODX', $rgDone === false && $rgSite->resource === null);
+list($rgDone) = $rgRun(33, '33', true);
+check('render gate: a deleted resource is not served', $rgDone === false && $rgSite->resource === null);
+list($rgDone) = $rgRun(34, '34', true);
+check('render gate: a resource of another context is not served', $rgDone === false && $rgSite->resource === null);
+$rgKey = $rgKeys->issue(31, 701);
+$rgSite->resource = $rgSite->getObject('modResource', array('id' => 32));
+$rgSite->resourceMethod = 'id';
+$rgSite->resourceIdentifier = '31';
+check('render gate: a resource another plugin already chose is not replaced', RenderGate::handle($rgSite, array(RenderGate::SERVER_KEY => $rgKey)) === false && (int) $rgSite->resource->get('id') === 32 && $rgKeys->consume($rgKey) === null);
+$rgPlugin = \ModxMCP\Manager\Recorder::pluginCode($dev->corePath);
+check('render gate: the plugin returns before loading anything when the header is missing and runs the gate on OnWebPageInit',
+    strpos($rgPlugin, "'OnWebPageInit' && empty(\$_SERVER['HTTP_X_MCP_RENDER'])") !== false && strpos($rgPlugin, 'RenderGate::handle') !== false
+    && in_array('OnWebPageInit', \ModxMCP\Manager\Recorder::pluginEvents(), true) && !in_array('OnWebPageInit', \ModxMCP\Manager\Recorder::events(), true));
+
+// modx_check_page on a draft and on an unpublished page
+$hfetcher = new class implements ModxMCP\Verify\HeaderPageFetcher {
+    public $response;
+    public $calls = array();
+    public function fetch($url, $timeoutSeconds, $maxBytes): array { $this->calls[] = array('plain', $url, array()); return $this->response; }
+    public function fetchWithHeaders($url, $timeoutSeconds, $maxBytes, array $headers): array { $this->calls[] = array('headers', $url, $headers); return $this->response; }
+};
+$hfetcher->response = array('status' => 200, 'headers' => array('content-type' => 'text/html; charset=UTF-8'),
+    'body' => "<title>Черновик</title>\n[[!нет_сниппета]]", 'time_ms' => 9, 'truncated' => false);
+$pageSite->store('modResource', array('id' => 41, 'pagetitle' => 'Не опубликована', 'context_key' => 'web', 'uri' => 'unpublished.html', 'published' => 0, 'deleted' => 0));
+$pageSite->store('modResource', array('id' => 42, 'pagetitle' => 'Черновик страницы', 'context_key' => 'web', 'uri' => 'draft.html', 'published' => 0, 'deleted' => 0));
+$pageSite->store('modResource', array('id' => 43, 'pagetitle' => 'Другой хост', 'context_key' => 'other', 'uri' => 'x.html', 'published' => 0, 'deleted' => 0));
+$pageSite->store('modResource', array('id' => 44, 'pagetitle' => 'В корзине', 'context_key' => 'web', 'uri' => 'trash.html', 'published' => 0, 'deleted' => 1));
+$pageSite->store('modResource', array('id' => 45, 'pagetitle' => 'Чужой черновик', 'context_key' => 'web', 'uri' => 'other-draft.html', 'published' => 0, 'deleted' => 0));
+$pageSite->store('modResource', array('id' => 46, 'pagetitle' => 'Черновик менеджера', 'context_key' => 'web', 'uri' => 'mgr-draft.html', 'published' => 0, 'deleted' => 0));
+$pageDrafts = new ModxMCP\Draft\DraftStore($pageSite);
+$pageDrafts->add(1, 42, 1700000000, 701, null, str_repeat('a', 64), null);
+$pageDrafts->add(1, 45, 1700000000, 702, null, str_repeat('b', 64), null);
+$pageDrafts->add(1, 46, 1700000000, null, 9, str_repeat('c', 64), null);
+$pageRead->setPageFetcher($hfetcher);
+$pkRender = RenderKeys::forModx($pageSite);
+$pkFiles = function () use ($pageSite) { return glob(rtrim($pageSite->getOption('core_path'), '/\\') . '/modxmcp-data/render/*'); };
+$hfetcher->calls = array();
+$livePage = $call($pageRead, 'check_page', array('id' => 1));
+check('check_page: a published page is fetched as before, without a key', count($hfetcher->calls) === 1 && $hfetcher->calls[0][0] === 'plain' && !isset($livePage['rendered_as']) && !$pkFiles());
+$hfetcher->calls = array();
+$unpubPage = $call($pageRead, 'check_page', array('id' => 41));
+$unpubKey = $hfetcher->calls[0][2][RenderKeys::HEADER];
+$unpubFile = rtrim($pageSite->getOption('core_path'), '/\\') . '/modxmcp-data/render/' . hash('sha256', $unpubKey) . '.php';
+check('check_page: an unpublished page is fetched with a one-time key and reports rendered_as',
+    count($hfetcher->calls) === 1 && $hfetcher->calls[0][0] === 'headers' && $hfetcher->calls[0][1] === 'https://site.example/base/unpublished.html'
+    && RenderKeys::validKey($unpubKey) && $unpubPage['rendered_as'] === 'unpublished' && $unpubPage['status'] === 200 && $unpubPage['title'] === 'Черновик'
+    && $unpubPage['unparsed_count'] === 1 && $unpubPage['unparsed_tags'][0]['tag'] === '[[!нет_сниппета]]');
+check('check_page: the key is bound to the page and the token, stays out of the URL and out of the result',
+    strpos($unpubPage['url'], $unpubKey) === false && strpos(json_encode($unpubPage), $unpubKey) === false && is_file($unpubFile) && strpos((string) file_get_contents($unpubFile), $unpubKey) === false
+    && $pkRender->consume($unpubKey) === array('resource' => 41, 'token_id' => isset($pageRead->token['id']) ? $pageRead->token['id'] : null));
+$hfetcher->calls = array();
+$draftPage = $call($pageRead, 'check_page', array('id' => 42));
+check('check_page: a draft is reported as a draft', $draftPage['rendered_as'] === 'draft' && $hfetcher->calls[0][0] === 'headers' && RenderKeys::validKey($hfetcher->calls[0][2][RenderKeys::HEADER]));
+$hfetcher->calls = array();
+$trashPage = $call($pageRead, 'check_page', array('id' => 44));
+check('check_page: a deleted page is not rendered', $hfetcher->calls[0][0] === 'plain' && !isset($trashPage['rendered_as']));
+$pkBefore = $pkFiles();
+$hfetcher->calls = array();
+$e = throws('check_page: a page on another host is not rendered', ApiException::class, function () use ($call, $pageRead) { $call($pageRead, 'check_page', array('id' => 43)); });
+check('check_page: another host is refused before any key is made or request sent', $e && $e->errorCode === 'validation_failed' && strpos($e->getMessage(), 'own host') !== false && !$hfetcher->calls && $pkFiles() === $pkBefore);
+$pageRead->setPageFetcher($fetcher);
+$e = throws('check_page: a fetcher without headers cannot render', ApiException::class, function () use ($call, $pageRead) { $call($pageRead, 'check_page', array('id' => 41)); });
+check('check_page: no key is made when the fetcher cannot send it', $e && $e->errorCode === 'validation_failed' && $pkFiles() === $pkBefore);
+$pageRead->setPageFetcher($hfetcher);
+check('check_page: the description tells how drafts are rendered', strpos((new ModxMCP\Action\CheckPageAction())->description(), '60 seconds') !== false
+    && strpos((new ModxMCP\Action\CheckPageAction())->description(), 'plain HTTP') !== false);
+
+// A draft-only token may check its own drafts and nothing else.
+$draftToken = array('id' => 701, 'scope' => 'draft_only') + $dev->token;
+$pageDraftOwner = new Context($pageSite, $draftToken, $dev->corePath, function () {});
+$pageDraftOwner->setPageFetcher($hfetcher);
+$pageDraftOther = new Context($pageSite, array('id' => 702) + $draftToken, $dev->corePath, function () {});
+$pageDraftOther->setPageFetcher($hfetcher);
+$checkAction = $pageDraftOwner->actions->get('check_page');
+check('check_page: a draft-only token has the tool', $checkAction !== null && $pageDraftOwner->actions->blockReason($checkAction, $pageDraftOwner) === null
+    && in_array('modx_check_page', array_column(Manifest::tools($pageDraftOwner), 'name'), true));
+$hfetcher->calls = array();
+check('check_page: a draft-only token renders its own draft', $call($pageDraftOwner, 'check_page', array('id' => 42))['rendered_as'] === 'draft' && $hfetcher->calls[0][0] === 'headers');
+foreach (array(
+    array($pageDraftOwner, array('id' => 45)), array($pageDraftOther, array('id' => 42)), array($pageDraftOwner, array('id' => 46)),
+    array($pageDraftOwner, array('id' => 1)), array($pageDraftOwner, array('id' => 41)), array($pageDraftOwner, array('url_path' => '/page.html')),
+) as $i => $denied) {
+    $hfetcher->calls = array();
+    $e = throws("check_page: draft-only denial {$i}", ApiException::class, function () use ($call, $denied) { $call($denied[0], 'check_page', $denied[1]); });
+    check("check_page: draft-only token cannot check what is not its own draft ({$i})", $e && $e->errorCode === 'forbidden_scope' && !$hfetcher->calls);
+}
+$rgHelp = file_get_contents($dev->corePath . 'docs/getting_started.md');
+check('help: drafts are checked with modx_check_page and the one-time key is explained', strpos($rgHelp, 'modx_check_page {id: draft_id}') !== false && strpos($rgHelp, 'X-MCP-Render') !== false && strpos($rgHelp, 'rendered_as') !== false);
 
 // Graph expectations are hand-derived from legacy insertion order and reference scanners.
 $graphDir = $siteDir . '/graph';
@@ -6482,24 +6655,26 @@ $rSorted = $rEvents;
 sort($rSorted);
 $rWanted = $rExpected;
 sort($rWanted);
+$rWantedPlugin = array_merge($rWanted, array('OnWebPageInit'));
+sort($rWantedPlugin);
 check('recorder: events() lists every event of the table exactly once', $rSorted === $rWanted && count($rEvents) === count(array_unique($rEvents)));
 
 $rJournalBefore = $rCount();
 $rFirstSync = Recorder::syncPlugin($rSite);
 $rPlugin = $rSite->getObject('modPlugin', array('name' => 'modxMCP'));
 $rNames = function ($id) use ($rSite) { $n = array(); foreach ($rSite->getCollection('modPluginEvent', array('pluginid' => $id)) as $row) { $n[] = $row->get('event'); } sort($n); return $n; };
-check('syncPlugin: creates the plugin with exactly the events of the recorder', $rFirstSync['created'] === true && $rPlugin && $rNames($rPlugin->get('id')) === $rWanted
+check('syncPlugin: creates the plugin with exactly the events of the recorder', $rFirstSync['created'] === true && $rPlugin && $rNames($rPlugin->get('id')) === $rWantedPlugin
     && strpos((string) $rPlugin->get('plugincode'), 'Recorder::handle') !== false && strpos((string) $rPlugin->get('plugincode'), '<?php') === false
     && $rPlugin->get('description') === 'Records changes made in the manager into the modxMCP journal.');
 $rSecondSync = Recorder::syncPlugin($rSite);
-check('syncPlugin: is idempotent', $rSecondSync === array('created' => false, 'added' => array(), 'removed' => array()) && $rSite->getCount('modPlugin', array('name' => 'modxMCP')) === 1 && count($rNames($rPlugin->get('id'))) === count($rWanted));
+check('syncPlugin: is idempotent', $rSecondSync === array('created' => false, 'added' => array(), 'removed' => array()) && $rSite->getCount('modPlugin', array('name' => 'modxMCP')) === 1 && count($rNames($rPlugin->get('id'))) === count($rWantedPlugin));
 $rSite->store('modPlugin', array('id' => 70, 'name' => 'tracker', 'plugincode' => 'return;'));
-$rSite->store('modPluginEvent', array('id' => 71, 'pluginid' => 70, 'event' => 'OnWebPageInit', 'priority' => 0, 'propertyset' => 0));
-$rSite->store('modPluginEvent', array('id' => 72, 'pluginid' => $rPlugin->get('id'), 'event' => 'OnWebPageInit', 'priority' => 0, 'propertyset' => 0));
+$rSite->store('modPluginEvent', array('id' => 71, 'pluginid' => 70, 'event' => 'OnWebPagePrerender', 'priority' => 0, 'propertyset' => 0));
+$rSite->store('modPluginEvent', array('id' => 72, 'pluginid' => $rPlugin->get('id'), 'event' => 'OnWebPagePrerender', 'priority' => 0, 'propertyset' => 0));
 $rSite->getObject('modPluginEvent', array('pluginid' => $rPlugin->get('id'), 'event' => 'OnDocPublished'))->remove();
 $rThird = Recorder::syncPlugin($rSite);
-check('syncPlugin: adds missing events, removes events no longer listed, leaves other plugins alone', $rThird['added'] === array('OnDocPublished') && $rThird['removed'] === array('OnWebPageInit')
-    && $rNames($rPlugin->get('id')) === $rWanted && $rSite->getCount('modPluginEvent', array('pluginid' => 70)) === 1 && $rSite->getObject('modPlugin', array('id' => 70))->get('plugincode') === 'return;');
+check('syncPlugin: adds missing events, removes events no longer listed, leaves other plugins alone', $rThird['added'] === array('OnDocPublished') && $rThird['removed'] === array('OnWebPagePrerender')
+    && $rNames($rPlugin->get('id')) === $rWantedPlugin && $rSite->getCount('modPluginEvent', array('pluginid' => 70)) === 1 && $rSite->getObject('modPlugin', array('id' => 70))->get('plugincode') === 'return;');
 check('syncPlugin: leaves no journal entries and the plugin is not a recorded kind object', $rCount() === $rJournalBefore
     && (new \ModxMCP\Journal\Journal($rSite))->lastChange('plugin', (string) $rPlugin->get('id')) === null && Transaction::depth() === 0);
 
@@ -7486,7 +7661,7 @@ $otherIssued = $dTokens->create('Second editor', 'draft_only');
 $otherEditor = $dActor($dTokens->authenticate($otherIssued['token']));
 $draftCapabilities = $call($draftEditor, 'capabilities');
 check('draft-only: advertises just the permitted tools and resource kind', $draftCapabilities['kinds'] === array('resource')
-    && $draftCapabilities['tools'] === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_update', 'modx_invoke', 'modx_resource_tree')
+    && $draftCapabilities['tools'] === array('modx_capabilities', 'modx_site_info', 'modx_describe', 'modx_help', 'modx_list', 'modx_get', 'modx_update', 'modx_invoke', 'modx_resource_tree', 'modx_check_page')
     && $draftCapabilities['tools'] === array_column(Manifest::tools($draftEditor), 'name') && Manifest::prompts($draftEditor) === array());
 $draftDescription = $call($draftEditor, 'describe', array('kind' => 'resource'));
 check('draft-only: describes only available operations and marks non-editorial fields read-only', array_column($draftDescription['operations'], 'op') === array('create_draft', 'stage_product_prices', 'list_drafts')
@@ -8737,7 +8912,7 @@ $pRun = function ($ctx, $name, array $arguments = array()) {
 $pText = function ($result) { return $result['messages'][0]['content']['text']; };
 $pPreview = $pText($pRun($context('develop'), 'new_page_type', array('description' => 'Тестовый шаблон')));
 check('prompts: an unpublished page is previewed from the manager', strpos($pPreview, '`published: false`') !== false
-    && strpos($pPreview, 'предпросмотр из менеджера MODX') !== false && strpos($pPreview, '`modx_check_page`') === false);
+    && strpos($pPreview, 'предпросмотр из менеджера MODX') !== false && strpos($pPreview, '`modx_check_page {id}`') !== false);
 $e = throws('prompts: fix_errors cannot be fetched without the log tool', ApiException::class, function () use ($pRun, $context) {
     $pRun($context('content'), 'fix_errors');
 });

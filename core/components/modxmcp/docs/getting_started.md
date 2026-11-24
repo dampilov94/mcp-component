@@ -81,7 +81,8 @@ their own draft workflow below.
 
 1. `modx_invoke {kind: "resource", id, op: "create_draft"}` — returns `draft_id` and
    `preview_url`. MODX shows the unpublished draft only to a person logged in to the manager,
-   so give the link to the owner.
+   so give the link to the owner. To see what the draft renders, check it yourself with
+   `modx_check_page {id: draft_id}` (see "Checking the result").
 2. Edit the draft like any page: `modx_update` / `modx_edit_code` / the `tvs` relation on
    `draft_id`. A draft cannot have children or its own draft.
 3. `op: "apply_draft"` (on the page or on the draft) without `args.confirm` shows the plan:
@@ -105,7 +106,8 @@ The **Drafts only** (`draft_only`) token can read resources and run `resource.cr
 `resource.list_drafts` through `modx_invoke`. The list shows drafts created by that token.
 After creating a draft, use `modx_update` with the `draft_id` to change `pagetitle`, `longtitle`,
 `description`, `introtext`, `content` or `menutitle`. Supply plain text without markup or template
-delimiters. The draft must remain unpublished and unscheduled. Give its preview link to the manager,
+delimiters. The draft must remain unpublished and unscheduled. It may check its own drafts with
+`modx_check_page {id: draft_id}`. Give its preview link to the manager,
 who can review the changes and apply or discard the draft in the component's **Drafts** block.
 
 ### Sharing a preview link
@@ -301,7 +303,13 @@ newly protected key can prevent restoration. Create and manage definitions in Cl
 - `modx_check_page {id}` or `{url_path: "/…"}` requests a page of this site as a visitor and
   returns status, time, title and the error-log entries written during the request. MODX
   drops unknown tags from the output, so a missing snippet or a broken tag is found in
-  those log entries, not in the page.
+  those log entries, not in the page. With `id`, a draft or any unpublished (not deleted) page is
+  rendered too and the result says `rendered_as: "draft"` or `"unpublished"`: the site sends
+  itself a one-time key (header `X-MCP-Render`, valid 60 seconds, for that one page, used up by
+  the first request), so it works over plain HTTP, publishes nothing and keeps the page out of
+  the page cache. This needs the plugin modxMCP with its `OnWebPageInit` event, which a package
+  install or upgrade sets up, and a page URL on the site's own host. A manager preview is still
+  what to give the person.
 - `modx_run {snippet|chunk|text, properties?, context?, resource?}` runs a snippet, renders a
   chunk or parses a string of MODX tags and returns the output, the time, new error-log lines
   and `unparsed_tags` (usually a missing element). It is off until the administrator sets

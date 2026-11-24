@@ -218,7 +218,7 @@ $plugin->fromArray(array(
     'category'    => 0,
 ), '', true, true);
 $pluginEvents = array();
-foreach (\ModxMCP\Manager\Recorder::events() as $eventName) {
+foreach (\ModxMCP\Manager\Recorder::pluginEvents() as $eventName) {
     $pluginEvent = $modx->newObject('modPluginEvent');
     $pluginEvent->fromArray(array('event' => $eventName, 'priority' => 0, 'propertyset' => 0), '', true, true);
     $pluginEvents[] = $pluginEvent;

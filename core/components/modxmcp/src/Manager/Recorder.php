@@ -33,6 +33,11 @@ final class Recorder {
         return array_keys(self::table());
     }
 
+    /** Every event the plugin listens to: the recorder's events() and the one the render gate needs. */
+    public static function pluginEvents() {
+        return array_merge(self::events(), array(\ModxMCP\Render\RenderGate::EVENT));
+    }
+
     /** @return array event => ['kind' => name, 'role' => role, 'param' => name of the object parameter, 'cascade' => ...] */
     private static function table() {
         if (self::$table !== null) { return self::$table; }
@@ -303,7 +308,7 @@ final class Recorder {
         $plugin->save();
         $id = (int) $plugin->get('id');
 
-        $wanted = self::events();
+        $wanted = self::pluginEvents();
         $have = array();
         $removed = array();
         foreach ($modx->getCollection('modPluginEvent', array('pluginid' => $id)) as $row) {
