@@ -6073,6 +6073,21 @@ check('history page: filter since and until', $ids(array('until' => 2000000)) ==
 check('history page: text search in an object name, case as typed, in Cyrillic', $ids(array('query' => 'шапк')) === array(2, 1) && $ids(array('query' => 'подвал')) === array(6, 5, 3));
 check('history page: text search in the summary', $ids(array('query' => 'запись о пакете')) === array(7));
 check('history page: wildcards in the search are literal', $ids(array('query' => '%')) === array() && $ids(array('query' => '_')) === array());
+check('history page: filter by token', $ids(array('token_id' => $hTokenA['id'])) === array(6, 3, 2, 1) && $ids(array('token_id' => $hTokenB['id'])) === array(4)
+    && $ids(array('token_id' => 999)) === array(7) && $ids(array('token_id' => (string) $hTokenA['id'])) === array(6, 3, 2, 1) && $ids(array('token_id' => 424242)) === array());
+check('history page: the token filter combines with the other filters', $ids(array('token_id' => $hTokenA['id'], 'query' => 'подвал')) === array(6, 3)
+    && $ids(array('token_id' => $hTokenA['id'], 'kind' => 'chunk', 'id' => $hHead['id'])) === array(2, 1) && $ids(array('token_id' => $hTokenB['id'], 'source' => 'external')) === array()
+    && $ids(array('token_id' => $hTokenA['id'], 'status' => 'undone')) === array() && $ids(array('token_id' => $hTokenA['id']), 2, 1) === array(3, 2));
+check('history page: an empty, zero or non-numeric token filter is no filter', $ids(array('token_id' => '')) === array(7, 6, 5, 4, 3, 2, 1) && $ids(array('token_id' => 0)) === array(7, 6, 5, 4, 3, 2, 1)
+    && $ids(array('token_id' => 'abc')) === array(7, 6, 5, 4, 3, 2, 1));
+check('history page: total counts the filtered changesets', $hService->changesets(array('token_id' => $hTokenA['id']), 1)['total'] === 4);
+check('history page: the journal filters by token too', array_column($hDev->journal()->page(array('token_id' => $hTokenB['id']), 10, 0)['changesets'], 'id') === array(4));
+$hTf = HistoryService::tokenFilter($hSite, (string) $hTokenA['id']);
+check('history page: token filter of the URL names the token', $hTf === array('id' => $hTokenA['id'], 'label' => 'Claude Code') && HistoryService::tokenFilter($hSite, $hTokenB['id'])['label'] === 'Старый токен'
+    && HistoryService::tokenFilter($hSite, '999') === array('id' => 999, 'label' => ''));
+check('history page: a token filter that is not a positive integer is ignored', HistoryService::tokenFilter($hSite, 'abc') === null && HistoryService::tokenFilter($hSite, '0') === null && HistoryService::tokenFilter($hSite, '-1') === null
+    && HistoryService::tokenFilter($hSite, '1 OR 1') === null && HistoryService::tokenFilter($hSite, '01') === null && HistoryService::tokenFilter($hSite, array('1')) === null && HistoryService::tokenFilter($hSite, null) === null);
+throws('history api: modx_history has no token_id filter (unchanged)', ApiException::class, function () use ($call, $hDev, $hTokenA) { $call($hDev, 'history', array('token_id' => $hTokenA['id'])); });
 check('history page: filters combine', $ids(array('source' => 'mcp', 'kind' => 'chunk', 'query' => 'подвал')) === array(6, 3));
 $e = throws('history page: unknown source', ApiException::class, function () use ($hService) { $hService->changesets(array('source' => 'robot')); });
 check('history page: unknown source is validation_failed', $e && $e->errorCode === 'validation_failed');

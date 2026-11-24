@@ -205,6 +205,17 @@ Ext.onReady(function () {
         return cell;
     }
 
+    // The number of changesets is a link to the history of this token.
+    function changesCell(tok) {
+        var cell = el('td', 'k-num');
+        var count = Number(tok.changesets) || 0;
+        if (count < 1) { cell.textContent = String(count); return cell; }
+        var a = el('a', '', count);
+        a.href = '?a=history&namespace=modxmcp&token_id=' + encodeURIComponent(String(Number(tok.id)));
+        cell.appendChild(a);
+        return cell;
+    }
+
     function statusCell(tok) {
         return add(el('td'), el('span', 'k-status k-status-' + tok.status, t('status_' + tok.status)));
     }
@@ -222,7 +233,7 @@ Ext.onReady(function () {
             el('td', 'k-nowrap', created),
             el('td', 'k-nowrap', tok.last_used_at ? fmtTime(tok.last_used_at) : t('unused')),
             el('td', 'k-nowrap', tok.expires_at ? fmtTime(tok.expires_at) : t('never')),
-            el('td', 'k-num', tok.changesets),
+            changesCell(tok),
             statusCell(tok));
         var actions = el('td', 'k-nowrap');
         if (active) {

@@ -38,7 +38,7 @@ final class HistoryService {
 
     /**
      * Changesets, newest first.
-     * @param array $filter source, kind, id / key (an object of that kind or, without kind, of any), tool, status, since, until, query
+     * @param array $filter source, token_id (changes made with one token), kind, id / key (an object of that kind or, without kind, of any), tool, status, since, until, query
      * @return array the entries of modx_history plus `total` (all matches) and `author`
      */
     public function changesets(array $filter, $limit = 50, $start = 0) {
@@ -46,7 +46,7 @@ final class HistoryService {
         foreach (array('source', 'kind', 'tool', 'status', 'query') as $key) {
             if (isset($filter[$key]) && (string) $filter[$key] !== '') { $where[$key] = (string) $filter[$key]; }
         }
-        foreach (array('since', 'until') as $key) {
+        foreach (array('since', 'until', 'token_id') as $key) {
             if (isset($filter[$key]) && $filter[$key] !== '' && (int) $filter[$key] > 0) { $where[$key] = (int) $filter[$key]; }
         }
         foreach (array('id', 'key') as $key) {
@@ -61,6 +61,25 @@ final class HistoryService {
         $context = $this->context();
         $page = $context->journal()->page($where, max(1, min(100, (int) $limit)), max(0, (int) $start));
         return array('changesets' => HistoryAction::entries($context, $page['changesets']), 'total' => $page['total']);
+    }
+
+    /**
+     * The token a history page is filtered by (`?token_id=N`): its id and label, or null for no filter. A token that no
+     * longer exists is still a valid filter (its changes stay in the journal); its label is then empty.
+     * @param mixed $raw the value of the URL parameter
+     * @return array|null id, label
+     */
+    public static function tokenFilter(\modX $modx, $raw) {
+        if (!is_scalar($raw) || !preg_match('/^[1-9][0-9]{0,9}$/D', (string) $raw)) { return null; }
+        $id = (int) $raw;
+        $label = '';
+        try {
+            $token = (new \ModxMCP\Auth\TokenStore($modx))->get($id);
+            if ($token) { $label = (string) $token['label']; }
+        } catch (\Throwable $e) {
+            // No token table: the filter still works on the journal.
+        }
+        return array('id' => $id, 'label' => $label);
     }
 
     /**

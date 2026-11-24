@@ -12,7 +12,7 @@ class ModxmcpHistoryGetListProcessor extends modProcessor {
         require_once rtrim($corePath, '/\\') . '/src/autoload.php';
         try {
             $filter = array();
-            foreach (array('source', 'kind', 'id', 'key', 'tool', 'status', 'since', 'until', 'query') as $key) {
+            foreach (array('source', 'token_id', 'kind', 'id', 'key', 'tool', 'status', 'since', 'until', 'query') as $key) {
                 $filter[$key] = $this->getProperty($key, '');
             }
             $limit = max(1, min(100, (int) $this->getProperty('limit', 50)));
