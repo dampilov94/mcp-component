@@ -85,6 +85,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 46 | [ClientConfig values](46-clientconfig.md) | `task/46-clientconfig` | merged |
 | 47 | [miniShop2 gallery reads and safe restore](47-minishop2-gallery.md) | `task/47-minishop2-gallery` | merged |
 | 48 | [miniShop2 gallery writes and byte-level undo](48-minishop2-gallery-writes.md) | `task/48-minishop2-gallery-writes` | merged |
+| 49 | [Redirector for alias changes](49-redirector.md) | `task/49-redirector` | in progress |
 
 ## Doing several briefs in a row
 
