@@ -73,3 +73,12 @@ Based on `task/49-redirector` at `473a35a`.
   fixtures also exercise an error after the vendor writes its row and rollback of both objects.
 - `npm run check` and `npm test` passed in WSL on PHP 7.4.33. All 5784 PHP checks and 41
   Node tests passed with no failures or skips.
+
+## Review
+
+- Verified on MODX 2.8.8 with official Redirector 2.0.11. The old path returned HTTP 301 with
+  the new path in Location and a neighboring path returned 404. After undo the old page was
+  available again and the new path returned 404. Redirector's session tracker and observed
+  traffic counters did not interfere with undo. A competing rule blocked redo.
+- Verified all 16 deployed files on fordev. The API reports Redirector as unavailable when
+  the add-on is absent; ordinary resource reads and the new help are available.
