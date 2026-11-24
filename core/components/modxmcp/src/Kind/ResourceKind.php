@@ -10,6 +10,7 @@ use ModxMCP\Draft\Drafts;
 use ModxMCP\Integration\GalleryOperations;
 use ModxMCP\Integration\MiniShop2;
 use ModxMCP\Integration\MiniShop2Gallery;
+use ModxMCP\Integration\RedirectorRename;
 use ModxMCP\Integration\Migx;
 use ModxMCP\Schema;
 use ModxMCP\Write\Transaction;
@@ -166,11 +167,27 @@ final class ResourceKind extends Kind {
                 'input' => Schema::obj(array(
                     'image_id' => Schema::int('Original image ID from list_gallery.', array('minimum' => 1)), 'confirm' => $confirm,
                 ), array('image_id'))),
+            RedirectorRename::OP => array(
+                'description' => 'Rename a published leaf page and preserve its old address through an exact Redirector rule. Requires admin and friendly URLs.',
+                'read_only' => false, 'needs_object' => true, 'handler' => 'opRenameWithRedirect', 'preflight' => 'planRenameWithRedirect',
+                'without_redirector_tracker' => true,
+                'input' => Schema::obj(array(
+                    'alias' => Schema::str('One alias segment.', array('minLength' => 1, 'maxLength' => RedirectorRename::MAX_ALIAS, 'pattern' => '^[\pL\pN_-]+$')),
+                    'expected_revision' => Schema::str('Revision from modx_get.', array('pattern' => '^[a-f0-9]{64}$')),
+                ), array('alias'))),
         );
     }
 
     public function opCreateDraft(Context $context, Transaction $tx, $object, array $args): array {
         return Drafts::create($this, $context, $tx, $object, $args);
+    }
+
+    public function planRenameWithRedirect(Context $context, $object, array $args) {
+        return RedirectorRename::preview($this, $context, $object, $args);
+    }
+
+    public function opRenameWithRedirect(Context $context, Transaction $tx, $object, array $args) {
+        return RedirectorRename::rename($this, $context, $tx, $object, $args);
     }
 
     public function planCreateDraft(Context $context, $object, array $args): array {

@@ -130,6 +130,11 @@ class FakeObject {
         if ($this->class === 'msProductData') { $this->modx->ms2PrepareData($this); }
         $wasProduct = $this->class === 'modResource' && $stored && $stored['class_key'] === 'msProduct';
         if ($pk === 'id' && empty($this->fields['id'])) { $this->fields['id'] = $this->modx->nextId($this->class); }
+        if ($this->class === 'modResource' && $this->modx->getOption('fake_redirector_furl') && empty($this->fields['uri_override'])
+            && (!$stored || ($stored['alias'] ?? '') !== (string) ($this->fields['alias'] ?? '') || (int) ($stored['parent'] ?? 0) !== (int) ($this->fields['parent'] ?? 0))) {
+            // Native modResource::save recalculates a generated URI when restoring an older alias.
+            $this->fields['uri'] = $this->modx->redirectorFixtureUri($this->fields['alias'] ?? '', $this->fields['parent'] ?? 0, !empty($this->fields['isfolder']));
+        }
         // Like modElement::save(): the static file is written only when the column changed.
         if ($code && empty($this->options[xPDO::OPT_SETUP]) && !empty($this->fields['static']) && !empty($this->fields['static_file'])
             && (!$stored || (string) $stored[$code] !== (string) $this->fields[$code])) {
@@ -249,6 +254,29 @@ class FakeGalleryWriteStatement {
     private $write;
     public function __construct(callable $write) { $this->write = $write; }
     public function execute(array $params) { ($this->write)($params); return true; }
+}
+class FakeRedirectMatchStatement {
+    private $rows;
+    private $id = false;
+    public function __construct(array $rows) { $this->rows = $rows; }
+    public function execute(array $params) {
+        list($context, $literal, $generated) = $params;
+        foreach ($this->rows as $row) {
+            if ((isset($params[5]) && (int) $row['id'] === $params[5]) || ($row['context_key'] && $row['context_key'] !== $context)) { continue; }
+            $matches = mb_strtolower($row['pattern'], 'UTF-8') === mb_strtolower($literal, 'UTF-8') || $row['pattern'] === $generated;
+            if (!$matches && $row['active']) {
+                $regex = str_replace('~', '\\~', $row['pattern']);
+                $unanchored = @preg_match('~' . $regex . '~iu', $literal);
+                $anchored = @preg_match('~^' . $regex . '$~iu', $literal);
+                if ($unanchored === false || $anchored === false) { return false; }
+                $matches = $unanchored === 1 || $anchored === 1;
+            }
+            if ($matches) { $this->id = $row['id']; break; }
+        }
+        return true;
+    }
+    public function fetchColumn() { return $this->id; }
+    public function errorInfo() { return array('HY000', 1, 'Invalid regex.'); }
 }
 class FakeResponse {
     private $error; private $object;
@@ -751,7 +779,13 @@ trait FakeResourceProcessors {
             $data['isfolder'] = 0;
         }
         $data['editedon'] = ((int) $resource->get('editedon')) + 1;   // changes on every save
-        if (empty($data['uri_override'])) { $data['uri'] = isset($data['alias']) ? $data['alias'] : $resource->get('alias'); }
+        if (empty($data['uri_override'])) {
+            $alias = $data['alias'] ?? $resource->get('alias');
+            $data['uri'] = $alias;
+            if ($this->getOption('fake_redirector_furl')) {
+                $data['uri'] = $this->redirectorFixtureUri($alias, $data['parent'] ?? $resource->get('parent'), !empty($data['isfolder']));
+            }
+        }
         $resource->fromArray($data, '', false, true);
         $this->invokeEvent('OnBeforeDocFormSave', array('mode' => $action === 'create' ? 'new' : 'upd', 'id' => $action === 'create' ? 0 : $resource->get('id'), 'resource' => &$resource));
         if ($this->failBeforeSave === $path) { return new FakeResponse('Prevented by a plugin.'); }
@@ -767,6 +801,12 @@ trait FakeResourceProcessors {
         $this->invokeEvent('OnDocFormSave', array('mode' => $action === 'create' ? 'new' : 'upd', 'id' => $resource->get('id'), 'resource' => &$resource));
         if ($this->failProcessor === $path) { throw new RuntimeException('Simulated failure after save.'); }
         return new FakeResponse(null, array('id' => $resource->get('id')));
+    }
+
+    public function redirectorFixtureUri($alias, $parentId, $folder) {
+        $parent = $this->getObject('modResource', (int) $parentId);
+        $prefix = $parent ? rtrim((string) $parent->get('uri'), '/') . '/' : '';
+        return $prefix . $alias . ($folder ? '/' : '.html');
     }
 }
 
@@ -933,11 +973,15 @@ class modX extends xPDO {
     public $galleryRemove = null;
 
     public function getTableName($class) {
-        $tables = array('msProductFile' => 'ms2_product_files', 'msProductData' => 'ms2_products');
+        $tables = array('msProductFile' => 'ms2_product_files', 'msProductData' => 'ms2_products', 'modRedirect' => 'redirects');
         return $this->escape($this->getOption('table_prefix') . $tables[$class]);
     }
 
     public function prepare($sql) {
+        if ($this->getOption('fake_redirector_furl') && strpos($sql, 'SELECT `id` FROM ' . $this->getTableName('modRedirect') . ' WHERE') === 0
+            && strpos($sql, 'REGEXP') !== false) {
+            return new FakeRedirectMatchStatement($this->tableDump('modRedirect'));
+        }
         if (!$this->getOption('fake_gallery_native_sql')) { return parent::prepare($sql); }
         $files = $this->getTableName('msProductFile');
         $data = $this->getTableName('msProductData');
@@ -1206,6 +1250,8 @@ class modX extends xPDO {
                     if (!in_array((string) $row[substr($key, 0, -3)], array_map('strval', $value), true)) { continue 2; }
                 } elseif (substr($key, -2) === ':>') {
                     if (!isset($row[substr($key, 0, -2)]) || $row[substr($key, 0, -2)] <= $value) { continue 2; }
+                } elseif (substr($key, -3) === ':!=') {
+                    if ((string) ($row[substr($key, 0, -3)] ?? '') === (string) $value) { continue 2; }
                 } elseif (substr($key, -5) === ':LIKE') {
                     if (!self::likes($row, $key, $value)) { continue 2; }
                 } elseif (!array_key_exists($key, $row) || (string) $row[$key] !== (string) $value) { continue 2; }

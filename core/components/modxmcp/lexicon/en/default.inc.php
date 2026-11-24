@@ -217,6 +217,7 @@ $_lang['modxmcp_cmp_danger_require_https'] = 'Accept API requests over HTTPS onl
 $_lang['modxmcp_cmp_danger_allowed_ips'] = 'The addresses API requests are accepted from. Empty means any address.';
 $_lang['modxmcp_group_virtualpage'] = 'VirtualPage (routes / events)';
 $_lang['modxmcp_group_clientconfig'] = 'ClientConfig (global and context values)';
+$_lang['modxmcp_group_redirector'] = 'Redirector (page URL changes and redirect rules)';
 $_lang['modxmcp_group_minishop2'] = 'miniShop2 (products / options / links / categories / orders)';
 $_lang['modxmcp_group_migx'] = 'MIGX (configurations)';
 $_lang['modxmcp_group_access'] = 'Access control (users, groups, roles, policies)';

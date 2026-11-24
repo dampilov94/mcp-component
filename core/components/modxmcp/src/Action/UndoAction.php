@@ -6,6 +6,8 @@ use ModxMCP\Context;
 use ModxMCP\Draft\DraftStore;
 use ModxMCP\Journal\Snapshot;
 use ModxMCP\Integration\GallerySubject;
+use ModxMCP\Integration\Redirector;
+use ModxMCP\Kind\RedirectKind;
 use ModxMCP\Journal\Subjects;
 use ModxMCP\Journal\Undo;
 use ModxMCP\Schema;
@@ -97,7 +99,12 @@ final class UndoAction extends WriteAction {
             throw new ApiException('undo_conflict', 'Some objects changed after the selected changesets. Nothing was undone.', $summary);
         }
 
-        list(, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $plan, $ids, $args) {
+        $hasRedirect = false;
+        foreach ($plan['items'] as $item) {
+            if ($item['subject']->kindName() === RedirectKind::NAME) { $hasRedirect = true; break; }
+        }
+        $mutate = function ($tx) use ($context, $plan, $ids, $args, $hasRedirect) {
+            if ($hasRedirect) { $tx->lock('redirector:rules'); $tx->requireReversible(); }
             Snapshot::takeNotes();
             foreach ($plan['items'] as $item) {
                 if ($item['open']) { $context->warnings[] = "{$item['subject']->kindName()} {$item['key']} is open in the manager by {$item['open']['username']}; undone anyway because force is set."; }
@@ -114,7 +121,9 @@ final class UndoAction extends WriteAction {
             $cache = $context->modx->getCacheManager();
             if ($cache) { $cache->refresh(); }
             return array('result' => array(), 'summary' => 'undo changesets ' . implode(', ', $ids), 'undoes' => $ids);
-        });
+        };
+        $write = function () use ($context, $mutate) { return Writer::run($context, $this->name(), $mutate); };
+        list(, $info) = $hasRedirect ? Redirector::withoutTracker($write) : $write();
         // A draft resource that this undo removed or brought back: its link follows (the link table is not journaled).
         (new DraftStore($context->modx))->reconcile($context);
         // Undoing an undo re-applies the original changes, so those are live again.

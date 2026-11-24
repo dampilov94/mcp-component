@@ -42,6 +42,7 @@ final class KindRegistry {
         VpHandlerKind::class,
         VpRouteKind::class,
         ClientConfigSettingKind::class,
+        RedirectKind::class,
     );
 
     private $kinds = null;

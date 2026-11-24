@@ -8144,6 +8144,134 @@ $ccSite->options['modxmcp.disabled_groups'] = 'clientconfig';
 throws('ClientConfig: undo requires the optional integration group', ApiException::class, $ccUndo);
 unset($ccSite->options['modxmcp.disabled_groups']);
 
+// Redirector: one published leaf, a stock-like native create processor, and real writer snapshots.
+$rdDir = $siteDir . '/redirector49';
+$rdCore = $rdDir . '/core/components/redirector/';
+mkdir($rdCore . 'model/redirector', 0700, true);
+touch($rdCore . 'model/redirector/redirector.class.php');
+$rdSite = fakeSite($rdDir, array('fake_redirector_furl' => true, 'friendly_urls' => true, 'base_url' => '/branch/', 'site_url' => 'https://example.invalid/branch/'));
+$rdSite->store('modNamespace', array('name' => 'redirector', 'path' => '{core_path}components/redirector/', 'assets_path' => ''));
+$rdSite->store('modContext', array('key' => 'web'));
+$rdSite->store('modPlugin', array('id' => 900, 'name' => 'Redirector', 'disabled' => 0));
+$rdSite->store('modPluginEvent', array('pluginid' => 900, 'event' => 'OnPageNotFound'));
+$rdActor = function ($scope, array $flags = array()) use ($rdSite, $dev) {
+    return new Context($rdSite, $flags + array('scope' => $scope) + $dev->token, $dev->corePath, function () {});
+};
+$rdAdmin = $rdActor('admin');
+$rdParent = $call($rdAdmin, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Section', 'alias' => 'section', 'isfolder' => true, 'published' => true)));
+$rdPage = $call($rdAdmin, 'create', array('kind' => 'resource', 'fields' => array('pagetitle' => 'Old address', 'alias' => 'old-page',
+    'published' => true, 'parent' => $rdParent['id'])));
+$rdId = $rdPage['id'];
+$rdOld = 'section/old-page.html';
+$rdNew = 'section/new-page.html';
+$rdPattern = '^section/old-page\\.html$';
+$rdNativeCalls = 0;
+$rdFailCreate = false;
+$rdSite->stubProcessors['mgr/redirect/create'] = function (array $input, array $options) use ($rdSite, $rdCore, &$rdNativeCalls, &$rdFailCreate) {
+    $rdNativeCalls++;
+    if (!$rdSite->getCount('modResource', array('uri' => $input['target'], 'context_key' => $input['context_key'])) || $options['processors_path'] !== $rdCore . 'processors/') {
+        return new FakeResponse('Invalid native local target.');
+    }
+    $id = $rdSite->nextId('modRedirect');
+    $rdSite->store('modRedirect', array('id' => $id, 'triggered' => 0, 'triggered_first' => null, 'triggered_last' => null) + $input);
+    return $rdFailCreate ? new FakeResponse('Synthetic late failure after native insert.') : new FakeResponse(null, array('id' => $id));
+};
+$rdObserved = array();
+$rdSite->listeners[] = function ($event, $params) use ($rdSite, $rdId, $rdOld, &$rdObserved) {
+    if ($event !== 'OnDocFormSave' || (int) $params['id'] !== $rdId) { return; }
+    $rdObserved[] = array_key_exists('modx_resource_uri', $_SESSION ?? array());
+    $row = $rdSite->row('modResource', $rdId);
+    if ($row['alias'] === 'equivalent') { $rdSite->store('modResource', array('uri' => strtoupper($rdOld)) + $row); }
+    if ($row['alias'] === 'unsafe') { $rdSite->store('modResource', array('uri' => 'https://example.invalid/not-local') + $row); }
+};
+$rdInvoke = function (array $args, array $more = array(), Context $actor = null) use ($dInvoke, $rdAdmin, $rdId) {
+    return $dInvoke($actor ?: $rdAdmin, 'rename_with_redirect', $rdId, $args, $more);
+};
+$rdGet = function () use ($call, $rdAdmin, $rdId) { return $call($rdAdmin, 'get', array('kind' => 'resource', 'id' => $rdId)); };
+$rdBefore = $rdGet();
+$rdArgs = array('alias' => 'new-page', 'expected_revision' => $rdBefore['revision']);
+$rdPriorSession = $_SESSION ?? null;
+$_SESSION = array('modx_resource_uri' => 'unrelated-tracker', 'keep' => 'yes');
+$rdTracker = $_SESSION;
+$rdDry = $rdInvoke($rdArgs, array('dry_run' => true));
+$rdPlanned = $rdInvoke($rdArgs, array(), $rdActor('admin', array('plan_only' => true)));
+check('Redirector: dry run and plan-only return the old URI and proposed alias without writing', $rdDry['dry_run'] && $rdPlanned['planned']
+    && $rdDry['old_uri'] === $rdOld && $rdDry['alias'] === 'new-page' && $rdNativeCalls === 0 && $rdGet()['revision'] === $rdBefore['revision']);
+foreach (array($rdActor('develop'), $rdActor('draft_only'), $rdActor('admin', array('denied_groups' => array('redirector')))) as $rdBlocked) {
+    throws('Redirector: non-admin or denied integration cannot rename', ApiException::class, function () use ($rdInvoke, $rdArgs, $rdBlocked) {
+        $rdInvoke($rdArgs, array(), $rdBlocked);
+    });
+}
+check('Redirector: optional native kind is admin-only and absent on sites without Redirector', in_array('redirect', $call($rdAdmin, 'capabilities')['kinds'], true)
+    && !in_array('redirect', $call($rdActor('develop'), 'capabilities')['kinds'], true) && !in_array('redirect', $call($sAdmin, 'capabilities')['kinds'], true));
+foreach (array('published' => 0, 'uri_override' => 1, 'deleted' => 1) as $flag => $value) {
+    $rdRow = $rdSite->row('modResource', $rdId);
+    $rdSite->store('modResource', array($flag => $value) + $rdRow);
+    throws('Redirector: an ineligible published leaf is refused', ApiException::class, function () use ($rdInvoke) { $rdInvoke(array('alias' => 'new-page')); });
+    $rdSite->store('modResource', $rdRow);
+}
+$rdSite->store('modResource', array('id' => 9100, 'parent' => $rdId, 'class_key' => 'modDocument', 'pagetitle' => 'Child'));
+throws('Redirector: a page with children is refused', ApiException::class, function () use ($rdInvoke, $rdArgs) { $rdInvoke($rdArgs); });
+$rdSite->removeCollection('modResource', array('id' => 9100));
+$rdSite->store('modPlugin', array('id' => 900, 'name' => 'Redirector', 'disabled' => 1));
+throws('Redirector: native frontend plugin must be enabled', ApiException::class, function () use ($rdInvoke, $rdArgs) { $rdInvoke($rdArgs); });
+$rdSite->store('modPlugin', array('id' => 900, 'name' => 'Redirector', 'disabled' => 0));
+foreach (array($rdOld, $rdPattern, 'old-page\\.html$', '[') as $rdLegacyPattern) {
+    $rdSite->store('modRedirect', array('id' => 9200, 'pattern' => $rdLegacyPattern, 'target' => 'other.html', 'context_key' => null, 'active' => 1));
+    throws('Redirector: literal, regex and invalid legacy patterns fail closed', ApiException::class, function () use ($rdInvoke, $rdArgs) { $rdInvoke($rdArgs); });
+}
+$rdSite->removeCollection('modRedirect', array('id' => 9200));
+foreach (array('equivalent', 'unsafe', 'http://example.invalid/path', 'old-page') as $rdAlias) {
+    throws('Redirector: no-op and invalid native paths are rejected', ApiException::class, function () use ($rdInvoke, $rdAlias) {
+        $rdInvoke(array('alias' => $rdAlias));
+    });
+}
+$rdSite->store('modResource', array('id' => 9101, 'parent' => $rdParent['id'], 'class_key' => 'modDocument', 'pagetitle' => 'Collision', 'uri' => $rdNew,
+    'context_key' => 'web', 'published' => 1, 'deleted' => 0));
+throws('Redirector: collision after native alias save restores the resource', ApiException::class, function () use ($rdInvoke, $rdArgs) { $rdInvoke($rdArgs); });
+$rdSite->removeCollection('modResource', array('id' => 9101));
+check('Redirector: denied paths and competing resources did not reserve a rule or change the resource', $rdNativeCalls === 0
+    && !$rdSite->getCount('modRedirect') && $rdGet()['revision'] === $rdBefore['revision'] && $_SESSION == $rdTracker);
+$rdFailCreate = true;
+throws('Redirector: late native processor failure restores the page and inserted rule', ApiException::class, function () use ($rdInvoke, $rdArgs) { $rdInvoke($rdArgs); });
+check('Redirector: a partial native insert was rolled back together with the URI', !$rdSite->getCount('modRedirect') && $rdGet()['revision'] === $rdBefore['revision']
+    && $rdObserved && !in_array(true, $rdObserved, true) && $_SESSION == $rdTracker);
+$rdFailCreate = false;
+
+$rdMoved = $rdInvoke($rdArgs);
+$rdRule = $call($rdAdmin, 'get', array('kind' => 'redirect', 'id' => $rdMoved['redirect_id']));
+check('Redirector: native URI and exact escaped regex are journaled in one change', $rdMoved['old_uri'] === $rdOld && $rdMoved['new_uri'] === $rdNew
+    && $rdRule['fields']['pattern'] === $rdPattern && $rdRule['fields']['target'] === $rdNew && $rdRule['fields']['context_key'] === 'web'
+    && $rdRule['fields']['active'] && count($call($rdAdmin, 'history_diff', array('changeset_id' => $rdMoved['changeset_id']))['objects']) === 2);
+check('Redirector: the generated pattern matches only the old literal, including its dot', preg_match('~' . $rdPattern . '~u', $rdOld) === 1
+    && preg_match('~' . $rdPattern . '~u', 'section/old-pageXhtml') === 0 && preg_match('~' . $rdPattern . '~u', 'section/extra-old-page.html') === 0);
+check('Redirector: mixed history shows only the resource to a lower scope', array_column($call($rdActor('read'), 'history_diff',
+    array('changeset_id' => $rdMoved['changeset_id']))['objects'], 'kind') === array('resource'));
+$rdRecord = $rdSite->row('modRedirect', $rdMoved['redirect_id']);
+$rdSite->store('modRedirect', array('target' => 'https://example.invalid/legacy') + $rdRecord);
+throws('Redirector: force cannot restore or remove an arbitrary external rule state', ApiException::class, function () use ($call, $rdAdmin, $rdMoved) {
+    $call($rdAdmin, 'undo', array('changeset_id' => $rdMoved['changeset_id'], 'confirm' => true, 'force' => true));
+});
+$rdSite->store('modRedirect', array('triggered' => 15, 'triggered_last' => '2026-11-24 12:00:00') + $rdRecord);
+check('Redirector: traffic counters do not change the rule revision', $rdRule['revision'] === $call($rdAdmin, 'get',
+    array('kind' => 'redirect', 'id' => $rdMoved['redirect_id']))['revision']);
+$rdUndone = $call($rdAdmin, 'undo', array('changeset_id' => $rdMoved['changeset_id'], 'confirm' => true));
+check('Redirector: undo restores the old URI, removes the generated rule and preserves session state', $rdGet()['fields']['uri'] === $rdOld
+    && !$rdSite->getCount('modRedirect') && $_SESSION == $rdTracker && !in_array(true, $rdObserved, true));
+$rdOtherRuleId = (int) $rdMoved['redirect_id'] + 100;
+$rdSite->store('modRedirect', array('id' => $rdOtherRuleId, 'pattern' => $rdOld, 'target' => 'other.html', 'context_key' => null, 'active' => 1));
+throws('Redirector: a competing rule created after undo blocks redo', ApiException::class, function () use ($call, $rdAdmin, $rdUndone) {
+    $call($rdAdmin, 'undo', array('changeset_id' => $rdUndone['changeset_id'], 'confirm' => true, 'force' => true));
+});
+check('Redirector: failed redo preserves the resource and the competing rule', $rdGet()['fields']['uri'] === $rdOld
+    && $rdSite->getCount('modRedirect', array('id' => $rdOtherRuleId)) === 1);
+$rdSite->removeCollection('modRedirect', array('id' => $rdOtherRuleId));
+unset($_SESSION['modx_resource_uri']);
+$call($rdAdmin, 'undo', array('changeset_id' => $rdUndone['changeset_id'], 'confirm' => true));
+check('Redirector: ordinary redo restores both states and leaves an absent tracker absent', $rdGet()['fields']['uri'] === $rdNew
+    && $rdSite->getCount('modRedirect', array('id' => $rdMoved['redirect_id'])) === 1 && !array_key_exists('modx_resource_uri', $_SESSION));
+if ($rdPriorSession === null) { unset($_SESSION); } else { $_SESSION = $rdPriorSession; }
+
 // --- Fenom (pdoTools): references, syntax check ---
 use ModxMCP\Code\Fenom;
 use ModxMCP\Verify\SiteAudit as FenomAudit;

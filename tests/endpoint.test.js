@@ -172,7 +172,7 @@ test("kernel: wire protocol", { skip: available ? false : "PHP with pdo_sqlite i
     assert.equal(caps.body.result.token.scope, "read");
     assert.ok(caps.body.result.tools.includes("modx_describe"));
     assert.ok(caps.body.result.kinds.includes("chunk"));
-    assert.equal(caps.body.result.integrations.length, 4);
+    assert.equal(caps.body.result.integrations.length, 5);
 
     const kinds = await call(read, "describe");
     // The user and the four access kinds need the admin scope even to be read, so a read token sees 19 of the 24 kinds (the two package kinds are readable).

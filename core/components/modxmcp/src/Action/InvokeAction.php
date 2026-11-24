@@ -5,6 +5,7 @@ use ModxMCP\ApiException;
 use ModxMCP\Auth\Scope;
 use ModxMCP\Context;
 use ModxMCP\Draft\DraftPolicy;
+use ModxMCP\Integration\Redirector;
 use ModxMCP\Journal\Snapshot;
 use ModxMCP\Kind\Objects;
 use ModxMCP\Schema;
@@ -74,7 +75,7 @@ final class InvokeAction extends WriteAction {
             });
             return $meta + array('changeset_id' => $info['changeset_id'], 'reversible' => false) + $result;
         }
-        list($result, $info) = Writer::run($context, $this->name(), function ($tx) use ($context, $kind, $meta, $handler, $values, $key, $args) {
+        $mutate = function ($tx) use ($context, $kind, $meta, $handler, $values, $key, $args) {
             $object = null;
             if ($key !== null) {
                 if ($tx->touch($kind, $key) === null) { throw new ApiException('not_found', 'The target object no longer exists.'); }
@@ -87,7 +88,9 @@ final class InvokeAction extends WriteAction {
             $summary = isset($result['summary']) ? (string) $result['summary'] : $meta['op'] . ' ' . $meta['kind'] . ($key !== null ? ' ' . $key : '');
             unset($result['summary']);
             return array('result' => $result, 'summary' => $summary);
-        });
+        };
+        $write = function () use ($context, $mutate) { return Writer::run($context, $this->name(), $mutate); };
+        list($result, $info) = !empty($spec['without_redirector_tracker']) ? Redirector::withoutTracker($write) : $write();
         $kind->afterInvoke($context, $meta['op'], $result, $info);
         if ($key === null) { return $meta + array('changeset_id' => $info['changeset_id']) + $result; }
         return $this->written($kind, $key, $info, array('revision' => Snapshot::revision(Snapshot::capture($context->modx, $kind, $key))))

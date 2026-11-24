@@ -6,10 +6,12 @@ use ModxMCP\Context;
 use ModxMCP\Journal\Authors;
 use ModxMCP\Journal\Subjects;
 use ModxMCP\Kind\ClientConfigSettingKind;
+use ModxMCP\Kind\RedirectKind;
 use ModxMCP\Schema;
 
 final class HistoryAction extends Action {
     const RESTRICTED_SUMMARY = 'Changeset includes restricted entries.';
+    private const RESTRICTED_KINDS = array(ClientConfigSettingKind::NAME, RedirectKind::NAME);
     public function name() { return 'history'; }
 
     public function group() { return 'history'; }
@@ -44,8 +46,8 @@ final class HistoryAction extends Action {
         foreach (array('source', 'kind', 'since') as $key) {
             if (isset($args[$key])) { $filter[$key] = $args[$key]; }
         }
-        if (!self::changeVisible($context, array('kind' => ClientConfigSettingKind::NAME))) {
-            $filter['hidden_kind'] = ClientConfigSettingKind::NAME;
+        foreach (self::RESTRICTED_KINDS as $kind) {
+            if (!self::changeVisible($context, array('kind' => $kind))) { $filter['hidden_kinds'][] = $kind; }
         }
         if (isset($args['key'])) { $filter['object_key'] = $args['key']; }
         elseif (isset($args['kind'], $args['id'])) { $filter['object_key'] = (string) $args['id']; }
@@ -89,10 +91,10 @@ final class HistoryAction extends Action {
         return $out;
     }
 
-    /** ClientConfig metadata shares the setting kind's admin-only visibility. */
+    /** Private journal metadata shares its object's visibility. */
     public static function changeVisible(Context $context, array $change) {
-        if ($change['kind'] !== ClientConfigSettingKind::NAME) { return true; }
-        $kind = $context->kinds->get(ClientConfigSettingKind::NAME);
+        if (!in_array($change['kind'], self::RESTRICTED_KINDS, true)) { return true; }
+        $kind = $context->kinds->get($change['kind']);
         return $context->kinds->blockReason($kind, $context) === null;
     }
 }

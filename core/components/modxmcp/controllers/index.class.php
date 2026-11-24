@@ -81,7 +81,7 @@ class ModxmcpIndexManagerController extends modExtraManagerController {
 
             // Groups the admin can switch off for the whole site, split into add-ons vs core MODX.
             $disabled = array_flip($capabilities->disabledGroups());
-            $addons = array('virtualpage', 'minishop2', 'migx', 'clientconfig');
+            $addons = array('virtualpage', 'minishop2', 'migx', 'clientconfig', 'redirector');
             foreach (\ModxMCP\Capabilities::TOGGLEABLE as $g) {
                 $row = array('key' => $g, 'label' => $lex('modxmcp_group_' . $g), 'enabled' => isset($disabled[$g]) ? 0 : 1);
                 if (in_array($g, $addons, true)) { $components[] = $row; } else { $features[] = $row; }
