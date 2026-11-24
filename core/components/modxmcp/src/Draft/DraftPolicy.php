@@ -7,7 +7,7 @@ use ModxMCP\Context;
 /** Restrictions specific to a token that prepares drafts for review in the manager. */
 final class DraftPolicy {
     const SCOPE = 'draft_only';
-    const ACTIONS = array('manifest', 'capabilities', 'site_info', 'help', 'describe', 'list', 'get', 'resource_tree', 'update', 'invoke');
+    const ACTIONS = array('manifest', 'capabilities', 'site_info', 'help', 'describe', 'list', 'get', 'resource_tree', 'check_page', 'update', 'invoke');
     const KIND = 'resource';
     const OPERATIONS = array('create_draft', ProductDraft::STAGE_OP, 'list_drafts');
     const FIELDS = array('pagetitle', 'longtitle', 'description', 'introtext', 'content', 'menutitle');

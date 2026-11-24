@@ -17,6 +17,9 @@ class FakeObject {
         $this->fields = $fields;
         $this->isNew = $isNew;
     }
+    /** Related objects and policies are not modelled: a resource has no template variables and every policy allows. */
+    public function getMany($alias, $criteria = null) { return array(); }
+    public function checkPolicy($criteria, $targets = null) { return true; }
     public function get($key) {
         $value = array_key_exists($key, $this->fields) ? $this->fields[$key] : null;
         if (in_array($key, array('properties', 'input_properties'), true) && is_string($value)) {

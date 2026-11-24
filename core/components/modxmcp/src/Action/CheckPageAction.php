@@ -3,8 +3,12 @@ namespace ModxMCP\Action;
 
 use ModxMCP\ApiException;
 use ModxMCP\Context;
+use ModxMCP\Draft\DraftPolicy;
+use ModxMCP\Draft\DraftStore;
 use ModxMCP\Kind\Objects;
+use ModxMCP\Render\RenderKeys;
 use ModxMCP\Schema;
+use ModxMCP\Verify\HeaderPageFetcher;
 use ModxMCP\Verify\LogReader;
 
 final class CheckPageAction extends Action {
@@ -13,7 +17,9 @@ final class CheckPageAction extends Action {
     public function description() {
         return 'Fetch one page of this site as an anonymous visitor and report status, time, title and the error-log entries written '
             . 'during the request — a missing snippet or a broken tag shows up there, because MODX removes unknown tags from the output. '
-            . 'Tags that did survive are listed as unparsed. Only this site\'s own addresses.';
+            . 'Tags that did survive are listed as unparsed. Only this site\'s own addresses. '
+            . 'With id, a draft or any unpublished page is rendered too (rendered_as): the site sends itself a one-time key, valid for 60 seconds '
+            . 'and for that one page only, so it works over plain HTTP; nothing is published and nothing reaches the page cache.';
     }
     public function inputSchema() {
         return Schema::obj(array('id' => Schema::int(null, array('minimum' => 1)),
@@ -66,10 +72,32 @@ final class CheckPageAction extends Action {
     private function clean($text) {
         return json_decode(json_encode($text, JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR), true);
     }
+    /** "draft", "unpublished" or null (a published page, or a deleted one that MODX will not serve anyway). */
+    private function renderMode(Context $context, $page) {
+        $unpublished = !$page->get('published') && !$page->get('deleted');
+        if (DraftPolicy::applies($context)) {
+            $link = (new DraftStore($context->modx))->ofDraft($page->get('id'));
+            if (!$link || $link['token_id'] !== $context->token['id'] || $link['user_id'] !== null || !$unpublished) {
+                throw new ApiException('forbidden_scope', 'A draft-only token can check only its own unpublished page drafts.');
+            }
+            return 'draft';
+        }
+        if (!$unpublished) { return null; }
+        try {
+            return (new DraftStore($context->modx, false))->isDraft($page->get('id')) ? 'draft' : 'unpublished';
+        } catch (\Throwable $e) {
+            return 'unpublished';
+        }
+    }
     public function run(array $args, Context $context) {
         if (isset($args['id']) === isset($args['url_path'])) { throw new ApiException('validation_failed', 'Provide exactly one of id or url_path.'); }
+        $renderAs = null;
+        if (DraftPolicy::applies($context) && !isset($args['id'])) {
+            throw new ApiException('forbidden_scope', 'A draft-only token checks its own drafts by id.');
+        }
         if (isset($args['id'])) {
-            Objects::resolve($context, Objects::kind($context, 'resource'), array('id' => $args['id']));
+            $page = Objects::resolve($context, Objects::kind($context, 'resource'), array('id' => $args['id']));
+            $renderAs = $this->renderMode($context, $page);
             $url = $context->modx->makeUrl($args['id'], '', '', 'full');
             if (!is_string($url) || $url === '') { throw new ApiException('validation_failed', 'MODX returned an empty resource URL.'); }
         } else {
@@ -84,16 +112,32 @@ final class CheckPageAction extends Action {
         }
         $hosts = $this->allowedHosts($context->modx);
         if (!$this->allowed($url, $hosts)) { throw new ApiException('validation_failed', 'Only HTTP(S) URLs on this site\'s configured hosts are allowed.'); }
+        $headers = array();
+        if ($renderAs !== null) {
+            if (!($context->pageFetcher() instanceof HeaderPageFetcher)) { throw new ApiException('validation_failed', 'This page fetcher cannot render unpublished pages.'); }
+            $ownHost = parse_url((string) $context->modx->getOption('site_url'), PHP_URL_HOST);
+            $host = parse_url($url, PHP_URL_HOST);
+            if (!is_string($ownHost) || !is_string($host) || mb_strtolower($ownHost, 'UTF-8') !== mb_strtolower($host, 'UTF-8')) {
+                throw new ApiException('validation_failed', 'The page URL is not on the site\'s own host (its context has another site_url), so an unpublished page cannot be rendered safely.');
+            }
+        }
         $logPath = $context->modx->getCachePath() . 'logs/error.log';
         $maxLog = $context->modx->getOption('modxmcp.max_read_bytes', null, 262144);
         $before = LogReader::tail($logPath, 1, $maxLog)['end_offset'];
         $start = microtime(true);
         try {
-            $response = $context->pageFetcher()->fetch($url, 15, isset($args['max_bytes']) ? $args['max_bytes'] : 500000);
+            $limit = isset($args['max_bytes']) ? $args['max_bytes'] : 500000;
+            if ($renderAs !== null) {
+                $key = RenderKeys::forModx($context->modx)->issue($args['id'], isset($context->token['id']) ? $context->token['id'] : null);
+                $response = $context->pageFetcher()->fetchWithHeaders($url, 15, $limit, array(RenderKeys::HEADER => $key));
+            } else {
+                $response = $context->pageFetcher()->fetch($url, 15, $limit);
+            }
             $result = array('url' => $url, 'status' => $response['status'], 'time_ms' => $response['time_ms'],
                 'bytes' => strlen($response['body']), 'truncated' => $response['truncated'],
                 'content_type' => isset($response['headers']['content-type']) ? $response['headers']['content-type'] : '',
                 'unparsed_tags' => array(), 'unparsed_count' => 0);
+            if ($renderAs !== null) { $result['rendered_as'] = $renderAs; }
             $type = strtolower(trim(explode(';', $result['content_type'], 2)[0]));
             if (substr($type, 0, 5) === 'text/') {
                 $body = $this->clean($response['body']);
