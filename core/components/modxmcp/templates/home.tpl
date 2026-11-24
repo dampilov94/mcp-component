@@ -14,6 +14,7 @@
 #mcpo .o-status td:first-child { width:200px; color:var(--muted); }
 #mcpo .o-ok { color:var(--ok); font-weight:bold; }
 #mcpo .o-bad { color:var(--bad); font-weight:bold; }
+#mcpo .o-banner { margin:8px 0 12px; padding:8px 12px; border:1px solid #f0b4b4; background:#fdecec; color:var(--bad); border-radius:5px; }
 #mcpo .o-link { color:#2563eb; text-decoration:none; }
 #mcpo .o-link:hover { text-decoration:underline; }
 #mcpo .o-btn { display:inline-block; padding:5px 12px; border:1px solid var(--line); background:#fff; border-radius:5px; cursor:pointer; font-size:12px; color:var(--ink); text-decoration:none; }
@@ -60,11 +61,13 @@
 {/literal}
 <div id="mcpo">
     <h2>modxMCP</h2>
+    {if !$overview.enabled}<div class="o-banner" id="modxmcp-api-banner"><b>{$l.api_paused}.</b> {$l.api_paused_hint}.</div>{/if}
     <p class="o-lead">{$l.intro}</p>
 
     <h3>{$l.heading_status}</h3>
     <table class="o-status">
-        <tr><td>{$l.enabled}</td><td>{if $overview.enabled}<span class="o-ok">{$l.yes}</span>{else}<span class="o-bad">{$l.no}</span> &mdash; {$l.enable_hint}{/if}</td></tr>
+        <tr><td>{$l.enabled}</td><td id="modxmcp-api-state">{if $overview.enabled}<span class="o-ok">{$l.yes}</span> &mdash; {$l.api_working}{else}<span class="o-bad">{$l.no}</span> &mdash; <span class="o-bad">{$l.api_paused}</span>: {$l.api_paused_hint}. {$l.enable_hint}{/if}
+            <button type="button" class="o-btn" id="modxmcp-toggle-api" data-enabled="{if $overview.enabled}1{else}0{/if}" style="margin-left:8px;">{if $overview.enabled}{$l.api_pause}{else}{$l.api_resume}{/if}</button> <span class="o-muted" id="modxmcp-api-status"></span></td></tr>
         <tr><td>{$l.version}</td><td><code>{$overview.version|escape}</code></td></tr>
         <tr><td>{$l.endpoint}</td><td><code id="modxmcp-endpoint">{$overview.endpoint|escape}</code> <button type="button" class="o-btn" id="modxmcp-copy-endpoint">{$l.copy}</button> <span class="o-muted" id="modxmcp-copy-status"></span></td></tr>
         <tr><td>{$l.active_tokens}</td><td>{if $overview.active_tokens > 0}{$l.tokens_count|escape} &mdash; <a class="o-link" href="?a=tokens&amp;namespace=modxmcp">{$l.tokens_link}</a>{else}<span class="o-warn">{$l.no_tokens}</span> &mdash; <a class="o-link" href="?a=tokens&amp;namespace=modxmcp">{$l.tokens_link}</a>{/if}</td></tr>

@@ -9608,5 +9608,28 @@ check('tv output_properties: undo restores the first map', array_map('strval', (
 $call($dev, 'update', array('kind' => 'tv', 'id' => $opTv['id'], 'fields' => array('description' => 'без касания опций')));
 check('tv output_properties: an unrelated update keeps them', array_map('strval', (array) $call($dev, 'get', array('kind' => 'tv', 'id' => $opTv['id']))['fields']['output_properties']) === array('w' => '200', 'alt' => 'Фото', 'cls' => 'img'));
 
+// --- Pausing the API from the main page (task 51) ---
+$swDir = realpath(sys_get_temp_dir()) . '/modxmcp-switch-' . bin2hex(random_bytes(6));
+mkdir($swDir . '/core', 0700, true);
+$swSite = fakeSite($swDir, array('modxmcp.enabled' => true));
+$swApi = new ModxMCP\Manager\ApiSwitch($swSite);
+check('api switch: enabled by default as configured', $swApi->enabled() === true);
+$swOff = $swApi->set(false);
+check('api switch: pause stores 0, reloads the configuration and refreshes the cache', $swOff === array('enabled' => false, 'changed' => true)
+    && $swSite->getObject('modSystemSetting', array('key' => 'modxmcp.enabled'))->get('value') === '0'
+    && $swSite->getOption('modxmcp.enabled') === '0' && $swApi->enabled() === false && $swSite->getCacheManager()->refreshes >= 1);
+check('api switch: the pause is a manager action naming the setting', $swSite->managerActions === array(array('action' => 'modxmcp_pause_api', 'class' => 'modSystemSetting', 'pk' => 'modxmcp.enabled')));
+check('api switch: pausing again changes and logs nothing', $swApi->set(false) === array('enabled' => false, 'changed' => false) && count($swSite->managerActions) === 1);
+$swOn = $swApi->set(true);
+check('api switch: resume stores 1 and is logged', $swOn === array('enabled' => true, 'changed' => true) && $swSite->getObject('modSystemSetting', array('key' => 'modxmcp.enabled'))->get('value') === '1'
+    && $swApi->enabled() === true && $swSite->managerActions[1]['action'] === 'modxmcp_resume_api' && count($swSite->managerActions) === 2);
+check('api switch: no argument flips the state, both ways', $swApi->set()['enabled'] === false && $swApi->set()['enabled'] === true && count($swSite->managerActions) === 4);
+check('api switch: the setting row is not duplicated', $swSite->getCount('modSystemSetting', array('key' => 'modxmcp.enabled')) === 1);
+$swRow = $swSite->getObject('modSystemSetting', array('key' => 'modxmcp.enabled'));
+check('api switch: the missing setting row was created in the component namespace', $swRow->get('namespace') === 'modxmcp' && $swRow->get('area') === 'modxmcp:main' && $swRow->get('xtype') === 'combo-boolean');
+$swSite->options['modxmcp.enabled'] = '1';
+$swSite->store('modSystemSetting', array('key' => 'modxmcp.enabled', 'value' => '1', 'namespace' => 'modxmcp', 'area' => 'modxmcp:main', 'xtype' => 'combo-boolean'));
+check('api switch: an existing row is updated in place', $swApi->set(false)['changed'] === true && $swSite->getCount('modSystemSetting', array('key' => 'modxmcp.enabled')) === 1 && $swApi->enabled() === false);
+
 echo $failures ? "{$failures} of {$checks} PHP checks failed.\n" : "PHP: {$checks} checks passed.\n";
 exit($failures ? 1 : 0);

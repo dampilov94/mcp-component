@@ -45,6 +45,11 @@ class ModxmcpIndexManagerController extends modExtraManagerController {
                 'features_saving' => $this->modx->lexicon('modxmcp_cmp_features_saving'),
                 'features_saved'  => $this->modx->lexicon('modxmcp_cmp_features_saved'),
                 'features_failed' => $this->modx->lexicon('modxmcp_cmp_features_failed'),
+                'api_pause_confirm' => $this->modx->lexicon('modxmcp_cmp_api_pause_confirm'),
+                'api_saving'      => $this->modx->lexicon('modxmcp_cmp_api_saving'),
+                'api_failed'      => $this->modx->lexicon('modxmcp_cmp_api_failed'),
+                'api_pause'       => $this->modx->lexicon('modxmcp_cmp_api_pause'),
+                'api_resume'      => $this->modx->lexicon('modxmcp_cmp_api_resume'),
             ),
         ), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP);
         $this->addHtml('<script type="text/javascript">var Modxmcp = ' . $cfg . ';</script>');
@@ -123,6 +128,7 @@ class ModxmcpIndexManagerController extends modExtraManagerController {
             'features_title', 'features_intro', 'features_components', 'features_modx', 'features_save',
             'integration_available', 'integration_files_missing', 'integration_not_installed',
             'danger_title', 'danger_intro',
+            'api_pause', 'api_resume', 'api_paused', 'api_paused_hint', 'api_working',
         );
         $l = array();
         foreach ($labelKeys as $k) {
