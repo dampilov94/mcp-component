@@ -7759,6 +7759,164 @@ $gUndo($gCategory, array('force' => true));
 check('gallery: a category with verified empty galleries can still be undone', $sSite->row('modResource', $gCategory['id']) === null
     && $sSite->row('modResource', $gNestedProduct['id']) === null);
 
+// A local media source and the native processor's gallery side effects are modelled in this fixture.
+$gwBase = rtrim($sSite->getOption('assets_path'), '/\\') . '/gallery-write48';
+mkdir($gwBase, 0700, true);
+$sSite->store('modContext', array('key' => 'web'));
+$gwProperties = array();
+foreach (array('basePath' => $gwBase . '/', 'basePathRelative' => false, 'imageExtensions' => 'jpg,jpeg,png', 'imageNameType' => 'hash',
+    'thumbnailType' => 'png', 'thumbnails' => '[{"w":120,"h":90,"f":"png"}]') as $gwKey => $gwValue) {
+    $gwProperties[$gwKey] = array('name' => $gwKey, 'value' => $gwValue);
+}
+$gwSource = array('id' => 94, 'name' => 'Gallery fixture', 'class_key' => 'sources.modFileMediaSource', 'properties' => $gwProperties);
+$sSite->store('sources.modMediaSource', $gwSource);
+$sSite->options['fake_gallery_native_sql'] = true;
+$gwCreate = function ($title) use ($call, $sEditor, $catPhones) {
+    return $call($sEditor, 'create', array('kind' => 'resource', 'fields' => array('class_key' => 'msProduct', 'parent' => $catPhones, 'pagetitle' => $title),
+        'relations' => array('ms2_data' => array('source' => 94, 'price' => 101))));
+};
+$gwProduct = $gwCreate('Writable gallery');
+$gwOther = $gwCreate('Other gallery');
+$gwId = $gwProduct['id'];
+$gwOtherId = $gwOther['id'];
+$gwPng = function ($red, $text = '') {
+    $chunk = function ($name, $data) { return pack('N', strlen($data)) . $name . $data . pack('N', crc32($name . $data)); };
+    return "\x89PNG\r\n\x1a\n" . $chunk('IHDR', pack('NNCCCCC', 1, 1, 8, 6, 0, 0, 0)) . ($text === '' ? '' : $chunk('tEXt', "Comment\0" . $text))
+        . $chunk('IDAT', gzcompress("\0" . chr($red) . "\0\0\xff")) . $chunk('IEND', '');
+};
+$gwBytes = $gwPng(52);
+$gwThumbBytes = $gwPng(17);
+$gwInput = array('filename' => 'fixture.png', 'content_base64' => base64_encode($gwBytes));
+$gwNativeMode = 'normal';
+$gwNativeCalls = 0;
+$gwStageFile = '';
+$sSite->stubProcessors['mgr/gallery/upload'] = function (array $input) use ($sSite, $gwBase, $gwThumbBytes, &$gwNativeMode, &$gwNativeCalls, &$gwStageFile) {
+    $gwNativeCalls++;
+    $gwStageFile = $input['file'];
+    $id = (int) $input['id'];
+    $original = file_get_contents($gwStageFile);
+    $hash = sha1(substr($original, 0, 80000));
+    $file = $hash . '.png';
+    $dir = $gwBase . '/' . $id;
+    if (!is_dir($dir)) { mkdir($dir, 0755); }
+    file_put_contents($dir . '/' . $file, $original);
+    if ($gwNativeMode === 'orphan') { return new FakeResponse('Synthetic failure before the native row save.'); }
+    $root = $sSite->nextId('msProductFile');
+    $common = array('product_id' => $id, 'source' => 94, 'file' => $file, 'rank' => 0, 'type' => 'image', 'active' => 1, 'hash' => $hash);
+    $sSite->store('msProductFile', array('id' => $root, 'parent' => 0, 'path' => $id . '/', 'url' => '/assets/gallery-write48/' . $id . '/' . $file) + $common);
+    if ($gwNativeMode !== 'missing-thumbnail') {
+        if (!is_dir($dir . '/120x90')) { mkdir($dir . '/120x90', 0755); }
+        file_put_contents($dir . '/120x90/' . $file, $gwThumbBytes);
+        $sSite->store('msProductFile', array('id' => $sSite->nextId('msProductFile'), 'parent' => $root, 'path' => $id . '/120x90/',
+            'url' => '/assets/gallery-write48/' . $id . '/120x90/' . $file) + $common);
+    }
+    $sSite->getObject('modResource', $id)->updateProductImage();
+    return new FakeResponse(null);
+};
+$gwKeepFile = false;
+$sSite->galleryRemove = function ($row) use ($gwBase, &$gwKeepFile) {
+    $file = $gwBase . '/' . $row->get('path') . $row->get('file');
+    if (!$gwKeepFile && is_file($file)) { unlink($file); }
+};
+$gwWrite = function ($op, $id, array $args, array $flags = array(), $actor = null) use ($dInvoke, $sEditor) {
+    return $dInvoke($actor ?: $sEditor, $op, $id, $args, $flags);
+};
+$gwUpload = 'upload_gallery_image';
+$gwDelete = 'delete_gallery_image';
+$gwPlanned = $gwWrite($gwUpload, $gwId, $gwInput, array('dry_run' => true));
+check('gallery writes: dry run checks the image and leaves native storage untouched', $gwPlanned['dry_run'] && $gwPlanned['files'] === 2 && $gwNativeCalls === 0
+    && !is_dir($gwBase . '/' . $gwId));
+$gwUploaded = $gwWrite($gwUpload, $gwId, $gwInput);
+$gwImage = $gwUploaded['image_id'];
+$gwRootName = sha1($gwBytes) . '.png';
+$gwOriginal = $gwBase . '/' . $gwId . '/' . $gwRootName;
+$gwThumbnail = $gwBase . '/' . $gwId . '/120x90/' . $gwRootName;
+$gwState = function () use ($sSite, $gwId, $gwOriginal, $gwThumbnail) {
+    return array($sSite->getCount('msProductFile', array('product_id' => $gwId)), is_file($gwOriginal) ? hash_file('sha256', $gwOriginal) : null,
+        is_file($gwThumbnail) ? hash_file('sha256', $gwThumbnail) : null, $sSite->row('msProductData', $gwId)['image']);
+};
+$gwUploadedState = $gwState();
+check('gallery writes: native upload stores both files and updates the cover', $gwUploadedState === array(2, hash('sha256', $gwBytes), hash('sha256', $gwThumbBytes),
+    '/assets/gallery-write48/' . $gwId . '/' . $gwRootName) && $gwStageFile !== '' && !file_exists($gwStageFile));
+$gwDiff = json_encode($call($sEditor, 'history_diff', array('changeset_id' => $gwUploaded['changeset_id'])));
+check('gallery writes: journal previews include the stable gallery subject without raw bytes or filesystem paths', strpos($gwDiff, 'ms2_gallery') !== false
+    && strpos($gwDiff, base64_encode($gwBytes)) === false && strpos($gwDiff, $gwBase) === false);
+$gwUndone = $gUndo($gwUploaded);
+check('gallery writes: undo of upload removes both owned files and restores the cover', $gwState() === array(0, null, null, null));
+$gUndo($gwUndone);
+check('gallery writes: undo of undo recreates both files and their cover', $gwState() === $gwUploadedState);
+
+$gwDeleteArgs = array('image_id' => $gwImage);
+$gwPlanDelete = $gwWrite($gwDelete, $gwId, $gwDeleteArgs);
+check('gallery writes: deletion defaults to a plan', $gwPlanDelete['dry_run'] && $gwPlanDelete['image_id'] === $gwImage && $gwState() === $gwUploadedState);
+foreach (array($sRead, $sActor('draft_only'), $sActor('content', array('denied_groups' => array('minishop2')))) as $gwActor) {
+    throws('gallery writes: restricted tokens cannot write galleries', ApiException::class, function () use ($gwWrite, $gwDelete, $gwId, $gwDeleteArgs, $gwActor) {
+        $gwWrite($gwDelete, $gwId, $gwDeleteArgs + array('confirm' => true), array(), $gwActor);
+    });
+}
+throws('gallery writes: an image ID cannot select a different product', ApiException::class, function () use ($gwWrite, $gwDelete, $gwOtherId, $gwDeleteArgs) {
+    $gwWrite($gwDelete, $gwOtherId, $gwDeleteArgs + array('confirm' => true));
+});
+unlink($gwThumbnail);
+throws('gallery writes: destructive native work cannot start if thumbnail bytes are missing', ApiException::class, function () use ($gwWrite, $gwDelete, $gwId, $gwDeleteArgs) {
+    $gwWrite($gwDelete, $gwId, $gwDeleteArgs + array('confirm' => true));
+});
+file_put_contents($gwThumbnail, $gwThumbBytes);
+$gwKeepFile = true;
+throws('gallery writes: successful native response without physical removal rolls back', ApiException::class, function () use ($gwWrite, $gwDelete, $gwId, $gwDeleteArgs) {
+    $gwWrite($gwDelete, $gwId, $gwDeleteArgs + array('confirm' => true));
+});
+$gwKeepFile = false;
+check('gallery writes: refused ownership and partially failed native deletion leave the gallery intact', $gwState() === $gwUploadedState);
+$gwDeleted = $gwWrite($gwDelete, $gwId, $gwDeleteArgs + array('confirm' => true));
+check('gallery writes: confirmed deletion removes bytes and cover without changing unrelated data', $gwState() === array(0, null, null, null)
+    && $sSite->row('msProductData', $gwId)['price'] === '101');
+$gwDeleteUndo = $gUndo($gwDeleted);
+check('gallery writes: undo of deletion restores all gallery bytes and the cover', $gwState() === $gwUploadedState);
+$gUndo($gwDeleteUndo);
+check('gallery writes: undo of deletion undo removes the same files again', $gwState() === array(0, null, null, null));
+
+foreach (array('orphan', 'missing-thumbnail') as $gwNativeMode) {
+    throws('gallery writes: partial upload is rejected and recovered', ApiException::class, function () use ($gwWrite, $gwUpload, $gwId, $gwInput) {
+        $gwWrite($gwUpload, $gwId, $gwInput);
+    });
+    check('gallery writes: incomplete operation leaves no rows, bytes or staging file', $gwState() === array(0, null, null, null) && !file_exists($gwStageFile));
+}
+$gwNativeMode = 'normal';
+$gwKind = $sEditor->kinds->get('resource');
+$gwInitial = \ModxMCP\Journal\Snapshot::capture($sSite, $gwKind, $gwId);
+$sSite->options['modxmcp.history_max_blob_bytes'] = max(1024, strlen(\ModxMCP\Journal\Snapshot::encode($gwInitial)) + 10);
+$gwLarge = $gwPng(43, str_repeat('A', 4096));
+$gwLargePath = $gwBase . '/' . $gwId . '/' . sha1($gwLarge) . '.png';
+$gwCallsBefore = $gwNativeCalls;
+throws('gallery writes: after-state exceeding the exact blob limit is rejected', ApiException::class, function () use ($gwWrite, $gwUpload, $gwId, $gwLarge) {
+    $gwWrite($gwUpload, $gwId, array('filename' => 'large.png', 'content_base64' => base64_encode($gwLarge)));
+});
+check('gallery writes: oversize recovery restores before state after native write', $gwNativeCalls === $gwCallsBefore + 1
+    && !$sSite->getCount('msProductFile', array('product_id' => $gwId)) && !file_exists($gwLargePath));
+unset($sSite->options['modxmcp.history_max_blob_bytes']);
+
+foreach (array(array('filename' => '../outside.png') + $gwInput, array('filename' => 'wrong.jpg') + $gwInput,
+    array('content_base64' => str_repeat('A', 2800000)) + $gwInput) as $gwInvalid) {
+    throws('gallery writes: unsafe name, type or oversize is rejected', ApiException::class, function () use ($gwWrite, $gwUpload, $gwId, $gwInvalid) {
+        $gwWrite($gwUpload, $gwId, $gwInvalid, array('dry_run' => true));
+    });
+}
+$gwOutside = $ms2Dir . '/gallery-path-outside-assets';
+mkdir($gwOutside);
+symlink($gwOutside, $gwBase . '/' . $gwOtherId);
+throws('gallery writes: product-directory links are rejected before writes', ApiException::class, function () use ($gwWrite, $gwUpload, $gwOtherId, $gwInput) {
+    $gwWrite($gwUpload, $gwOtherId, $gwInput);
+});
+unlink($gwBase . '/' . $gwOtherId);
+$sSite->store('sources.modMediaSource', array('class_key' => 'sources.modS3MediaSource') + $gwSource);
+throws('gallery writes: unsupported media source is rejected before use', ApiException::class, function () use ($gwWrite, $gwUpload, $gwId, $gwInput) {
+    $gwWrite($gwUpload, $gwId, $gwInput);
+});
+$sSite->store('sources.modMediaSource', $gwSource);
+$sSite->galleryRemove = null;
+unset($sSite->options['fake_gallery_native_sql']);
+
 // ClientConfig values use native processor contracts for global changes and per-context overrides.
 $ccDir = $siteDir . '/clientconfig46';
 $ccCore = $ccDir . '/core/components/clientconfig/';

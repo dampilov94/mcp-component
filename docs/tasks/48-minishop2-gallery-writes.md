@@ -58,3 +58,23 @@ Run `npm run check` and `npm test` on PHP 7.4. Cover upload, delete, dry-run, ro
 partial native failure, undo/undo-of-undo, resulting cover, permissions, wrong product and
 missing files, blocked paths, incompatible sources, oversized media or snapshots. Architect
 will exercise real miniShop2 3.0.7 and verify actual file hashes on disposable MODX 2.8.8.
+
+## Report
+
+Based on local main `94d88ae`.
+
+- `GalleryOperations` registers two resource operations, stages JPEG and PNG bytes privately,
+  verifies all native destinations, and checks each file and row after the native operation.
+  Deleting the last image uses targeted native removal rather than the default-source directory
+  cleanup. The integration limits each mutation to the product's checked local gallery folder.
+- `GallerySubject` records the source identity, gallery rows, bytes, file modes and cover. Undo
+  acquires the product lock, checks the planned revision again and puts back rows and files.
+  The journal refuses an irreversible commit and blocks a single undo that both restores a
+  gallery and physically removes its product.
+- `npm run check` and `npm test` passed on PHP 7.4.33 in WSL, with 5753 PHP checks and 41 Node
+  tests. The fixture exercises permissions, partial vendor output, a journal size overflow,
+  the restored cover, undo and undo-of-undo.
+- Native MODX 2.8.8 and miniShop2 3.0.7 verified JPEG and PNG uploads, thumbnail creation,
+  byte hashes, mode preservation and row IDs after undo and undo-of-undo. Also verified rollback
+  with a small history limit, refusal after media-root relocation, and that deleting the last
+  image did not touch an unrelated directory in the separate default source.

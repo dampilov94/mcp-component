@@ -3,6 +3,8 @@ namespace ModxMCP\Journal;
 
 use ModxMCP\ApiException;
 use ModxMCP\Context;
+use ModxMCP\Integration\GallerySubject;
+use ModxMCP\Integration\MiniShop2Gallery;
 
 /**
  * Plans an undo of one or more changesets. For every object the plan gives the state to go
@@ -65,12 +67,11 @@ final class Undo {
             }
             // A person with the object open would overwrite the restored state on their next save.
             $open = null;
-            if ($subject instanceof ObjectSubject && $current !== null) {
-                $open = $subject->kind()->openInManager($context->modx, $key);
-                if ($open) {
-                    $reason = 'open in the manager by ' . $open['username'];
-                    $conflict = $conflict === null ? $reason : $conflict . '; ' . $reason;
-                }
+            if ($subject instanceof GallerySubject) { $open = $subject->openInManager(); }
+            elseif ($subject instanceof ObjectSubject && $current !== null) { $open = $subject->kind()->openInManager($context->modx, $key); }
+            if ($open) {
+                $reason = 'open in the manager by ' . $open['username'];
+                $conflict = $conflict === null ? $reason : $conflict . '; ' . $reason;
             }
             if ($conflict !== null) { $conflicts++; }
 
@@ -89,6 +90,7 @@ final class Undo {
                 }
                 $subject->kind()->assertUndoable($context->modx, $key, $target);
             }
+            if ($subject instanceof GallerySubject) { $subject->assertRestorable($target); }
             $extra = array();
             if ($oldest['extra_blob'] !== null) {
                 $json = $blobs->get($oldest['extra_blob']);
@@ -98,8 +100,32 @@ final class Undo {
                 'subject' => $subject, 'key' => $key, 'label' => $newest['label'],
                 'action' => $target === null ? 'remove' : ($current === null ? 'recreate' : 'restore'),
                 'target' => $target, 'extra' => $extra, 'conflict' => $conflict, 'open' => $open,
+                'current_revision' => $current,
             );
         }
+        self::assertGalleryBatch($context, $items);
         return array('items' => $items, 'conflicts' => $conflicts);
+    }
+
+    /** Keep gallery restoration separate from any removal of the restored product or its data. */
+    private static function assertGalleryBatch(Context $context, array $items) {
+        $galleries = array();
+        foreach ($items as $item) {
+            if ($item['subject'] instanceof GallerySubject) { $galleries[$item['key']] = true; }
+        }
+        if (!$galleries) { return; }
+        foreach ($items as $item) {
+            if ($item['subject']->kindName() !== 'resource') { continue; }
+            $target = $item['target'];
+            $removing = array();
+            if ($target === null) {
+                $removing = MiniShop2Gallery::productsInTree($context->modx, (int) $item['key']);
+            } elseif (($target['fields']['class_key'] ?? '') !== 'msProduct' || (isset($target['relations']['ms2_data']) && !$target['relations']['ms2_data'])) {
+                $removing = array($item['key']);
+            }
+            if (array_intersect(array_keys($galleries), $removing)) {
+                throw new ApiException('not_reversible', 'Undo gallery changes separately from removing the product or its data.');
+            }
+        }
     }
 }

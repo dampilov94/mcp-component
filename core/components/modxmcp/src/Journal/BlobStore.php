@@ -28,7 +28,7 @@ final class BlobStore {
 
     /** Store data; returns its hash, or null when it is over the size limit and was not stored. */
     public function put($data) {
-        if (strlen($data) > $this->maxBytes) { return null; }
+        if (!$this->accepts($data)) { return null; }
         $hash = self::hash($data);
         $path = $this->path($hash);
         if (is_file($path)) {
@@ -45,6 +45,8 @@ final class BlobStore {
         if (!@rename($temp, $path)) { @unlink($temp); throw new \RuntimeException('Cannot publish a history blob.'); }
         return $hash;
     }
+
+    public function accepts($data) { return strlen($data) <= $this->maxBytes; }
 
     public function has($hash) {
         return is_file($this->path($hash));

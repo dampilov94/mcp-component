@@ -3,6 +3,7 @@ namespace ModxMCP\Action;
 
 use ModxMCP\ApiException;
 use ModxMCP\Context;
+use ModxMCP\Integration\GallerySubject;
 use ModxMCP\Journal\Subjects;
 use ModxMCP\Schema;
 
@@ -40,6 +41,10 @@ final class HistoryDiffAction extends Action {
         };
 
         $objects = array();
+        $galleries = array();
+        foreach ($changeset['changes'] as $change) {
+            if ($change['kind'] === GallerySubject::NAME) { $galleries[$change['object_key']] = true; }
+        }
         $restricted = false;
         foreach ($changeset['changes'] as $change) {
             if (!HistoryAction::changeVisible($context, $change)) { $restricted = true; continue; }
@@ -58,6 +63,9 @@ final class HistoryDiffAction extends Action {
                 continue;
             }
             $fields = $subject->describeChange($before, $after);
+            if ($change['kind'] === 'resource' && isset($galleries[$change['object_key']], $fields['ms2_data'])) {
+                $fields['ms2_data'] = array('old' => 'Previous product data', 'new' => 'Updated product data');
+            }
             $item['changed'] = $fields ? $fields : new \stdClass();
             if ($change['note'] !== '') { $item['note'] = $change['note']; }
             $objects[] = $item;

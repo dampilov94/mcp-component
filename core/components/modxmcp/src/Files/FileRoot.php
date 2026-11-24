@@ -72,6 +72,19 @@ final class FileRoot {
         if (stripos((string) $source->get('class_key'), 'modFileMediaSource') === false) {
             throw new ApiException('validation_failed', "Media source {$id} is not a local file source ({$source->get('class_key')}); the file tools only work on the server's own disk.");
         }
+        return self::sourceRoot($context, $source, $id);
+    }
+
+    /** Resolve a gallery source after its stock class and product context have been checked. */
+    public static function fromLocalSource(Context $context, $source) {
+        if ($source->get('class_key') !== 'sources.modFileMediaSource') {
+            throw new ApiException('validation_failed', 'Gallery writes require a stock local media source.');
+        }
+        return self::sourceRoot($context, $source, (int) $source->get('id'));
+    }
+
+    private static function sourceRoot(Context $context, $source, $id) {
+        $modx = $context->modx;
         $source->initialize();
         $base = (string) $source->getBasePath();
         $root = self::real($base === '' ? $modx->getOption('base_path') : $base);
