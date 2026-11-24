@@ -9518,5 +9518,30 @@ check('properties: serialized objects are ignored without losing plain entries',
     'plain' => array('value' => 'test'), 'invalid' => array('value' => new \stdClass()),
 )))) === array('plain'));
 
+// --- Log reader: dedupe (task 51) ---
+$ddPath = realpath(sys_get_temp_dir()) . '/modxmcp-dedupe-' . bin2hex(random_bytes(6));
+$ddWarn = "(WARN @ /core/a.php : 3) Не найден чанк «шапка»\nвторая строка\n";
+file_put_contents($ddPath, "[2026-02-01 10:00:00] {$ddWarn}[2026-02-01 10:00:05] (ERROR @ /core/b.php : 9) boom\n[2026-02-01 10:00:09] {$ddWarn}"
+    . "[2026-02-01 10:00:10] (WARN @ /core/a.php : 3) другое сообщение\n[2026-02-01 10:00:11] (ERROR @ /core/c.php : 9) boom\n[2026-02-01 10:00:12] {$ddWarn}");
+$ddPlain = ModxMCP\Verify\LogReader::tail($ddPath);
+check('log dedupe: off by default, output unchanged', $ddPlain['returned'] === 6 && !isset($ddPlain['raw_entries']) && !isset($ddPlain['entries'][0]['count']));
+$ddFold = ModxMCP\Verify\LogReader::tail($ddPath, 50, 262144, '', null, true);
+check('log dedupe: same level, location and message fold with count and times', $ddFold['returned'] === 4 && $ddFold['raw_entries'] === 6
+    && $ddFold['entries'][3]['count'] === 3 && $ddFold['entries'][3]['first_time'] === '2026-02-01 10:00:00' && $ddFold['entries'][3]['last_time'] === '2026-02-01 10:00:12'
+    && $ddFold['entries'][3]['message'] === "Не найден чанк «шапка»\nвторая строка" && !isset($ddFold['entries'][3]['time']));
+check('log dedupe: ordered by last occurrence, a different location is not folded', array_column($ddFold['entries'], 'count') === array(1, 1, 1, 3)
+    && array_column($ddFold['entries'], 'location') === array('/core/b.php : 9', '/core/a.php : 3', '/core/c.php : 9', '/core/a.php : 3')
+    && $ddFold['entries'][0]['first_time'] === $ddFold['entries'][0]['last_time']);
+$ddLimit = ModxMCP\Verify\LogReader::tail($ddPath, 2, 262144, '', null, true);
+check('log dedupe: limit counts folded entries and keeps the newest', $ddLimit['returned'] === 2 && $ddLimit['truncated'] === true && $ddLimit['raw_entries'] === 6
+    && array_column($ddLimit['entries'], 'count') === array(1, 3));
+$ddContains = ModxMCP\Verify\LogReader::tail($ddPath, 50, 262144, 'ШАПКА', null, true);
+check('log dedupe: the filter applies before folding', $ddContains['returned'] === 1 && $ddContains['raw_entries'] === 3 && $ddContains['entries'][0]['count'] === 3);
+check('log dedupe: respects the byte budget (older entries fall out of the window)', ModxMCP\Verify\LogReader::tail($ddPath, 50, 120, '', null, true)['raw_entries'] < 6);
+file_put_contents($site->getCachePath() . 'logs/error.log', str_repeat("[2026-01-01 10:00:00] (ERROR @ fake) repeated\n", 4));
+$ddAction = $call($dev, 'read_log', array('dedupe' => true));
+check('read_log action: dedupe', $ddAction['returned'] === 1 && $ddAction['entries'][0]['count'] === 4 && $ddAction['raw_entries'] === 4 && $call($dev, 'read_log')['returned'] === 4);
+unlink($ddPath);
+
 echo $failures ? "{$failures} of {$checks} PHP checks failed.\n" : "PHP: {$checks} checks passed.\n";
 exit($failures ? 1 : 0);
