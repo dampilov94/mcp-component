@@ -84,6 +84,7 @@ below) or append a `## Review` section to the brief with numbered change request
 | 45 | [miniShop2 product drafts](45-product-drafts.md) | `task/45-product-drafts` | merged |
 | 46 | [ClientConfig values](46-clientconfig.md) | `task/46-clientconfig` | merged |
 | 47 | [miniShop2 gallery reads and safe restore](47-minishop2-gallery.md) | `task/47-minishop2-gallery` | merged |
+| 48 | [miniShop2 gallery writes and byte-level undo](48-minishop2-gallery-writes.md) | `task/48-minishop2-gallery-writes` | in progress |
 
 ## Doing several briefs in a row
 
